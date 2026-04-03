@@ -29,8 +29,12 @@ CREATE TABLE IF NOT EXISTS posts (
     url TEXT,
     media_url TEXT,
     raw JSONB,
-    tsv tsvector
+    tsv tsvector,
+    ingested_at TIMESTAMP DEFAULT now()
 );
+
+-- Add ingested_at to existing installations
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP DEFAULT now();
 
 -- COMMENTS table
 CREATE TABLE IF NOT EXISTS comments (
@@ -76,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_media_post_id ON media(post_id);
 CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit ON posts(subreddit);
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
+CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at);
 CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets(enabled);
 
 -- Full-text search triggers

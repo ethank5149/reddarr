@@ -213,7 +213,7 @@ def posts(
     media_type: Optional[str] = None,
 ):
     # Whitelist sort fields to prevent SQL injection
-    allowed_sort_by = {"created_utc", "title"}
+    allowed_sort_by = {"created_utc", "title", "ingested_at"}
     allowed_sort_order = {"asc", "desc"}
     if sort_by not in allowed_sort_by:
         sort_by = "created_utc"

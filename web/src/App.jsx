@@ -74,7 +74,6 @@ export default function App(){
           }))
 
           if(data.new_posts && data.new_posts.length > 0){
-            setNewPostsAvailable(n => n + data.new_posts.length)
             const newIds = new Set(data.new_posts.map(p => p.id))
             setHighlightedRows(newIds)
             if(highlightTimerRef.current) clearTimeout(highlightTimerRef.current)
@@ -89,6 +88,12 @@ export default function App(){
               })),
               ...prev
             ].slice(0,50))
+            // Auto-refresh browse grid when sorted by last added
+            if(filtersRef.current.sort === "last_added"){
+              refreshPosts()
+            } else {
+              setNewPostsAvailable(n => n + data.new_posts.length)
+            }
           }
         } catch(err){
           console.error("SSE parse error:", err)
@@ -168,6 +173,7 @@ export default function App(){
     if(f.sort === "oldest"){ params.set("sort_by","created_utc"); params.set("sort_order","asc") }
     else if(f.sort === "title_asc"){ params.set("sort_by","title"); params.set("sort_order","asc") }
     else if(f.sort === "title_desc"){ params.set("sort_by","title"); params.set("sort_order","desc") }
+    else if(f.sort === "last_added"){ params.set("sort_by","ingested_at"); params.set("sort_order","desc") }
     else { params.set("sort_by","created_utc"); params.set("sort_order","desc") }
     return `/api/posts?${params.toString()}`
   }
@@ -671,8 +677,9 @@ export default function App(){
                 }}
                 style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:sortBy!=="newest"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
               >
-                <option value="newest">Newest first</option>
-                <option value="oldest">Oldest first</option>
+                <option value="last_added">Last added</option>
+                <option value="newest">Reddit date ↓</option>
+                <option value="oldest">Reddit date ↑</option>
                 <option value="title_asc">Title A → Z</option>
                 <option value="title_desc">Title Z → A</option>
               </select>
