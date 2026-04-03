@@ -55,10 +55,9 @@ def run():
                 if ttype == "subreddit"
                 else reddit.redditor(name).new(limit=100)
             )
+            oldest_seen = None
             for p in src:
                 created = datetime.utcfromtimestamp(p.created_utc)
-                if last and created <= last:
-                    continue
 
                 cur.execute(
                     """INSERT INTO posts(id,subreddit,author,created_utc,title,selftext,url,media_url,raw)
@@ -78,9 +77,16 @@ def run():
                 )
 
                 rd.lpush("media_queue", json.dumps({"post_id": p.id, "url": p.url}))
-                cur.execute(
-                    "UPDATE targets SET last_created=%s WHERE name=%s", (created, name)
-                )
+
+                if oldest_seen is None or created < oldest_seen:
+                    oldest_seen = created
+
+            if oldest_seen is not None:
+                if last is None or oldest_seen < last:
+                    cur.execute(
+                        "UPDATE targets SET last_created=%s WHERE name=%s",
+                        (oldest_seen, name),
+                    )
 
         db.commit()
         time.sleep(300)

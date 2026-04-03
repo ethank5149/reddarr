@@ -2,7 +2,7 @@ from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import logging
-import psycopg2, os, json
+import psycopg2, os, json, redis
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -13,6 +13,7 @@ app = FastAPI()
 logger.info("API STARTED - checking version 3")
 
 db = psycopg2.connect(os.getenv("DB_URL"))
+rd = redis.Redis(host=os.getenv("REDIS_HOST"))
 
 if os.path.exists("dist"):
     app.mount("/static", StaticFiles(directory="dist/static"), name="static")
@@ -227,15 +228,20 @@ def toggle_target(target_type: str, name: str):
     return {"enabled": result[0]}
 
 
-@app.post("/api/admin/target/{target_type}/{name}/reset")
-def reset_target(target_type: str, name: str):
+@app.post("/api/admin/target/{target_type}/{name}/rescan")
+def rescan_target(target_type: str, name: str):
     cur = db.cursor()
-    cur.execute(
-        "UPDATE targets SET last_created = NULL WHERE type = %s AND name = %s",
-        (target_type, name),
-    )
-    db.commit()
-    return {"status": "ok"}
+
+    if target_type == "user":
+        cur.execute("SELECT id FROM posts WHERE author = %s", (name,))
+    else:
+        cur.execute("SELECT id FROM posts WHERE subreddit = %s", (name,))
+
+    post_ids = [r[0] for r in cur.fetchall()]
+    for post_id in post_ids:
+        rd.lpush("media_queue", json.dumps({"post_id": post_id, "url": None}))
+
+    return {"status": "ok", "requeued": len(post_ids)}
 
 
 @app.get("/api/admin/logs")
