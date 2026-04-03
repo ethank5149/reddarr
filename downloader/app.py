@@ -251,7 +251,42 @@ while True:
                 logger.info(f"Video downloaded: {url}")
             else:
                 logger.error(f"Video download failed: {result.stderr.decode()}")
-            path = f"{post_dir}/{video_stem}"
+
+            # Find the actual file yt-dlp wrote (it appends the real extension)
+            matches = list(Path(post_dir).glob(f"{video_stem}.*"))
+            # Exclude thumbnail files that yt-dlp may have written
+            matches = [
+                m for m in matches if m.suffix not in (".jpg", ".jpeg", ".png", ".webp")
+            ]
+            if matches:
+                path = str(matches[0])
+                h = sha256(path)
+                thumb = make_thumb(path)
+
+                db.rollback()
+                with db.cursor() as cur:
+                    cur.execute("SELECT file_path FROM media WHERE sha256=%s", (h,))
+                    existing = cur.fetchone()
+                    if existing:
+                        logger.info(f"Video already exists in DB: {existing[0]}")
+                        if path != existing[0]:
+                            os.remove(path)
+                        path = existing[0]
+
+                    cur.execute(
+                        """
+                        INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT (sha256) DO UPDATE SET post_id = EXCLUDED.post_id, thumb_path = EXCLUDED.thumb_path
+                        """,
+                        (post_id, url, path, thumb, h, datetime.utcnow(), status),
+                    )
+                    db.commit()
+                    logger.info(f"Saved video to DB: post_id={post_id}, path={path}")
+            else:
+                logger.warning(
+                    f"Could not find downloaded video file for stem: {post_dir}/{video_stem}"
+                )
 
         elif url.startswith("https://preview.redd.it/") or url.startswith(
             "https://external-preview"

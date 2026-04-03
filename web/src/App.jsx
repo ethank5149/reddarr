@@ -25,6 +25,12 @@ export default function App(){
   const [addTargetType, setAddTargetType] = useState("subreddit")
   const [addTargetName, setAddTargetName] = useState("")
 
+  // Thumbnail utility state
+  const [thumbStats, setThumbStats] = useState(null)
+  const [thumbJob, setThumbJob] = useState(null)       // current running job
+  const [thumbJobResult, setThumbJobResult] = useState(null)  // last finished job
+  const thumbPollRef = useRef(null)
+
   // Filter + sort state
   const [filterSubreddit, setFilterSubreddit] = useState("")
   const [filterAuthor, setFilterAuthor] = useState("")
@@ -120,8 +126,9 @@ export default function App(){
   },[])
 
   useEffect(()=>{
-    if(activeTab === "admin" && !adminData){
-      loadAdmin()
+    if(activeTab === "admin"){
+      if(!adminData) loadAdmin()
+      loadThumbStats()
     }
   },[activeTab])
 
@@ -179,7 +186,7 @@ export default function App(){
   }
 
   function mapPost(p){
-    return { id:p.id, title:p.title, url:p.image_url, video_url:p.video_url, is_video:p.is_video, selftext:p.selftext, subreddit:p.subreddit, author:p.author, created_utc:p.created_utc }
+    return { id:p.id, title:p.title, url:p.image_url, video_url:p.video_url, is_video:p.is_video, selftext:p.selftext, subreddit:p.subreddit, author:p.author, created_utc:p.created_utc, thumb_url:p.thumb_url }
   }
 
   function load(){
@@ -290,6 +297,55 @@ export default function App(){
         setResetResult({error: err.response?.data?.detail || err.message})
         setResetLoading(false)
       })
+  }
+
+  function loadThumbStats(){
+    axios.get("/api/admin/thumbnails/stats")
+      .then(r=>setThumbStats(r.data))
+      .catch(()=>setThumbStats(null))
+  }
+
+  function startThumbPoll(jobId){
+    if(thumbPollRef.current) clearInterval(thumbPollRef.current)
+    thumbPollRef.current = setInterval(()=>{
+      axios.get(`/api/admin/thumbnails/job/${jobId}`)
+        .then(r=>{
+          setThumbJob(r.data)
+          if(r.data.status==="done"){
+            clearInterval(thumbPollRef.current)
+            thumbPollRef.current = null
+            setThumbJobResult(r.data)
+            setThumbJob(null)
+            loadThumbStats()
+          }
+        })
+        .catch(()=>{
+          clearInterval(thumbPollRef.current)
+          thumbPollRef.current = null
+        })
+    }, 1000)
+  }
+
+  function runThumbBackfill(){
+    setThumbJobResult(null)
+    axios.post("/api/admin/thumbnails/backfill")
+      .then(r=>{ setThumbJob({status:"pending", total:r.data.total, done:0, skipped:0, errors:[]}); startThumbPoll(r.data.job_id) })
+      .catch(err=>alert("Backfill failed: " + (err.response?.data?.detail||err.message)))
+  }
+
+  function runThumbRebuildAll(){
+    if(!confirm("Regenerate ALL thumbnails? This will overwrite every existing thumbnail and may take a while.")) return
+    setThumbJobResult(null)
+    axios.post("/api/admin/thumbnails/rebuild-all")
+      .then(r=>{ setThumbJob({status:"pending", total:r.data.total, done:0, skipped:0, errors:[]}); startThumbPoll(r.data.job_id) })
+      .catch(err=>alert("Rebuild failed: " + (err.response?.data?.detail||err.message)))
+  }
+
+  function runThumbPurgeOrphans(){
+    if(!confirm("Delete all orphan thumbnail files (on disk but not in DB)?")) return
+    axios.post("/api/admin/thumbnails/purge-orphans")
+      .then(r=>{ alert(`Deleted ${r.data.deleted} orphan file(s), freed ${r.data.freed_mb} MB`); loadThumbStats() })
+      .catch(err=>alert("Purge failed: " + (err.response?.data?.detail||err.message)))
   }
 
   function removeTag(tag){
@@ -566,6 +622,85 @@ export default function App(){
               ))}
             </div>
 
+            {/* ── Thumbnail Utilities ── */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Thumbnail Utilities</h2>
+              </div>
+              <button onClick={loadThumbStats} style={{padding:"6px 14px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"12px"}}>↻ Refresh Stats</button>
+            </div>
+
+            {/* Stats row */}
+            {thumbStats && (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"12px",marginBottom:"20px"}}>
+                {[
+                  {label:"Media with file",value:thumbStats.total_media_with_file,color:"#fff"},
+                  {label:"Thumbs in DB",value:thumbStats.with_thumb_in_db,color:"#46d160"},
+                  {label:"Missing thumbs",value:thumbStats.missing_thumb_in_db,color:thumbStats.missing_thumb_in_db>0?"#f9c300":"#46d160"},
+                  {label:"Stale DB entries",value:thumbStats.stale_thumb_db_entries,color:thumbStats.stale_thumb_db_entries>0?"#ff6b6b":"#46d160"},
+                  {label:"Files on disk",value:thumbStats.thumb_files_on_disk,color:"#7193ff"},
+                  {label:"Disk usage",value:`${thumbStats.thumb_disk_mb} MB`,color:"#888"},
+                ].map(s=>(
+                  <div key={s.label} style={{background:"#1a1a1a",padding:"14px 16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                    <div style={{fontSize:"11px",color:"#555",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
+                    <div style={{fontSize:"22px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{typeof s.value==="number"?s.value.toLocaleString():s.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"16px"}}>
+              <button
+                onClick={runThumbBackfill}
+                disabled={!!thumbJob}
+                style={{padding:"10px 20px",background:thumbJob?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:thumbJob?"#555":"#fff",cursor:thumbJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"600"}}>
+                Backfill Missing
+              </button>
+              <button
+                onClick={runThumbRebuildAll}
+                disabled={!!thumbJob}
+                style={{padding:"10px 20px",background:thumbJob?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"10px",color:thumbJob?"#555":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"600"}}>
+                Rebuild All
+              </button>
+              <button
+                onClick={runThumbPurgeOrphans}
+                disabled={!!thumbJob}
+                style={{padding:"10px 20px",background:thumbJob?"#2a2a2a":"#2a0000",border:"1px solid #550000",borderRadius:"10px",color:thumbJob?"#555":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"600"}}>
+                Purge Orphans
+              </button>
+            </div>
+
+            {/* Job progress bar */}
+            {thumbJob && (()=>{
+              const pct = thumbJob.total>0 ? Math.round(thumbJob.done/thumbJob.total*100) : 0
+              return (
+                <div style={{background:"#1a1a1a",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"20px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                    <span style={{fontSize:"13px",color:"#ccc",fontWeight:"500",textTransform:"capitalize"}}>{thumbJob.type||"job"} — {thumbJob.status}</span>
+                    <span style={{fontSize:"12px",color:"#666",fontVariantNumeric:"tabular-nums"}}>{thumbJob.done.toLocaleString()} / {thumbJob.total.toLocaleString()}</span>
+                  </div>
+                  <div style={{background:"#141414",height:"8px",borderRadius:"4px",overflow:"hidden",marginBottom:"6px"}}>
+                    <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"4px",transition:"width 0.4s ease"}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555"}}>
+                    <span>{pct}%{thumbJob.skipped>0?` · ${thumbJob.skipped} skipped`:""}</span>
+                    {thumbJob.errors?.length>0 && <span style={{color:"#ff6b6b"}}>{thumbJob.errors.length} error(s)</span>}
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* Last job result summary */}
+            {thumbJobResult && !thumbJob && (
+              <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"10px",padding:"12px 16px",marginBottom:"20px",fontSize:"13px",color:"#46d160"}}>
+                Job complete — {thumbJobResult.done?.toLocaleString()} processed
+                {thumbJobResult.skipped>0 && <span style={{color:"#888"}}>, {thumbJobResult.skipped} skipped</span>}
+                {thumbJobResult.errors?.length>0 && <span style={{color:"#ff6b6b"}}>, {thumbJobResult.errors.length} error(s)</span>}
+              </div>
+            )}
+
             {/* Recent Activity */}
             <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
               <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
@@ -735,8 +870,16 @@ export default function App(){
                           style={{width:"100%",height:"100%",objectFit:"cover"}}
                         />
                       ) : (
-                        <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)"}}>
-                          <div style={{width:"64px",height:"64px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)"}}>
+                        <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
+                          {/* Static thumbnail behind play button */}
+                          {p.thumb_url && (
+                            <img
+                              src={p.thumb_url}
+                              style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}}
+                              onError={e=>e.target.style.display="none"}
+                            />
+                          )}
+                          <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)",backdropFilter:"blur(2px)"}}>
                             <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #ff4500",marginLeft:"4px"}}/>
                           </div>
                         </div>

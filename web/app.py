@@ -3,8 +3,12 @@ import logging
 import os
 import json
 import redis
+import subprocess
+import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -222,8 +226,14 @@ def posts(
 
     with get_db_cursor() as cur:
         query = """
-            SELECT id, title, url, media_url, raw, subreddit, author, created_utc 
-            FROM posts 
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc,
+                   m.thumb_path
+            FROM posts p
+            LEFT JOIN LATERAL (
+                SELECT thumb_path FROM media
+                WHERE post_id = p.id AND thumb_path IS NOT NULL
+                LIMIT 1
+            ) m ON true
             WHERE 1=1
         """
         params = []
@@ -254,12 +264,26 @@ def posts(
         results = []
 
         for row in cur.fetchall():
-            post_id, title, url, media_url, raw, subreddit, author, created_utc = row
+            (
+                post_id,
+                title,
+                url,
+                media_url,
+                raw,
+                subreddit,
+                author,
+                created_utc,
+                thumb_path,
+            ) = row
             image_url = None
             video_url = None
             selftext = None
             created_ts = None
             is_video = _is_video_url(url)
+            thumb_url = None
+            if thumb_path and os.path.exists(thumb_path):
+                rel = os.path.relpath(thumb_path, THUMB_PATH)
+                thumb_url = f"/thumb/{rel}"
 
             if raw:
                 try:
@@ -311,6 +335,7 @@ def posts(
                     "author": author,
                     "created_utc": created_ts
                     or (created_utc.isoformat() if created_utc else None),
+                    "thumb_url": thumb_url,
                 }
             )
         return results
@@ -695,6 +720,269 @@ def clear_queue():
     rd = get_redis()
     rd.delete("media_queue")
     return {"status": "ok", "message": "Queue cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Thumbnail utilities
+# ---------------------------------------------------------------------------
+
+# In-memory job registry: job_id -> {status, total, done, errors, started_at}
+_thumb_jobs: Dict[str, Any] = {}
+_thumb_jobs_lock = threading.Lock()
+
+
+def _make_thumb(src_path: str) -> str:
+    """Generate a .thumb.jpg for *src_path* inside THUMB_PATH, mirroring the
+    directory structure relative to ARCHIVE_PATH.  Returns the thumb path."""
+    try:
+        rel = os.path.relpath(src_path, ARCHIVE_PATH)
+    except ValueError:
+        rel = Path(src_path).name
+
+    thumb_subdir = Path(THUMB_PATH) / Path(rel).parent
+    thumb_subdir.mkdir(parents=True, exist_ok=True)
+    thumb = str(thumb_subdir / (Path(src_path).stem + ".thumb.jpg"))
+
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            src_path,
+            "-vf",
+            "scale=320:-1",
+            "-frames:v",
+            "1",
+            thumb,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="replace")[:300])
+    return thumb
+
+
+def _run_thumb_job(job_id: str, rows: list, force: bool):
+    """Background worker: generate thumbnails for *rows* and update DB."""
+    with _thumb_jobs_lock:
+        _thumb_jobs[job_id]["status"] = "running"
+
+    done = 0
+    errors = []
+
+    for media_id, file_path, existing_thumb in rows:
+        # Skip if thumb already exists on disk and we're not forcing
+        if not force and existing_thumb and os.path.exists(existing_thumb):
+            with _thumb_jobs_lock:
+                _thumb_jobs[job_id]["done"] += 1
+            done += 1
+            continue
+
+        if not file_path or not os.path.exists(file_path):
+            with _thumb_jobs_lock:
+                _thumb_jobs[job_id]["done"] += 1
+                _thumb_jobs[job_id]["skipped"] = (
+                    _thumb_jobs[job_id].get("skipped", 0) + 1
+                )
+            done += 1
+            continue
+
+        try:
+            thumb = _make_thumb(file_path)
+            conn = connection_pool.getconn()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE media SET thumb_path = %s WHERE id = %s",
+                    (thumb, media_id),
+                )
+                conn.commit()
+                cur.close()
+            finally:
+                connection_pool.putconn(conn)
+        except Exception as e:
+            errors.append(f"id={media_id}: {e}")
+            logger.warning(f"Thumb job {job_id}: failed for media id={media_id}: {e}")
+
+        done += 1
+        with _thumb_jobs_lock:
+            _thumb_jobs[job_id]["done"] = done
+            _thumb_jobs[job_id]["errors"] = errors[-20:]  # keep last 20
+
+    with _thumb_jobs_lock:
+        _thumb_jobs[job_id]["status"] = "done"
+        _thumb_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+
+    logger.info(f"Thumb job {job_id} finished: {done} processed, {len(errors)} errors")
+
+
+@app.get("/api/admin/thumbnails/stats")
+def thumb_stats():
+    """Return thumbnail coverage statistics."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL")
+        total_with_file = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL AND thumb_path IS NOT NULL"
+        )
+        with_thumb_db = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL AND thumb_path IS NULL"
+        )
+        missing_thumb_db = cur.fetchone()[0]
+
+        # Rows where the thumb_path DB value is set but the file is gone
+        cur.execute("SELECT id, thumb_path FROM media WHERE thumb_path IS NOT NULL")
+        stale_count = 0
+        for row in cur.fetchall():
+            if not os.path.exists(row[1]):
+                stale_count += 1
+
+    # Count .thumb.jpg files on disk
+    thumb_files_on_disk = 0
+    thumb_bytes = 0
+    try:
+        for dirpath, _, filenames in os.walk(THUMB_PATH):
+            for fn in filenames:
+                if fn.endswith(".thumb.jpg"):
+                    thumb_files_on_disk += 1
+                    try:
+                        thumb_bytes += os.path.getsize(os.path.join(dirpath, fn))
+                    except OSError:
+                        pass
+    except Exception:
+        pass
+
+    return {
+        "total_media_with_file": total_with_file,
+        "with_thumb_in_db": with_thumb_db,
+        "missing_thumb_in_db": missing_thumb_db,
+        "stale_thumb_db_entries": stale_count,
+        "thumb_files_on_disk": thumb_files_on_disk,
+        "thumb_disk_mb": round(thumb_bytes / 1024 / 1024, 2),
+    }
+
+
+@app.post("/api/admin/thumbnails/backfill")
+def thumb_backfill():
+    """Generate thumbnails for all media rows that are missing one (or whose
+    thumb file no longer exists on disk).  Runs in background; returns a job_id
+    for progress polling."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, file_path, thumb_path
+            FROM media
+            WHERE file_path IS NOT NULL
+              AND (thumb_path IS NULL OR thumb_path = '')
+            ORDER BY id
+            """
+        )
+        rows = cur.fetchall()
+
+        # Also include rows where the thumb file is missing from disk
+        cur.execute(
+            "SELECT id, file_path, thumb_path FROM media WHERE thumb_path IS NOT NULL"
+        )
+        for row in cur.fetchall():
+            if row[2] and not os.path.exists(row[2]):
+                rows.append(row)
+
+    job_id = str(uuid.uuid4())
+    with _thumb_jobs_lock:
+        _thumb_jobs[job_id] = {
+            "type": "backfill",
+            "status": "pending",
+            "total": len(rows),
+            "done": 0,
+            "skipped": 0,
+            "errors": [],
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+        }
+
+    t = threading.Thread(target=_run_thumb_job, args=(job_id, rows, False), daemon=True)
+    t.start()
+
+    return {"job_id": job_id, "total": len(rows)}
+
+
+@app.post("/api/admin/thumbnails/rebuild-all")
+def thumb_rebuild_all():
+    """Force-regenerate thumbnails for every media row that has a local file,
+    overwriting existing thumbnails.  Runs in background; returns a job_id."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL ORDER BY id"
+        )
+        rows = cur.fetchall()
+
+    job_id = str(uuid.uuid4())
+    with _thumb_jobs_lock:
+        _thumb_jobs[job_id] = {
+            "type": "rebuild-all",
+            "status": "pending",
+            "total": len(rows),
+            "done": 0,
+            "skipped": 0,
+            "errors": [],
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+        }
+
+    t = threading.Thread(target=_run_thumb_job, args=(job_id, rows, True), daemon=True)
+    t.start()
+
+    return {"job_id": job_id, "total": len(rows)}
+
+
+@app.post("/api/admin/thumbnails/purge-orphans")
+def thumb_purge_orphans():
+    """Delete .thumb.jpg files on disk that have no corresponding DB row.
+    Returns counts and any errors."""
+    # Collect all thumb paths stored in DB for O(1) lookup
+    with get_db_cursor() as cur:
+        cur.execute("SELECT thumb_path FROM media WHERE thumb_path IS NOT NULL")
+        db_paths = {row[0] for row in cur.fetchall()}
+
+    deleted = 0
+    freed_bytes = 0
+    errors = []
+
+    try:
+        for dirpath, _, filenames in os.walk(THUMB_PATH):
+            for fn in filenames:
+                if not fn.endswith(".thumb.jpg"):
+                    continue
+                full = os.path.join(dirpath, fn)
+                if full not in db_paths:
+                    try:
+                        freed_bytes += os.path.getsize(full)
+                        os.remove(full)
+                        deleted += 1
+                    except Exception as e:
+                        errors.append(str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "deleted": deleted,
+        "freed_mb": round(freed_bytes / 1024 / 1024, 2),
+        "errors": errors[:20],
+    }
+
+
+@app.get("/api/admin/thumbnails/job/{job_id}")
+def thumb_job_status(job_id: str):
+    """Poll the status of a background thumbnail job."""
+    with _thumb_jobs_lock:
+        job = _thumb_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.get("/api/admin/health")
