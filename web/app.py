@@ -848,11 +848,11 @@ async def event_stream():
                 cur = conn.cursor()
                 if after_dt is None:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc FROM posts ORDER BY created_utc DESC LIMIT 1"
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts ORDER BY ingested_at DESC LIMIT 1"
                     )
                 else:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc FROM posts WHERE created_utc > %s ORDER BY created_utc DESC LIMIT 20",
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE ingested_at > %s ORDER BY ingested_at DESC LIMIT 20",
                         (after_dt,),
                     )
                 return cur.fetchall()
@@ -891,7 +891,7 @@ async def event_stream():
 
     async def generate():
         first_run = True
-        last_post_created = None
+        last_post_ingested = None
 
         while True:
             try:
@@ -925,12 +925,12 @@ async def event_stream():
                 except Exception as e:
                     logger.error(f"SSE health check error: {e}")
 
-                new_rows = await db_new_posts(last_post_created)
+                new_rows = await db_new_posts(last_post_ingested)
 
                 if first_run:
                     first_run = False
                     if new_rows:
-                        last_post_created = new_rows[0][4]
+                        last_post_ingested = new_rows[0][5]
                 else:
                     if new_rows:
                         stats["new_posts"] = [
@@ -943,7 +943,7 @@ async def event_stream():
                             }
                             for r in new_rows
                         ]
-                        last_post_created = new_rows[0][4]
+                        last_post_ingested = new_rows[0][5]
 
                 # Serialize — if targets/health contain an unexpected non-serializable
                 # value, strip those fields and still emit the core stats.
