@@ -2,6 +2,7 @@ import os, time, json
 import praw, psycopg2, redis
 from datetime import datetime
 import logging
+from prometheus_client import Counter, Gauge, Histogram, generate_latest
 
 import sys
 
@@ -12,6 +13,18 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+posts_ingested = Counter(
+    "reddit_posts_ingested_total", "Total posts ingested", ["subreddit"]
+)
+comments_ingested = Counter(
+    "reddit_comments_ingested_total", "Total comments ingested", ["subreddit"]
+)
+media_queued = Counter("reddit_media_queued_total", "Total media items queued")
+ingest_cycle_duration = Histogram(
+    "reddit_ingest_cycle_duration_seconds", "Ingest cycle duration"
+)
+targets_enabled = Gauge("reddit_targets_enabled", "Number of enabled targets")
 
 logger.info("Starting ingester...")
 
@@ -136,11 +149,16 @@ def extract_media_urls(post):
 
 def run():
     while True:
+        cycle_start = datetime.utcnow()
         logger.info("Checking targets for new posts...")
+
+        targets_enabled.set(0)
+
         with db.cursor() as cur:
             cur.execute("SELECT type,name,last_created FROM targets WHERE enabled=true")
             targets = cur.fetchall()
             logger.info(f"Found {len(targets)} enabled targets")
+            targets_enabled.set(len(targets))
 
             for ttype, name, last in targets:
                 logger.info(f"Processing {ttype}: {name}")
@@ -178,6 +196,7 @@ def run():
                                 ),
                             )
                             logger.info(f"New post: {p.id} - {p.title[:50]}")
+                            posts_ingested.labels(subreddit=str(p.subreddit)).inc()
 
                             media_urls = extract_media_urls(p)
                             urls_queued = 0
@@ -188,6 +207,7 @@ def run():
                                         json.dumps({"post_id": p.id, "url": url}),
                                     )
                                     urls_queued += 1
+                                    media_queued.inc()
                             if urls_queued > 0:
                                 logger.info(
                                     f"Queued {urls_queued} media URLs for post {p.id}"
@@ -209,6 +229,9 @@ def run():
                                             json.dumps(c, default=str),
                                         ),
                                     )
+                                    comments_ingested.labels(
+                                        subreddit=str(p.subreddit)
+                                    ).inc()
                                 logger.info(
                                     f"Archived {len(comments)} comments for {p.id}"
                                 )
@@ -237,6 +260,11 @@ def run():
                     logger.error(f"Error processing {name}: {e}", exc_info=True)
 
         db.commit()
+
+        cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
+        ingest_cycle_duration.observe(cycle_duration)
+        logger.info(f"Ingest cycle completed in {cycle_duration:.2f}s")
+
         logger.info(f"Sleeping for {POLL_INTERVAL} seconds")
         time.sleep(POLL_INTERVAL)
 

@@ -9,11 +9,39 @@ import psycopg2
 from psycopg2 import pool as pg_pool
 from fastapi import FastAPI, Query, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from typing import Optional, List, Dict, Any
+from prometheus_client import (
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+posts_total = Counter("reddit_posts_total", "Total posts ingested", ["subreddit"])
+comments_total = Counter(
+    "reddit_comments_total", "Total comments ingested", ["subreddit"]
+)
+media_queued = Counter("reddit_media_queued_total", "Total media items queued")
+media_downloaded = Counter("reddit_media_downloaded_total", "Total media downloaded")
+media_failed = Counter("reddit_media_failed_total", "Total media download failures")
+queue_length = Gauge("reddit_queue_length", "Current queue length")
+posts_in_db = Gauge("reddit_posts_in_db", "Total posts in database")
+comments_in_db = Gauge("reddit_comments_in_db", "Total comments in database")
+media_in_db = Gauge("reddit_media_in_db", "Total media records in database")
+media_downloaded_in_db = Gauge(
+    "reddit_media_downloaded_in_db", "Total downloaded media"
+)
+target_last_fetch = Gauge(
+    "reddit_target_last_fetch_ts",
+    "Last fetch timestamp",
+    ["target_type", "target_name"],
+)
+ingest_duration = Histogram("reddit_ingest_duration_seconds", "Ingest cycle duration")
 
 app = FastAPI(title="Reddit Archive API", version="3.0.0")
 logger.info("API STARTED - version 3.0.0")
@@ -589,6 +617,50 @@ def health_check():
         issues.append(f"Archive path: {str(e)}")
 
     return {"status": "healthy" if not issues else "degraded", "issues": issues}
+
+
+@app.get("/metrics")
+def metrics():
+    if not redis_client:
+        return PlainTextResponse("Redis not available", status_code=503)
+
+    rd = get_redis()
+    queue_len = rd.llen("media_queue")
+    queue_length.set(queue_len)
+
+    try:
+        with get_db_cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM posts")
+            posts_in_db.set(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*) FROM comments")
+            comments_in_db.set(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*) FROM media")
+            media_in_db.set(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*) FROM media WHERE status = 'done'")
+            media_downloaded_in_db.set(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT subreddit, COUNT(*) FROM posts GROUP BY subreddit")
+            for row in cur.fetchall():
+                posts_total.labels(subreddit=row[0]).set(row[1] or 0)
+
+            cur.execute("SELECT subreddit, COUNT(*) FROM comments GROUP BY subreddit")
+            for row in cur.fetchall():
+                comments_total.labels(subreddit=row[0]).set(row[1] or 0)
+
+            cur.execute(
+                "SELECT type, name, EXTRACT(EPOCH FROM last_created) FROM targets WHERE last_created IS NOT NULL"
+            )
+            for row in cur.fetchall():
+                target_last_fetch.labels(target_type=row[0], target_name=row[1]).set(
+                    row[2] or 0
+                )
+    except Exception as e:
+        logger.error(f"Metrics error: {e}")
+
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/api/tag")

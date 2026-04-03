@@ -4,6 +4,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 from pathlib import Path
 import logging
+from prometheus_client import Counter, Gauge, Histogram, generate_latest
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -12,6 +13,14 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+media_downloaded = Counter(
+    "reddit_media_downloaded_total", "Total media downloaded", ["status"]
+)
+media_download_bytes = Counter(
+    "reddit_media_download_bytes_total", "Total bytes downloaded"
+)
+download_duration = Histogram("reddit_download_duration_seconds", "Download duration")
 
 logger.info("Starting downloader...")
 
