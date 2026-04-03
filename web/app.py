@@ -226,14 +226,8 @@ def posts(
 
     with get_db_cursor() as cur:
         query = """
-            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc,
-                   m.thumb_path
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc
             FROM posts p
-            LEFT JOIN LATERAL (
-                SELECT thumb_path FROM media
-                WHERE post_id = p.id AND thumb_path IS NOT NULL
-                LIMIT 1
-            ) m ON true
             WHERE 1=1
         """
         params = []
@@ -273,62 +267,97 @@ def posts(
                 subreddit,
                 author,
                 created_utc,
-                thumb_path,
             ) = row
-            image_url = None
-            video_url = None
             selftext = None
             created_ts = None
             is_video = _is_video_url(url)
-            thumb_url = None
-            if thumb_path and os.path.exists(thumb_path):
-                rel = os.path.relpath(thumb_path, THUMB_PATH)
-                thumb_url = f"/thumb/{rel}"
 
+            # Get all media rows for this post
+            cur.execute(
+                "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
+                (post_id,),
+            )
+            media_rows = cur.fetchall()
+
+            # Build local URLs from downloaded files
+            image_urls = []
+            video_urls = []
+            thumb_url = None
+
+            for m_id, m_file_path, m_thumb_path in media_rows:
+                if m_file_path and os.path.exists(m_file_path):
+                    rel = os.path.relpath(m_file_path, ARCHIVE_PATH)
+                    local_url = f"/media/{rel}"
+                    # Check extension to determine type
+                    if m_file_path.lower().endswith(
+                        (".mp4", ".webm", ".mkv", ".mov", ".avi")
+                    ):
+                        video_urls.append(local_url)
+                    else:
+                        image_urls.append(local_url)
+                if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
+                    rel = os.path.relpath(m_thumb_path, THUMB_PATH)
+                    thumb_url = f"/thumb/{rel}"
+
+            # Only use remote URLs as fallback when no local files
             if raw:
                 try:
                     data = raw if isinstance(raw, dict) else json.loads(raw)
                     selftext = data.get("selftext")
                     created_ts = data.get("created_utc")
 
+                    # For videos: use remote as fallback only if no local
                     if is_video:
-                        video_url = _extract_video_url(url, data)
+                        if not video_urls:
+                            extracted = _extract_video_url(url, data)
+                            video_urls = (
+                                [extracted] if extracted else [url] if url else []
+                            )
+                    # For images: collect all from media_metadata, use remote as fallback
                     else:
-                        if "media_metadata" in data:
-                            for img_id, img_data in data.get(
-                                "media_metadata", {}
-                            ).items():
-                                if "s" in img_data:
-                                    image_url = img_data["s"].get("u")
-                                    break
-
-                        if not image_url and "crosspost_parent_list" in data:
-                            for cp in data.get("crosspost_parent_list", []):
-                                if "media_metadata" in cp:
-                                    for img_id, img_data in cp.get(
-                                        "media_metadata", {}
-                                    ).items():
-                                        if "s" in img_data:
-                                            image_url = img_data["s"].get("u")
-                                            break
-                                    if image_url:
-                                        break
-
-                        if not image_url and "preview" in data:
-                            imgs = data.get("preview", {}).get("images", [])
-                            if imgs:
-                                image_url = imgs[0].get("source", {}).get(
-                                    "url"
-                                ) or imgs[0].get("resolutions", [{}])[-1].get("url")
+                        if not image_urls:
+                            remote_imgs = []
+                            if "media_metadata" in data:
+                                for img_id, img_data in data.get(
+                                    "media_metadata", {}
+                                ).items():
+                                    if "s" in img_data:
+                                        u = img_data["s"].get("u")
+                                        if u:
+                                            remote_imgs.append(u)
+                                    elif img_data.get("p"):
+                                        u = img_data["p"][-1].get("u")
+                                        if u:
+                                            remote_imgs.append(u)
+                            if not remote_imgs and "preview" in data:
+                                for img in data.get("preview", {}).get("images", []):
+                                    u = img.get("source", {}).get("url") or img.get(
+                                        "resolutions", [{}]
+                                    )[-1].get("url")
+                                    if u:
+                                        remote_imgs.append(u)
+                                    if img.get("variants", {}).get("n"):
+                                        for v in img["variants"]["n"].values():
+                                            vu = v.get("url")
+                                            if vu:
+                                                remote_imgs.append(vu)
+                            if remote_imgs:
+                                image_urls = remote_imgs
                 except Exception as e:
                     logger.error(f"ERROR parsing raw for {post_id}: {e}")
+
+            # Remove None values and deduplicate
+            video_urls = list(dict.fromkeys([v for v in video_urls if v]))
+            image_urls = list(dict.fromkeys([i for i in image_urls if i]))
 
             results.append(
                 {
                     "id": post_id,
                     "title": title,
-                    "image_url": image_url,
-                    "video_url": video_url,
+                    "image_url": image_urls[0] if image_urls else None,
+                    "image_urls": image_urls,
+                    "video_url": video_urls[0] if video_urls else None,
+                    "video_urls": video_urls,
                     "is_video": is_video,
                     "selftext": selftext,
                     "subreddit": subreddit,
@@ -385,38 +414,88 @@ def get_post(post_id: str):
                 }
             )
 
-        image_url = None
-        video_url = None
+        # Get all media rows for this post
+        cur.execute(
+            "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
+            (post_id,),
+        )
+        media_rows = cur.fetchall()
+
+        # Build local URLs from downloaded files
+        image_urls = []
+        video_urls = []
+        thumb_url = None
+
+        for m_id, m_file_path, m_thumb_path in media_rows:
+            if m_file_path and os.path.exists(m_file_path):
+                rel = os.path.relpath(m_file_path, ARCHIVE_PATH)
+                local_url = f"/media/{rel}"
+                if m_file_path.lower().endswith(
+                    (".mp4", ".webm", ".mkv", ".mov", ".avi")
+                ):
+                    video_urls.append(local_url)
+                else:
+                    image_urls.append(local_url)
+            if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
+                rel = os.path.relpath(m_thumb_path, THUMB_PATH)
+                thumb_url = f"/thumb/{rel}"
+
+        # Build fallback URLs from raw JSON
         selftext = None
         is_video = _is_video_url(url)
-
         if raw:
             try:
                 data = raw if isinstance(raw, dict) else json.loads(raw)
                 selftext = data.get("selftext")
 
                 if is_video:
-                    video_url = _extract_video_url(url, data)
+                    if not video_urls:
+                        extracted = _extract_video_url(url, data)
+                        video_urls = [extracted] if extracted else [url] if url else []
                 else:
-                    if "media_metadata" in data:
-                        for img_id, img_data in data.get("media_metadata", {}).items():
-                            if "s" in img_data:
-                                image_url = img_data["s"].get("u")
-                                break
-
-                    if not image_url and "preview" in data:
-                        imgs = data.get("preview", {}).get("images", [])
-                        if imgs:
-                            image_url = imgs[0].get("source", {}).get("url")
+                    if not image_urls:
+                        remote_imgs = []
+                        if "media_metadata" in data:
+                            for img_id, img_data in data.get(
+                                "media_metadata", {}
+                            ).items():
+                                if "s" in img_data:
+                                    u = img_data["s"].get("u")
+                                    if u:
+                                        remote_imgs.append(u)
+                                elif img_data.get("p"):
+                                    u = img_data["p"][-1].get("u")
+                                    if u:
+                                        remote_imgs.append(u)
+                        if not remote_imgs and "preview" in data:
+                            for img in data.get("preview", {}).get("images", []):
+                                u = img.get("source", {}).get("url") or img.get(
+                                    "resolutions", [{}]
+                                )[-1].get("url")
+                                if u:
+                                    remote_imgs.append(u)
+                                if img.get("variants", {}).get("n"):
+                                    for v in img["variants"]["n"].values():
+                                        vu = v.get("url")
+                                        if vu:
+                                            remote_imgs.append(vu)
+                        if remote_imgs:
+                            image_urls = remote_imgs
             except Exception as e:
                 logger.error(f"ERROR parsing raw for {post_id}: {e}")
+
+        # Remove None values and deduplicate
+        video_urls = list(dict.fromkeys([v for v in video_urls if v]))
+        image_urls = list(dict.fromkeys([i for i in image_urls if i]))
 
         return {
             "id": post_id,
             "title": title,
             "url": url,
-            "image_url": image_url,
-            "video_url": video_url,
+            "image_url": image_urls[0] if image_urls else None,
+            "image_urls": image_urls,
+            "video_url": video_urls[0] if video_urls else None,
+            "video_urls": video_urls,
             "is_video": is_video,
             "selftext": selftext,
             "subreddit": subreddit,
@@ -803,7 +882,7 @@ def _run_thumb_job(job_id: str, rows: list, force: bool):
                 connection_pool.putconn(conn)
         except Exception as e:
             errors.append(f"id={media_id}: {e}")
-            logger.warning(f"Thumb job {job_id}: failed for media id={media_id}: {e}")
+            logger.error(f"Thumb job {job_id}: failed for media id={media_id}: {e}")
 
         done += 1
         with _thumb_jobs_lock:
@@ -976,6 +1055,158 @@ def thumb_job_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+# ---------------------------------------------------------------------------
+# Media re-scan utilities
+# ---------------------------------------------------------------------------
+
+
+def _extract_media_urls_from_raw(raw: dict, post_url: str) -> list:
+    """Extract ALL media URLs from a post's raw JSON data (mirrors ingester logic)."""
+    urls = []
+
+    has_media_metadata = bool(raw.get("media_metadata"))
+    if has_media_metadata:
+        for img_id, img_data in raw["media_metadata"].items():
+            if "s" in img_data:
+                u = img_data["s"].get("u")
+                if u:
+                    urls.append(u)
+            elif img_data.get("p"):
+                u = img_data["p"][-1].get("u")
+                if u:
+                    urls.append(u)
+    else:
+        if post_url and (
+            "i.redd.it" in post_url
+            or "i.imgur.com" in post_url
+            or post_url.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+        ):
+            urls.append(post_url)
+
+        if not urls and "preview" in raw:
+            imgs = raw["preview"].get("images", [])
+            for img in imgs:
+                u = img.get("source", {}).get("url")
+                if u:
+                    urls.append(u)
+                # variants (nsfw, gif, etc)
+                for var_type, var_imgs in img.get("variants", {}).items():
+                    if isinstance(var_imgs, dict):
+                        vu = var_imgs.get("url")
+                        if vu:
+                            urls.append(vu)
+                    elif isinstance(var_imgs, list):
+                        for vi in var_imgs:
+                            vu = vi.get("url")
+                            if vu:
+                                urls.append(vu)
+
+    if "crosspost_parent_list" in raw:
+        for cp in raw.get("crosspost_parent_list", []):
+            for img_id, img_data in cp.get("media_metadata", {}).items():
+                if "s" in img_data:
+                    u = img_data["s"].get("u")
+                    if u:
+                        urls.append(u)
+
+    # Deduplicate
+    seen = set()
+    unique_urls = []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            unique_urls.append(u)
+
+    return unique_urls
+
+
+@app.post("/api/admin/media/rescan")
+def media_rescan():
+    """Re-scan existing posts for additional media that wasn't queued.
+    Compares extracted URLs against what's already in media table,
+    queues new ones to Redis. Returns count of newly queued items."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+
+    with get_db_cursor() as cur:
+        # Get all posts with raw JSON
+        cur.execute(
+            "SELECT id, url, raw, subreddit, author, title FROM posts WHERE raw IS NOT NULL"
+        )
+        post_rows = cur.fetchall()
+
+        # Get all URLs already queued or downloaded for any post
+        cur.execute("SELECT url FROM media")
+        existing_urls = {row[0] for row in cur.fetchall() if row[0]}
+
+        # Also get URLs currently in the queue
+        queued_urls = set()
+        try:
+            queue_items = rd.lrange("media_queue", 0, -1)
+            for item in queue_items:
+                try:
+                    data = json.loads(item)
+                    u = data.get("url")
+                    if u:
+                        queued_urls.add(u)
+                except:
+                    pass
+        except:
+            pass
+
+        all_existing = existing_urls | queued_urls
+
+    new_queue_count = 0
+    post_count = 0
+    urls_found = 0
+
+    for post_id, url, raw, subreddit, author, title in post_rows:
+        if not raw:
+            continue
+
+        try:
+            data = raw if isinstance(raw, dict) else json.loads(raw)
+        except:
+            continue
+
+        # Extract all media URLs from this post's raw JSON
+        extracted = _extract_media_urls_from_raw(data, url)
+
+        for media_url in extracted:
+            if media_url not in all_existing:
+                # Queue this new URL
+                rd.lpush(
+                    "media_queue",
+                    json.dumps(
+                        {
+                            "post_id": post_id,
+                            "url": media_url,
+                            "subreddit": subreddit,
+                            "author": author,
+                            "title": title or "",
+                        }
+                    ),
+                )
+                new_queue_count += 1
+                all_existing.add(media_url)  # prevent duplicates within same batch
+
+        if extracted:
+            post_count += 1
+            urls_found += len(extracted)
+
+    logger.info(
+        f"Media rescan: found {urls_found} URLs across {post_count} posts, queued {new_queue_count} new"
+    )
+
+    return {
+        "posts_scanned": len(post_count),
+        "urls_found": urls_found,
+        "newly_queued": new_queue_count,
+    }
 
 
 @app.get("/api/admin/health")

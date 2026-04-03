@@ -157,7 +157,17 @@ def extract_media_urls(post):
                 u = img.get("source", {}).get("url")
                 if u:
                     urls.append(u)
-                    break
+                # Also get variants (nsfw, gif, etc)
+                for var_type, var_imgs in img.get("variants", {}).items():
+                    if isinstance(var_imgs, dict):
+                        vu = var_imgs.get("url")
+                        if vu:
+                            urls.append(vu)
+                    elif isinstance(var_imgs, list):
+                        for vi in var_imgs:
+                            vu = vi.get("url")
+                            if vu:
+                                urls.append(vu)
 
     if "crosspost_parent_list" in data:
         for cp in data.get("crosspost_parent_list", []):

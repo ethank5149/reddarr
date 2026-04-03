@@ -6,6 +6,7 @@ export default function App(){
   const [search,setSearch]=useState("")
   const [searchResults,setSearchResults]=useState(null)
   const [selectedPost,setSelectedPost]=useState(null)
+  const [galleryIdx,setGalleryIdx]=useState(0)
   const [tagInput,setTagInput]=useState("")
   const [activeTab,setActiveTab]=useState("browse")
   const [adminData,setAdminData]=useState(null)
@@ -40,6 +41,7 @@ export default function App(){
   // Refs to avoid stale closures in async callbacks
   const offsetRef = useRef(0)
   const filtersRef = useRef({ subreddit:"", author:"", mediaType:"all", sort:"newest" })
+  const filteringRef = useRef(false)  // true while applyFilters fetch is in flight
 
   const loader=useRef()
   const searchTimeout=useRef()
@@ -186,13 +188,22 @@ export default function App(){
   }
 
   function mapPost(p){
-    return { id:p.id, title:p.title, url:p.image_url, video_url:p.video_url, is_video:p.is_video, selftext:p.selftext, subreddit:p.subreddit, author:p.author, created_utc:p.created_utc, thumb_url:p.thumb_url }
+    return { 
+      id:p.id, title:p.title, 
+      url:p.image_url, image_urls:p.image_urls, 
+      video_url:p.video_url, video_urls:p.video_urls, 
+      is_video:p.is_video, selftext:p.selftext, 
+      subreddit:p.subreddit, author:p.author, 
+      created_utc:p.created_utc, thumb_url:p.thumb_url 
+    }
   }
 
   function load(){
+    if(filteringRef.current) return
     const currentOffset = offsetRef.current
     axios.get(buildPostsQuery(currentOffset))
     .then(r=>{
+      if(filteringRef.current) return
       const newPosts = r.data.map(mapPost)
       setPosts(prev=>[...prev,...newPosts])
       offsetRef.current = currentOffset + 50
@@ -217,6 +228,7 @@ export default function App(){
   function applyFilters(newFilters){
     filtersRef.current = newFilters
     offsetRef.current = 0
+    filteringRef.current = true
     setPosts([])
     axios.get(buildPostsQuery(0))
     .then(r=>{
@@ -224,6 +236,8 @@ export default function App(){
       offsetRef.current = 50
     }).catch(err=>{
       console.error("Failed to load posts:", err)
+    }).finally(()=>{
+      filteringRef.current = false
     })
   }
 
@@ -702,6 +716,29 @@ export default function App(){
               </div>
             )}
 
+            {/* ── Media Re-scan Utility ── */}
+            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px",marginTop:"32px"}}>
+              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Media Re-scan</h2>
+            </div>
+            <div style={{background:"#1a1a1a",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"20px"}}>
+              <p style={{fontSize:"13px",color:"#888",marginBottom:"12px",margin:0}}>
+                Re-scan existing posts to find additional images/videos that weren't originally queued for download.
+                Useful for retroactively capturing gallery images or fixing posts archived before full media extraction was implemented.
+              </p>
+              <button
+                onClick={()=>{
+                  if(!confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
+                  axios.post("/api/admin/media/rescan").then(r=>{
+                    alert(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
+                    loadAdmin()
+                  }).catch(err=>alert("Rescan failed: " + (err.response?.data?.detail||err.message)))
+                }}
+                style={{padding:"10px 20px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:"#fff",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
+                Re-scan All Posts
+              </button>
+            </div>
+
             {/* Recent Activity */}
             <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
               <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
@@ -844,7 +881,7 @@ export default function App(){
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
               {searchResults.map(p=>(
-                <div key={p.id} onClick={()=>setSelectedPost(p)} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease",boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>
+                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease",boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>
                   <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit ? `r/${p.subreddit}` : ""}</div>
                   <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
                   {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
@@ -858,7 +895,7 @@ export default function App(){
           <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
               {posts.map(p=>(
-                <div key={p.id} onClick={()=>setSelectedPost(p)}
+                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
                   onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
                   style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(255,69,0,0.15)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #2a2a2a"}}>
                   {p.is_video ? (
@@ -894,9 +931,15 @@ export default function App(){
                         <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                       </div>
                     </div>
-                  ) : p.url ? (
+                  ) : (p.url || p.image_urls?.[0]) ? (
                     <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
-                      <img src={p.url} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
+                      <img src={p.url || p.image_urls?.[0]} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
+                      {/* Gallery indicator */}
+                      {p.image_urls?.length > 1 && (
+                        <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>
+                        1/{p.image_urls.length}
+                      </div>
+                      )}
                       <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
                         <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                       </div>
@@ -1011,11 +1054,25 @@ export default function App(){
                   </div>
                 )}
               </div>
-            ) : selectedPost.url ? (
+            ) : (selectedPost.url || selectedPost.image_urls?.[0]) ? (
               <div style={{background:"#000",position:"relative"}}>
-                <img src={selectedPost.url} style={{width:"100%",maxHeight:"450px",objectFit:"contain",borderRadius:"20px 20px 0 0"}} onError={e=>e.target.style.display="none"}/>
+                <img src={selectedPost.url || selectedPost.image_urls?.[galleryIdx] || selectedPost.image_urls?.[0]} style={{width:"100%",maxHeight:"450px",objectFit:"contain",borderRadius:"20px 20px 0 0"}} onError={e=>e.target.style.display="none"}/>
+                {/* Gallery navigation */}
+                {selectedPost.image_urls?.length > 1 && (
+                  <>
+                    <div style={{position:"absolute",top:"50%",left:"10px",transform:"translateY(-50%)",zIndex:10}}>
+                      <button onClick={()=>setGalleryIdx(i=>Math.max(0,i-1))} disabled={galleryIdx===0} style={{background:"rgba(0,0,0,0.8)",border:"none",borderRadius:"50%",width:"40px",height:"40px",cursor:"pointer",fontSize:"20px",color:"#fff",opacity:galleryIdx===0?0.3:1}}>‹</button>
+                    </div>
+                    <div style={{position:"absolute",top:"50%",right:"10px",transform:"translateY(-50%)",zIndex:10}}>
+                      <button onClick={()=>setGalleryIdx(i=>Math.min(selectedPost.image_urls.length-1,i+1))} disabled={galleryIdx===selectedPost.image_urls.length-1} style={{background:"rgba(0,0,0,0.8)",border:"none",borderRadius:"50%",width:"40px",height:"40px",cursor:"pointer",fontSize:"20px",color:"#fff",opacity:galleryIdx===selectedPost.image_urls.length-1?0.3:1}}>›</button>
+                    </div>
+                    <div style={{position:"absolute",top:"16px",left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.8)",borderRadius:"8px",padding:"6px 12px",fontSize:"12px",color:"#fff"}}>
+                      {galleryIdx + 1} / {selectedPost.image_urls.length}
+                    </div>
+                  </>
+                )}
                 <div style={{position:"absolute",top:"16px",right:"16px"}}>
-                  <a href={selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
+                  <a href={selectedPost.url || selectedPost.image_urls?.[galleryIdx] || selectedPost.image_urls?.[0]} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
                 </div>
               </div>
             ) : null}
