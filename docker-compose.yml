@@ -58,6 +58,7 @@ services:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       REDIS_HOST: redis
       ARCHIVE_PATH: ${ARCHIVE_PATH}
+      THUMB_PATH: ${THUMB_PATH}
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +66,7 @@ services:
         condition: service_healthy
     volumes:
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
+      - ${THUMB_PATH}:${THUMB_PATH}
       - ./downloader:/app
 
   api:
@@ -74,6 +76,7 @@ services:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       REDIS_HOST: redis
       ARCHIVE_PATH: ${ARCHIVE_PATH}
+      THUMB_PATH: ${THUMB_PATH}
     depends_on:
       db:
         condition: service_healthy
@@ -82,6 +85,7 @@ services:
     volumes:
       - ./web:/app
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
+      - ${THUMB_PATH}:${THUMB_PATH}
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
 

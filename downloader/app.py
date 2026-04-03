@@ -27,9 +27,12 @@ logger.info("Starting downloader...")
 db = psycopg2.connect(os.getenv("DB_URL"))
 rd = redis.Redis(host=os.getenv("REDIS_HOST"))
 MEDIA_DIR = os.getenv("ARCHIVE_PATH", "/data")
+THUMB_DIR = os.getenv("THUMB_PATH", os.path.join(MEDIA_DIR, ".thumbs"))
 Path(MEDIA_DIR).mkdir(parents=True, exist_ok=True)
+Path(THUMB_DIR).mkdir(parents=True, exist_ok=True)
 
 logger.info(f"MEDIA_DIR set to: {MEDIA_DIR}")
+logger.info(f"THUMB_DIR set to: {THUMB_DIR}")
 
 session = requests.Session()
 session.headers.update(
@@ -46,8 +49,18 @@ def sha256(p):
 
 
 def make_thumb(path):
-    logger.info(f"Creating thumbnail for: {path}")
-    thumb = path + ".thumb.jpg"
+    """Generate a thumbnail for *path* and save it under THUMB_DIR,
+    mirroring the same r/{sub} / u/{author} subdirectory structure."""
+    try:
+        rel = os.path.relpath(path, MEDIA_DIR)
+    except ValueError:
+        rel = Path(path).name
+
+    thumb_subdir = Path(THUMB_DIR) / Path(rel).parent
+    thumb_subdir.mkdir(parents=True, exist_ok=True)
+    thumb = str(thumb_subdir / (Path(path).stem + ".thumb.jpg"))
+
+    logger.info(f"Creating thumbnail: {thumb}")
     result = subprocess.run(
         ["ffmpeg", "-y", "-i", path, "-vf", "scale=320:-1", "-frames:v", "1", thumb],
         stdout=subprocess.PIPE,
@@ -56,7 +69,9 @@ def make_thumb(path):
     if result.returncode == 0:
         logger.info(f"Thumbnail created: {thumb}")
     else:
-        logger.warning(f"Thumbnail creation failed for {path}")
+        logger.warning(
+            f"Thumbnail creation failed for {path}: {result.stderr.decode()[:200]}"
+        )
     return thumb
 
 

@@ -23,6 +23,8 @@ export default function App(){
   const [resetResult, setResetResult] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [highlightedRows, setHighlightedRows] = useState(new Set())
+  const [addTargetType, setAddTargetType] = useState("subreddit")
+  const [addTargetName, setAddTargetName] = useState("")
   const loader=useRef()
   const searchTimeout=useRef()
   const esRef=useRef(null)
@@ -44,7 +46,6 @@ export default function App(){
 
           setLastUpdated(new Date())
 
-          // Update live stats + per-target data in admin panel
           setAdminData(prev => ({
             ...(prev || {}),
             total_posts: data.total_posts ?? prev?.total_posts,
@@ -55,16 +56,13 @@ export default function App(){
             targets: data.targets ?? prev?.targets,
           }))
 
-          // Update health status
           if(data.health) setHealthStatus(data.health)
 
-          // Update queue length
           setQueueInfo(prev => ({
             ...(prev||{}),
             queue_length: data.queue_length ?? (prev?.queue_length ?? 0)
           }))
 
-          // Handle new posts arriving
           if(data.new_posts && data.new_posts.length > 0){
             setNewPostsAvailable(n => n + data.new_posts.length)
             const newIds = new Set(data.new_posts.map(p => p.id))
@@ -109,8 +107,7 @@ export default function App(){
     }
   },[activeTab])
 
-  // Polling fallback: re-fetch all admin stats every 10s while on the admin tab.
-  // This ensures numbers update even if the SSE stream is down or erroring.
+  // Polling fallback every 10s on admin tab
   useEffect(()=>{
     if(activeTab !== "admin") return
     const poll = setInterval(()=>{
@@ -128,6 +125,22 @@ export default function App(){
     return ()=> clearInterval(poll)
   },[activeTab])
 
+  // Fetch full post detail (tags + comments) when modal opens
+  useEffect(()=>{
+    if(!selectedPost?.id) return
+    axios.get(`/api/post/${selectedPost.id}`)
+      .then(r=>{
+        if(!r.data) return
+        setSelectedPost(prev => prev?.id === r.data.id ? {
+          ...prev,
+          tags: r.data.tags || [],
+          comments: r.data.comments || [],
+          created_utc: r.data.created_utc || prev?.created_utc,
+        } : prev)
+      })
+      .catch(()=>{})
+  },[selectedPost?.id])
+
   function load(){
     axios.get(`/api/posts?limit=50&offset=${offset}`)
     .then(r=>{
@@ -137,7 +150,8 @@ export default function App(){
         url: p.image_url,
         selftext: p.selftext,
         subreddit: p.subreddit,
-        author: p.author
+        author: p.author,
+        created_utc: p.created_utc,
       }))
       setPosts(prev=>[...prev,...newPosts])
       setOffset(o=>o+50)
@@ -155,7 +169,8 @@ export default function App(){
         url: p.image_url,
         selftext: p.selftext,
         subreddit: p.subreddit,
-        author: p.author
+        author: p.author,
+        created_utc: p.created_utc,
       }))
       setPosts(newPosts)
       setOffset(50)
@@ -168,55 +183,76 @@ export default function App(){
   function loadAdmin(){
     setAdminLoading(true)
     Promise.all([
-      axios.get("/api/admin/stats").catch(e => ({data: null})),
-      axios.get("/api/admin/logs?limit=50").catch(e => ({data: []})),
-      axios.get("/api/admin/queue").catch(e => ({data: null})),
-      axios.get("/api/admin/health").catch(e => ({data: null}))
-    ]).then(([statsRes, logsRes, queueRes, healthRes]) => {
-      if (statsRes.data) setAdminData(statsRes.data)
-      if (logsRes.data) setLogs(logsRes.data)
-      if (queueRes.data) setQueueInfo(queueRes.data)
-      if (healthRes.data) setHealthStatus(healthRes.data)
+      axios.get("/api/admin/stats").catch(()=>({data:null})),
+      axios.get("/api/admin/logs?limit=50").catch(()=>({data:[]})),
+      axios.get("/api/admin/queue").catch(()=>({data:null})),
+      axios.get("/api/admin/health").catch(()=>({data:null}))
+    ]).then(([statsRes,logsRes,queueRes,healthRes])=>{
+      if(statsRes.data) setAdminData(statsRes.data)
+      if(logsRes.data) setLogs(logsRes.data)
+      if(queueRes.data) setQueueInfo(queueRes.data)
+      if(healthRes.data) setHealthStatus(healthRes.data)
       setAdminLoading(false)
-    }).catch(err=>{
-      console.error("Failed to load admin data:", err)
-      setAdminLoading(false)
-    })
+    }).catch(()=>setAdminLoading(false))
   }
 
-  function toggleTarget(ttype, name){
-    axios.post(`/api/admin/target/${ttype}/${name}/toggle`).then(()=>{
-      loadAdmin()
-    }).catch(err=>{
-      console.error("Failed to toggle target:", err)
-      alert("Failed to toggle target")
-    })
+  function toggleTarget(ttype,name){
+    axios.post(`/api/admin/target/${ttype}/${name}/toggle`).then(()=>loadAdmin()).catch(()=>alert("Failed to toggle target"))
   }
 
-  function rescanTarget(ttype, name){
-    axios.post(`/api/admin/target/${ttype}/${name}/rescan`).then(()=>{
-      loadAdmin()
-    }).catch(err=>{
-      console.error("Failed to rescan target:", err)
-      alert("Failed to rescan target")
-    })
+  function rescanTarget(ttype,name){
+    axios.post(`/api/admin/target/${ttype}/${name}/rescan`).then(()=>loadAdmin()).catch(()=>alert("Failed to rescan target"))
+  }
+
+  function deleteTarget(ttype,name){
+    if(!confirm(`Delete target ${ttype}:${name}? This removes it from the scrape list but does not delete archived posts.`)) return
+    axios.delete(`/api/admin/target/${ttype}/${name}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
+  }
+
+  function addTarget(){
+    const name = addTargetName.trim()
+    if(!name) return
+    axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`)
+      .then(()=>{ setAddTargetName(""); loadAdmin() })
+      .catch(()=>alert("Failed to add target"))
+  }
+
+  function clearQueue(){
+    if(!confirm("Clear the entire download queue?")) return
+    axios.delete("/api/admin/queue").then(()=>loadAdmin()).catch(()=>alert("Failed to clear queue"))
   }
 
   function doReset(){
+    if(resetInput !== "RESET") return
     setResetLoading(true)
     axios.delete("/api/admin/reset?confirm=RESET")
-      .then(r => {
+      .then(r=>{
         setResetResult(r.data)
         setResetLoading(false)
-        setPosts([])
-        setOffset(0)
-        setNewPostsAvailable(0)
-        setLogs([])
+        setPosts([]); setOffset(0); setNewPostsAvailable(0); setLogs([])
         loadAdmin()
       })
-      .catch(err => {
+      .catch(err=>{
         setResetResult({error: err.response?.data?.detail || err.message})
         setResetLoading(false)
+      })
+  }
+
+  function removeTag(tag){
+    if(!selectedPost) return
+    axios.delete(`/api/post/${selectedPost.id}/tag/${encodeURIComponent(tag)}`)
+      .then(()=>{
+        setSelectedPost(prev=>prev ? {...prev, tags:(prev.tags||[]).filter(t=>t!==tag)} : prev)
+      })
+      .catch(()=>alert("Failed to remove tag"))
+  }
+
+  function addTag(){
+    if(!tagInput.trim() || !selectedPost) return
+    axios.post(`/api/tag?post_id=${selectedPost.id}&tag=${encodeURIComponent(tagInput)}`)
+      .then(()=>{
+        setSelectedPost(prev=>prev ? {...prev, tags:[...(prev.tags||[]),tagInput]} : prev)
+        setTagInput("")
       })
   }
 
@@ -229,16 +265,29 @@ export default function App(){
   }
 
   function formatRate(rate){
-    if(!rate) return "0/s"
-    if(rate < 0.001) return `${(rate*60).toFixed(1)}/m`
-    return `${rate.toFixed(3)}/s`
+    if(!rate) return "—"
+    const perDay = rate * 86400
+    if(perDay < 1) return `${(perDay*7).toFixed(1)}/wk`
+    return `${perDay.toFixed(1)}/day`
   }
 
+  function truncateText(text,len=150){
+    if(!text) return ""
+    return text.length>len ? text.substring(0,len)+"..." : text
+  }
+
+  function formatTime(iso){
+    if(!iso) return ""
+    try{ return new Date(iso).toLocaleString() }catch{ return iso }
+  }
+
+  // Infinite scroll with cleanup
   useEffect(()=>{
-   const obs=new IntersectionObserver(entries=>{
-     if(entries[0].isIntersecting && !searchResults) load()
-   })
-   if(loader.current) obs.observe(loader.current)
+    const obs = new IntersectionObserver(entries=>{
+      if(entries[0].isIntersecting && !searchResults) load()
+    })
+    if(loader.current) obs.observe(loader.current)
+    return ()=> obs.disconnect()
   },[loader.current, searchResults])
 
   function handleSearch(e){
@@ -251,23 +300,15 @@ export default function App(){
     searchTimeout.current = setTimeout(()=>{
       axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}`)
         .then(r=>{
-          setSearchResults(r.data.map(p=>({id: p.id, title: p.title})))
+          setSearchResults(r.data.map(p=>({
+            id: p.id,
+            title: p.title,
+            subreddit: p.subreddit,
+            author: p.author,
+            created_utc: p.created_utc,
+          })))
         })
     },300)
-  }
-
-  function addTag(){
-    if(!tagInput.trim() || !selectedPost) return
-    axios.post(`/api/tag?post_id=${selectedPost.id}&tag=${encodeURIComponent(tagInput)}`)
-      .then(()=>{
-        setSelectedPost({...selectedPost, tags:[...(selectedPost.tags||[]),tagInput]})
-        setTagInput("")
-      })
-  }
-
-  function truncateText(text, len=150){
-    if(!text) return ""
-    return text.length > len ? text.substring(0, len) + "..." : text
   }
 
   const LiveDot = ({connected}) => (
@@ -283,6 +324,31 @@ export default function App(){
     </div>
   )
 
+  // Mini bar chart for posts_per_day
+  function PostsChart({data}){
+    if(!data || data.length === 0) return null
+    const max = Math.max(...data.map(d=>d.count), 1)
+    return (
+      <div style={{marginBottom:"40px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
+          <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+          <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Posts (Last 7 Days)</h2>
+        </div>
+        <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",border:"1px solid #2a2a2a",padding:"20px"}}>
+          <div style={{display:"flex",alignItems:"flex-end",gap:"8px",height:"80px"}}>
+            {data.map(d=>(
+              <div key={d.date} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:"4px"}}>
+                <span style={{fontSize:"10px",color:"#555",fontVariantNumeric:"tabular-nums"}}>{d.count}</span>
+                <div style={{width:"100%",height:`${Math.round((d.count/max)*60)+4}px`,background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"3px 3px 0 0",minHeight:"4px"}}/>
+                <span style={{fontSize:"9px",color:"#444",whiteSpace:"nowrap"}}>{d.date.slice(5)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{minHeight:"100vh",background:"#0d0d0d",color:"#fff",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif"}}>
       <header style={{padding:"16px 24px",background:"linear-gradient(180deg,#1a1a1a 0%,#141414 100%)",borderBottom:"1px solid #222",position:"sticky",top:0,zIndex:100,backdropFilter:"blur(10px)"}}>
@@ -294,30 +360,9 @@ export default function App(){
             </div>
             <h1 style={{margin:0,fontSize:"22px",fontWeight:"700",background:"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Reddit Archive</h1>
             <div style={{display:"flex",gap:"4px",background:"#1a1a1a",padding:"4px",borderRadius:"10px"}}>
-              {[
-                {id:"browse",label:"Browse",icon:"⊞"},
-                {id:"admin",label:"Admin",icon:"⚙"}
-              ].map(tab=>(
-                <button
-                  key={tab.id}
-                  onClick={()=>setActiveTab(tab.id)}
-                  style={{
-                    padding:"8px 16px",
-                    background:activeTab===tab.id?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",
-                    border:"none",
-                    borderRadius:"8px",
-                    color:"#fff",
-                    cursor:"pointer",
-                    fontWeight:activeTab===tab.id?"600":"400",
-                    fontSize:"14px",
-                    display:"flex",
-                    alignItems:"center",
-                    gap:"6px",
-                    transition:"all 0.2s ease"
-                  }}
-                >
-                  <span style={{fontSize:"16px"}}>{tab.icon}</span>
-                  {tab.label}
+              {[{id:"browse",label:"Browse",icon:"⊞"},{id:"admin",label:"Admin",icon:"⚙"}].map(tab=>(
+                <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{padding:"8px 16px",background:activeTab===tab.id?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontWeight:activeTab===tab.id?"600":"400",fontSize:"14px",display:"flex",alignItems:"center",gap:"6px",transition:"all 0.2s ease"}}>
+                  <span style={{fontSize:"16px"}}>{tab.icon}</span>{tab.label}
                 </button>
               ))}
             </div>
@@ -327,329 +372,282 @@ export default function App(){
             {queueInfo && (
               <div style={{fontSize:"12px",color:"#555",display:"flex",alignItems:"center",gap:"6px"}}>
                 <span style={{color:"#333"}}>queue:</span>
-                <span style={{color: queueInfo.queue_length > 0 ? "#f9c300":"#46d160", fontWeight:"600", fontVariantNumeric:"tabular-nums"}}>{(queueInfo.queue_length||0).toLocaleString()}</span>
+                <span style={{color:queueInfo.queue_length>0?"#f9c300":"#46d160",fontWeight:"600",fontVariantNumeric:"tabular-nums"}}>{(queueInfo.queue_length||0).toLocaleString()}</span>
               </div>
             )}
             <div style={{position:"relative"}}>
               <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
-              <input
-                type="text"
-                placeholder="Search archived posts..."
-                value={search}
-                onChange={handleSearch}
-                style={{
-                  padding:"12px 16px 12px 42px",
-                  borderRadius:"24px",
-                  border:"1px solid #333",
-                  width:"320px",
-                  background:"#1a1a1a",
-                  color:"#fff",
-                  fontSize:"14px",
-                  outline:"none",
-                  transition:"all 0.2s ease",
-                  boxShadow:"0 2px 8px rgba(0,0,0,0.2)"
-                }}
-              />
+              <input type="text" placeholder="Search archived posts..." value={search} onChange={handleSearch}
+                style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"320px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"all 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
             </div>
           </div>
         </div>
       </header>
 
+      {/* ── ADMIN TAB ── */}
       {activeTab === "admin" && (
         <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-          {adminLoading && (
-            <div style={{textAlign:"center",padding:"40px",color:"#666"}}>Loading admin data...</div>
-          )}
-          {!adminLoading && !adminData && (
-            <div style={{textAlign:"center",padding:"40px",color:"#ff4500"}}>Failed to load admin data. Check API connection.</div>
-          )}
-          {adminData && (
-            <>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+          {adminLoading && <div style={{textAlign:"center",padding:"40px",color:"#666"}}>Loading admin data...</div>}
+          {!adminLoading && !adminData && <div style={{textAlign:"center",padding:"40px",color:"#ff4500"}}>Failed to load admin data.</div>}
+
+          {adminData && (<>
+            {/* Header row */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>System Status</h2>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                {lastUpdated && <span style={{fontSize:"11px",color:"#444",fontVariantNumeric:"tabular-nums"}}>synced {lastUpdated.toLocaleTimeString()}</span>}
+                <button onClick={loadAdmin} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
+                <button onClick={()=>{setResetModal(true);setResetInput("");setResetResult(null)}} style={{padding:"8px 16px",background:"#1a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>⚠ Reset All Data</button>
+              </div>
+            </div>
+
+            {/* Health + Queue */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,200px)",gap:"12px",marginBottom:"32px"}}>
+              <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Health</div>
+                <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500"}}>{healthStatus?.status||"unknown"}</div>
+                {healthStatus?.issues?.length>0 && <div style={{fontSize:"10px",color:"#ff4500",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>}
+              </div>
+              <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                <div style={{fontSize:"11px",color:"#666",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span>Queue</span>
+                  {queueInfo?.queue_length > 0 && (
+                    <button onClick={clearQueue} style={{fontSize:"10px",padding:"2px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"4px",color:"#ff4444",cursor:"pointer"}}>clear</button>
+                  )}
+                </div>
+                <div style={{fontSize:"18px",fontWeight:"600",color:queueInfo?.queue_length>0?"#f9c300":"#fff",transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
+                <div style={{fontSize:"10px",color:"#555",marginTop:"4px"}}>pending items</div>
+              </div>
+            </div>
+
+            {/* Overview counts */}
+            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"24px"}}>
               <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>System Status</h2>
+              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Overview</h2>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-              {lastUpdated && (
-                <span style={{fontSize:"11px",color:"#444",fontVariantNumeric:"tabular-nums"}}>
-                  synced {lastUpdated.toLocaleTimeString()}
-                </span>
-              )}
-              <button onClick={loadAdmin} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
-              <button onClick={()=>{setResetModal(true);setResetInput("");setResetResult(null)}} style={{padding:"8px 16px",background:"#1a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>⚠ Reset All Data</button>
-            </div>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,200px)",gap:"12px",marginBottom:"32px"}}>
-            <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-              <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Health</div>
-              <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500"}}>{healthStatus?.status || "unknown"}</div>
-              {healthStatus?.issues?.length > 0 && (
-                <div style={{fontSize:"10px",color:"#ff4500",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>
-              )}
-            </div>
-            <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-              <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Queue</div>
-              <div style={{fontSize:"18px",fontWeight:"600",color: queueInfo?.queue_length > 0 ? "#f9c300":"#fff", transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
-              <div style={{fontSize:"10px",color:"#555",marginTop:"4px"}}>pending items</div>
-            </div>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"24px"}}>
-            <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-            <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Overview</h2>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"16px",marginBottom:"40px"}}>
-            {[
-              {label:"Total Posts",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
-              {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
-              {label:"Media Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
-              {label:"Media Pending",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
-              {label:"Total Media",value:adminData.total_media,color:"#fff",icon:"📁"}
-            ].map(s=>(
-              <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:"1px solid #2a2a2a",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",color:"#666",marginBottom:"8px",textTransform:"uppercase",letterSpacing:"0.5px"}}>
-                  <span>{s.icon}</span>
-                  {s.label}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"16px",marginBottom:"40px"}}>
+              {[
+                {label:"Total Posts",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
+                {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
+                {label:"Media Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
+                {label:"Media Pending",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
+                {label:"Total Media",value:adminData.total_media,color:"#fff",icon:"📁"},
+              ].map(s=>(
+                <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:"1px solid #2a2a2a",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",color:"#666",marginBottom:"8px",textTransform:"uppercase",letterSpacing:"0.5px"}}><span>{s.icon}</span>{s.label}</div>
+                  <div style={{fontSize:"32px",fontWeight:"700",color:s.color,transition:"color 0.3s",fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
                 </div>
-                <div style={{fontSize:"32px",fontWeight:"700",color:s.color,textShadow:"0 0 30px rgba(255,69,0,0.2)",transition:"color 0.3s",fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          </>
-          )}
-          {adminData && (
-            <>
-          <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
-            <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-            <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Scrape Targets</h2>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,360px)",gap:"16px",marginBottom:"40px"}}>
-            {adminData.targets && adminData.targets.map(t=>(
-              <div key={`${t.type}-${t.name}`} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:t.enabled?"1px solid #ff450044":"1px solid #2a2a2a",opacity:t.enabled?1:0.7,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",transition:"all 0.2s ease"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"16px"}}>
-                  <div>
-                    <span style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",display:"block",marginBottom:"4px"}}>{t.type}</span>
-                    <div style={{fontSize:"20px",fontWeight:"700",color:"#fff"}}>{t.type==="subreddit"?"r/":"u/"}{t.name}</div>
-                  </div>
-                  <div style={{display:"flex",gap:"8px"}}>
-                    <button onClick={()=>toggleTarget(t.type,t.name)} style={{padding:"8px 14px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"8px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.2s ease"}}>
-                      {t.enabled?"Active":"Paused"}
-                    </button>
-                    <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"8px 14px",background:"#ff4500",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"500",transition:"all 0.2s ease",boxShadow:"0 2px 8px rgba(255,69,0,0.3)"}}>
-                      ↻ Rescan
-                    </button>
-                  </div>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"12px",fontSize:"13px",marginBottom:"16px"}}>
-                  <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Posts</span><span style={{fontWeight:"600",color:"#fff"}}>{t.post_count?.toLocaleString()}</span></div>
-                  <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Rate</span><span style={{fontWeight:"600",color:"#46d160"}}>{formatRate(t.rate_per_second)}</span></div>
-                  <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Media</span><span style={{fontWeight:"600",color:"#fff"}}>{t.downloaded_media}/{t.total_media}</span></div>
-                  <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>ETA</span><span style={{fontWeight:"600",color:"#f9c300"}}>{formatEta(t.eta_seconds)}</span></div>
-                </div>
-                <div style={{background:"#141414",height:"8px",borderRadius:"4px",overflow:"hidden"}}>
-                  <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"4px",transition:"width 0.5s ease"}}/>
-                </div>
-                <div style={{fontSize:"11px",color:"#555",marginTop:"8px",textAlign:"right"}}>{t.progress_percent}% complete</div>
-                {t.last_created && (
-                  <div style={{fontSize:"11px",color:"#444",marginTop:"8px",display:"flex",alignItems:"center",gap:"4px"}}>
-                    <span style={{width:"6px",height:"6px",background:"#46d160",borderRadius:"50%"}} />
-                    Last scraped: {new Date(t.last_created).toLocaleString()}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+            {/* Posts per day chart */}
+            <PostsChart data={adminData.posts_per_day}/>
+          </>)}
 
-          <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
-            <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-            <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Recent Activity</h2>
-            <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>live</span>
-            <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#444",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
-          </div>
-          <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",border:"1px solid #2a2a2a",overflow:"hidden",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
-              <thead>
-                <tr style={{background:"#141414",borderBottom:"1px solid #2a2a2a"}}>
-                  <th style={{padding:"14px 16px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"12px",textTransform:"uppercase",letterSpacing:"0.5px"}}>Time</th>
-                  <th style={{padding:"14px 16px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"12px",textTransform:"uppercase",letterSpacing:"0.5px"}}>Subreddit</th>
-                  <th style={{padding:"14px 16px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"12px",textTransform:"uppercase",letterSpacing:"0.5px"}}>Author</th>
-                  <th style={{padding:"14px 16px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"12px",textTransform:"uppercase",letterSpacing:"0.5px"}}>Title</th>
-                </tr>
-              </thead>
-              <tbody>
-                <style>{`
-                  @keyframes rowFlash {
-                    0%   { background: #1c2e00; }
-                    60%  { background: #111c00; }
-                    100% { background: transparent; }
-                  }
-                  .row-new { animation: rowFlash 4s ease-out forwards; }
-                `}</style>
-                {logs && logs.map((l)=>(
-                   <tr key={l.id} className={highlightedRows.has(l.id) ? "row-new" : ""} style={{borderBottom:"1px solid #222",transition:"background 0.3s ease"}}>
-                     <td style={{padding:"12px 16px",color:"#555"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
-                     <td style={{padding:"12px 16px"}}><span style={{background:"#ff450022",color:"#ff4500",padding:"4px 8px",borderRadius:"4px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
-                     <td style={{padding:"12px 16px",color:"#888"}}>{l.author||"-"}</td>
-                     <td style={{padding:"12px 16px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{l.title||"-"}</td>
-                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          </>
-          )}
+          {adminData && (<>
+            {/* Scrape Targets */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Scrape Targets</h2>
+              </div>
+              {/* Add target form */}
+              <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+                <select value={addTargetType} onChange={e=>setAddTargetType(e.target.value)}
+                  style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer"}}>
+                  <option value="subreddit">r/ subreddit</option>
+                  <option value="user">u/ user</option>
+                </select>
+                <input type="text" placeholder="name" value={addTargetName} onChange={e=>setAddTargetName(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&addTarget()}
+                  style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
+                <button onClick={addTarget} disabled={!addTargetName.trim()}
+                  style={{padding:"8px 16px",background:addTargetName.trim()?"linear-gradient(135deg,#ff4500,#ff6a33)":"#2a2a2a",border:"none",borderRadius:"8px",color:addTargetName.trim()?"#fff":"#555",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
+                  + Add
+                </button>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,360px)",gap:"16px",marginBottom:"40px"}}>
+              {adminData.targets && adminData.targets.map(t=>(
+                <div key={`${t.type}-${t.name}`} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:t.enabled?"1px solid #ff450044":"1px solid #2a2a2a",opacity:t.enabled?1:0.7,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",transition:"all 0.2s ease"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"16px"}}>
+                    <div>
+                      <span style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",display:"block",marginBottom:"4px"}}>{t.type}</span>
+                      <div style={{fontSize:"20px",fontWeight:"700",color:"#fff"}}>{t.type==="subreddit"?"r/":"u/"}{t.name}</div>
+                    </div>
+                    <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                      <button onClick={()=>toggleTarget(t.type,t.name)} style={{padding:"6px 12px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"8px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.2s ease"}}>
+                        {t.enabled?"Active":"Paused"}
+                      </button>
+                      <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"6px 12px",background:"#ff4500",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"500",transition:"all 0.2s ease"}}>
+                        ↻ Rescan
+                      </button>
+                      <button onClick={()=>deleteTarget(t.type,t.name)} title="Remove target" style={{padding:"6px 10px",background:"#2a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"12px",transition:"all 0.2s ease"}}>
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"12px",fontSize:"13px",marginBottom:"16px"}}>
+                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Posts</span><span style={{fontWeight:"600",color:"#fff"}}>{t.post_count?.toLocaleString()}</span></div>
+                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Activity</span><span style={{fontWeight:"600",color:"#46d160"}}>{formatRate(t.rate_per_second)}</span></div>
+                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Media</span><span style={{fontWeight:"600",color:"#fff"}}>{t.downloaded_media}/{t.total_media}</span></div>
+                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>ETA</span><span style={{fontWeight:"600",color:"#f9c300"}}>{formatEta(t.eta_seconds)}</span></div>
+                  </div>
+                  <div style={{background:"#141414",height:"8px",borderRadius:"4px",overflow:"hidden"}}>
+                    <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"4px",transition:"width 0.5s ease"}}/>
+                  </div>
+                  <div style={{fontSize:"11px",color:"#555",marginTop:"8px",textAlign:"right"}}>{t.progress_percent}% of 1k posts</div>
+                  {t.last_created && (
+                    <div style={{fontSize:"11px",color:"#444",marginTop:"8px",display:"flex",alignItems:"center",gap:"4px"}}>
+                      <span style={{width:"6px",height:"6px",background:"#46d160",borderRadius:"50%"}} />
+                      Last scraped: {new Date(t.last_created).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Recent Activity */}
+            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
+              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Recent Activity</h2>
+              <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>live</span>
+              <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#444",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
+            </div>
+            <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",border:"1px solid #2a2a2a",overflow:"hidden",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
+                <thead>
+                  <tr style={{background:"#141414",borderBottom:"1px solid #2a2a2a"}}>
+                    {["Time","Subreddit","Author","Title"].map(h=>(
+                      <th key={h} style={{padding:"14px 16px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"12px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}`}</style>
+                  {logs && logs.map(l=>(
+                    <tr key={l.id} className={highlightedRows.has(l.id)?"row-new":""} style={{borderBottom:"1px solid #222",transition:"background 0.3s ease"}}>
+                      <td style={{padding:"12px 16px",color:"#555"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
+                      <td style={{padding:"12px 16px"}}><span style={{background:"#ff450022",color:"#ff4500",padding:"4px 8px",borderRadius:"4px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
+                      <td style={{padding:"12px 16px",color:"#888"}}>{l.author||"-"}</td>
+                      <td style={{padding:"12px 16px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{l.title||"-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>)}
         </div>
       )}
 
-      {activeTab === "browse" && (
-        <>
-          {newPostsAvailable > 0 && !searchResults && (
-            <div
-              onClick={refreshPosts}
-              style={{
-                position:"sticky",top:"73px",zIndex:90,
-                margin:"0",
-                padding:"12px 24px",
-                background:"linear-gradient(135deg,#ff4500,#ff6a33)",
-                color:"#fff",
-                textAlign:"center",
-                cursor:"pointer",
-                fontSize:"14px",
-                fontWeight:"600",
-                boxShadow:"0 4px 20px rgba(255,69,0,0.4)",
-                transition:"all 0.2s ease",
-                letterSpacing:"0.3px"
-              }}>
-              ↑ {newPostsAvailable} new post{newPostsAvailable>1?"s":""} — click to refresh
-            </div>
-          )}
+      {/* ── BROWSE TAB ── */}
+      {activeTab === "browse" && (<>
+        {newPostsAvailable > 0 && !searchResults && (
+          <div onClick={refreshPosts} style={{position:"sticky",top:"73px",zIndex:90,margin:"0",padding:"12px 24px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",color:"#fff",textAlign:"center",cursor:"pointer",fontSize:"14px",fontWeight:"600",boxShadow:"0 4px 20px rgba(255,69,0,0.4)",transition:"all 0.2s ease",letterSpacing:"0.3px"}}>
+            ↑ {newPostsAvailable} new post{newPostsAvailable>1?"s":""} — click to refresh
+          </div>
+        )}
 
-          {searchResults && (
-            <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}}>
-                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                  <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                  <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#666",fontWeight:"400"}}>({searchResults.length})</span></h2>
+        {searchResults && (
+          <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#666",fontWeight:"400"}}>({searchResults.length})</span></h2>
+              </div>
+              <button onClick={()=>{setSearchResults(null);setSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
+              {searchResults.map(p=>(
+                <div key={p.id} onClick={()=>setSelectedPost(p)} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease",boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>
+                  <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit ? `r/${p.subreddit}` : ""}</div>
+                  <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
+                  {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
                 </div>
-                <button onClick={()=>{setSearchResults(null);setSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px",transition:"all 0.2s ease"}}>Clear Search</button>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
-                {searchResults.map(p=>(
-                  <div key={p.id} onClick={()=>setSelectedPost(p)} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease",boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>
-                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
-                    <div style={{fontSize:"12px",color:"#555",marginTop:"8px"}}>ID: {p.id}</div>
-                  </div>
-                ))}
-              </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {!searchResults && (
-            <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
-                {posts.map((p)=>(
-                  <div
-                    key={p.id}
-                    onClick={()=>setSelectedPost(p)}
-                    onMouseEnter={()=>setHoveredCard(p.id)}
-                    onMouseLeave={()=>setHoveredCard(null)}
-                    style={{
-                      background:"linear-gradient(145deg,#1e1e1e,#171717)",
-                      borderRadius:"16px",
-                      overflow:"hidden",
-                      cursor:"pointer",
-                      transition:"all 0.25s ease",
-                      transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",
-                      boxShadow:hoveredCard===p.id?"0 12px 40px rgba(255,69,0,0.15)":"0 4px 12px rgba(0,0,0,0.3)",
-                      border:"1px solid #2a2a2a"
-                    }}>
-                    {p.url ? (
-                      <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
-                        <img src={p.url} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
-                        <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
-                          <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit || "reddit"}</div>
-                        </div>
+        {!searchResults && (
+          <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
+              {posts.map(p=>(
+                <div key={p.id} onClick={()=>setSelectedPost(p)}
+                  onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
+                  style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(255,69,0,0.15)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #2a2a2a"}}>
+                  {p.url ? (
+                    <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
+                      <img src={p.url} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
+                      <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
+                        <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                       </div>
-                    ) : (
-                      <div style={{padding:"24px",background:"linear-gradient(135deg, #1a1a1a 0%, #222 100%)",minHeight:"180px",display:"flex",flexDirection:"column"}}>
-                        <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit || "reddit"}</div>
-                        <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#fff"}}>{p.title}</div>
-                        {p.selftext && (
-                          <div style={{fontSize:"13px",color:"#777",lineHeight:"1.6",flex:1}}>
-                            {truncateText(p.selftext)}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {p.url && (
-                      <div style={{padding:"16px"}}>
-                        <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"6px"}}>{p.subreddit || "reddit"}</div>
-                        <div style={{fontSize:"14px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <div ref={loader} style={{padding:"60px",textAlign:"center",color:"#444",fontSize:"14px"}}>
-                <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
-                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}} />
-                  Loading more posts...
+                    </div>
+                  ) : (
+                    <div style={{padding:"24px",background:"linear-gradient(135deg,#1a1a1a 0%,#222 100%)",minHeight:"180px",display:"flex",flexDirection:"column"}}>
+                      <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit||"reddit"}</div>
+                      <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#fff"}}>{p.title}</div>
+                      {p.selftext && <div style={{fontSize:"13px",color:"#777",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
+                    </div>
+                  )}
+                  {p.url && (
+                    <div style={{padding:"16px"}}>
+                      <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"6px"}}>{p.subreddit||"reddit"}</div>
+                      <div style={{fontSize:"14px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
+                    </div>
+                  )}
                 </div>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-              </div>
+              ))}
             </div>
-          )}
-        </>
-      )}
+            <div ref={loader} style={{padding:"60px",textAlign:"center",color:"#444",fontSize:"14px"}}>
+              <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
+                <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+                Loading more posts...
+              </div>
+              <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            </div>
+          </div>
+        )}
+      </>)}
 
+      {/* ── RESET MODAL ── */}
       {resetModal && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>!resetLoading&&setResetModal(false)}>
           <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"480px",width:"100%",border:"1px solid #550000",boxShadow:"0 24px 80px rgba(200,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"28px 28px 0"}}>
               <div style={{fontSize:"28px",marginBottom:"12px"}}>⚠️</div>
               <h2 style={{margin:"0 0 12px",fontSize:"22px",color:"#ff4444"}}>Reset All Data</h2>
-              <p style={{margin:"0 0 8px",color:"#aaa",fontSize:"14px",lineHeight:"1.6"}}>
-                This will permanently delete:
-              </p>
+              <p style={{margin:"0 0 8px",color:"#aaa",fontSize:"14px",lineHeight:"1.6"}}>This will permanently delete:</p>
               <ul style={{margin:"0 0 20px",color:"#888",fontSize:"13px",lineHeight:"2",paddingLeft:"20px"}}>
                 <li>All posts, comments, media records and tags from the database</li>
                 <li>All downloaded media files on disk</li>
                 <li>The entire Redis download queue</li>
               </ul>
-              {!resetResult ? (
-                <>
-                  <p style={{margin:"0 0 12px",color:"#666",fontSize:"13px"}}>Type <strong style={{color:"#ff4444",fontFamily:"monospace"}}>RESET</strong> to confirm:</p>
-                  <input
-                    autoFocus
-                    type="text"
-                    value={resetInput}
-                    onChange={e=>setResetInput(e.target.value)}
-                    onKeyDown={e=>e.key==="Enter"&&resetInput==="RESET"&&!resetLoading&&doReset()}
-                    placeholder="RESET"
-                    style={{width:"100%",boxSizing:"border-box",padding:"12px 16px",borderRadius:"10px",border:`1px solid ${resetInput==="RESET"?"#ff4444":"#333"}`,background:"#141414",color:"#fff",fontSize:"16px",fontFamily:"monospace",outline:"none",marginBottom:"20px",transition:"border-color 0.2s"}}
-                  />
-                </>
-              ) : (
+              {!resetResult ? (<>
+                <p style={{margin:"0 0 12px",color:"#666",fontSize:"13px"}}>Type <strong style={{color:"#ff4444",fontFamily:"monospace"}}>RESET</strong> to confirm:</p>
+                <input autoFocus type="text" value={resetInput} onChange={e=>setResetInput(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&resetInput==="RESET"&&!resetLoading&&doReset()}
+                  placeholder="RESET"
+                  style={{width:"100%",boxSizing:"border-box",padding:"12px 16px",borderRadius:"10px",border:`1px solid ${resetInput==="RESET"?"#ff4444":"#333"}`,background:"#141414",color:"#fff",fontSize:"16px",fontFamily:"monospace",outline:"none",marginBottom:"20px",transition:"border-color 0.2s"}}/>
+              </>) : (
                 <div style={{background:"#0a1a0a",border:"1px solid #1a4a1a",borderRadius:"10px",padding:"16px",marginBottom:"20px",fontSize:"13px",color:"#46d160"}}>
                   {resetResult.error
                     ? <span style={{color:"#ff4444"}}>Error: {resetResult.error}</span>
-                    : <>✓ Reset complete — deleted {resetResult.deleted_files} files ({resetResult.deleted_mb} MB){resetResult.errors?.length > 0 && <div style={{color:"#f9c300",marginTop:"4px"}}>{resetResult.errors.length} warnings</div>}</>
+                    : <>✓ Reset complete — deleted {resetResult.deleted_files} files ({resetResult.deleted_mb} MB){resetResult.errors?.length>0&&<div style={{color:"#f9c300",marginTop:"4px"}}>{resetResult.errors.length} warnings</div>}</>
                   }
                 </div>
               )}
             </div>
             <div style={{padding:"0 28px 28px",display:"flex",gap:"10px",justifyContent:"flex-end"}}>
-              <button
-                onClick={()=>setResetModal(false)}
-                disabled={resetLoading}
+              <button onClick={()=>setResetModal(false)} disabled={resetLoading}
                 style={{padding:"12px 24px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"14px"}}>
                 {resetResult?"Close":"Cancel"}
               </button>
               {!resetResult && (
-                <button
-                  onClick={doReset}
-                  disabled={resetInput!=="RESET"||resetLoading}
+                <button onClick={doReset} disabled={resetInput!=="RESET"||resetLoading}
                   style={{padding:"12px 24px",background:resetInput==="RESET"?"#cc0000":"#330000",border:"1px solid #550000",borderRadius:"10px",color:resetInput==="RESET"?"#fff":"#555",cursor:resetInput==="RESET"?"pointer":"not-allowed",fontSize:"14px",fontWeight:"600",transition:"all 0.2s"}}>
                   {resetLoading?"Resetting...":"Confirm Reset"}
                 </button>
@@ -659,6 +657,7 @@ export default function App(){
         </div>
       )}
 
+      {/* ── POST DETAIL MODAL ── */}
       {selectedPost && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>setSelectedPost(null)}>
           <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"720px",width:"100%",maxHeight:"90vh",overflow:"auto",border:"1px solid #222",boxShadow:"0 24px 80px rgba(0,0,0,0.5)"}} onClick={e=>e.stopPropagation()}>
@@ -671,40 +670,69 @@ export default function App(){
               </div>
             )}
             <div style={{padding:"28px"}}>
-              <div style={{display:"flex",gap:"16px",fontSize:"13px",color:"#666",marginBottom:"20px"}}>
-                <span style={{color:"#ff4500",fontWeight:"600"}}>r/{selectedPost.subreddit || "reddit"}</span>
+              <div style={{display:"flex",gap:"16px",fontSize:"13px",color:"#666",marginBottom:"20px",flexWrap:"wrap"}}>
+                <span style={{color:"#ff4500",fontWeight:"600"}}>r/{selectedPost.subreddit||"reddit"}</span>
                 <span>•</span>
-                <span style={{color:"#888"}}>u/{selectedPost.author || "unknown"}</span>
+                <span style={{color:"#888"}}>u/{selectedPost.author||"unknown"}</span>
+                {selectedPost.created_utc && <><span>•</span><span style={{color:"#555"}}>{formatTime(selectedPost.created_utc)}</span></>}
                 <span>•</span>
                 <span style={{color:"#555"}}>ID: {selectedPost.id}</span>
               </div>
-              <h2 style={{margin:"0 0 24px 0",fontSize:"24px",lineHeight:"1.4",fontWeight:"600",color:"#fff"}}>{selectedPost.title}</h2>
+              <h2 style={{margin:"0 0 24px",fontSize:"24px",lineHeight:"1.4",fontWeight:"600",color:"#fff"}}>{selectedPost.title}</h2>
+
               {selectedPost.selftext && (
-                <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"24px",borderRadius:"14px",marginBottom:"24px",fontSize:"15px",lineHeight:"1.8",color:"#bbb",whiteSpace:"pre-wrap",border:"1px solid #222"}}>
+                <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"24px",borderRadius:"14px",marginBottom:"24px",fontSize:"15px",lineHeight:"1.8",color:"#bbb",whiteSpace:"pre-wrap",border:"1px solid #222",maxHeight:"300px",overflow:"auto"}}>
                   {selectedPost.selftext}
                 </div>
               )}
-              <div style={{display:"flex",gap:"12px",alignItems:"center"}}>
-                <input
-                  type="text"
-                  placeholder="Add a tag..."
-                  value={tagInput}
-                  onChange={e=>setTagInput(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&addTag()}
-                  style={{flex:1,padding:"14px 18px",borderRadius:"12px",border:"1px solid #333",background:"#141414",color:"#fff",fontSize:"14px",outline:"none",transition:"all 0.2s ease"}}
-                />
-                <button onClick={addTag} style={{padding:"14px 28px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"12px",color:"#fff",cursor:"pointer",fontWeight:"600",fontSize:"14px",boxShadow:"0 4px 15px rgba(255,69,0,0.3)",transition:"all 0.2s ease"}}>Add Tag</button>
-              </div>
-              {selectedPost.tags && selectedPost.tags.length > 0 && (
-                <div style={{marginTop:"20px",display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                  {selectedPost.tags.map(t=>(
-                    <span key={t} style={{background:"#ff450022",color:"#ff4500",padding:"6px 12px",borderRadius:"20px",fontSize:"12px",fontWeight:"500"}}>{t}</span>
-                  ))}
+
+              {/* Tags */}
+              <div style={{marginBottom:"20px"}}>
+                <div style={{display:"flex",gap:"12px",alignItems:"center",marginBottom:"12px"}}>
+                  <input type="text" placeholder="Add a tag..." value={tagInput}
+                    onChange={e=>setTagInput(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&addTag()}
+                    style={{flex:1,padding:"12px 16px",borderRadius:"10px",border:"1px solid #333",background:"#141414",color:"#fff",fontSize:"14px",outline:"none"}}/>
+                  <button onClick={addTag} style={{padding:"12px 24px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:"#fff",cursor:"pointer",fontWeight:"600",fontSize:"14px",whiteSpace:"nowrap"}}>Add Tag</button>
                 </div>
+                {selectedPost.tags && selectedPost.tags.length > 0 && (
+                  <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+                    {selectedPost.tags.map(t=>(
+                      <span key={t} style={{background:"#ff450022",color:"#ff4500",padding:"5px 10px",borderRadius:"20px",fontSize:"12px",fontWeight:"500",display:"flex",alignItems:"center",gap:"6px"}}>
+                        {t}
+                        <button onClick={()=>removeTag(t)} style={{background:"none",border:"none",color:"#ff4500",cursor:"pointer",fontSize:"14px",lineHeight:1,padding:"0",opacity:0.7}}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Comments */}
+              {selectedPost.comments === undefined && (
+                <div style={{color:"#444",fontSize:"13px",padding:"8px 0"}}>Loading comments…</div>
+              )}
+              {selectedPost.comments && selectedPost.comments.length > 0 && (
+                <div>
+                  <div style={{fontSize:"13px",color:"#555",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"12px"}}>Comments ({selectedPost.comments.length})</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:"10px",maxHeight:"320px",overflow:"auto",paddingRight:"4px"}}>
+                    {selectedPost.comments.map(c=>(
+                      <div key={c.id} style={{background:"#141414",borderRadius:"10px",padding:"14px",border:"1px solid #1e1e1e"}}>
+                        <div style={{display:"flex",gap:"10px",alignItems:"center",marginBottom:"8px"}}>
+                          <span style={{color:"#ff4500",fontSize:"12px",fontWeight:"600"}}>u/{c.author||"[deleted]"}</span>
+                          {c.created_utc && <span style={{color:"#444",fontSize:"11px"}}>{formatTime(c.created_utc)}</span>}
+                        </div>
+                        <div style={{color:"#bbb",fontSize:"14px",lineHeight:"1.6",whiteSpace:"pre-wrap"}}>{c.body}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedPost.comments && selectedPost.comments.length === 0 && (
+                <div style={{color:"#444",fontSize:"13px",padding:"8px 0"}}>No comments archived.</div>
               )}
             </div>
             <div style={{padding:"16px 28px",borderTop:"1px solid #1a1a1a",display:"flex",justifyContent:"flex-end"}}>
-              <button onClick={()=>setSelectedPost(null)} style={{padding:"10px 20px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px",transition:"all 0.2s ease"}}>Close</button>
+              <button onClick={()=>setSelectedPost(null)} style={{padding:"10px 20px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>Close</button>
             </div>
           </div>
         </div>

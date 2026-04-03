@@ -317,24 +317,20 @@ def run():
                     f"Processed {posts_processed} posts for {name}, {new_posts_found} new"
                 )
 
-                if oldest_seen is not None:
-                    if last is None or oldest_seen < last:
-                        try:
-                            db = get_db()
-                            cur = db.cursor()
-                            cur.execute(
-                                "UPDATE targets SET last_created=%s WHERE name=%s",
-                                (oldest_seen, name),
-                            )
-                            db.commit()
-                            cur.close()
-                            logger.info(
-                                f"Updated last_created for {name} to {oldest_seen}"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to update last_created for {name}: {e}"
-                            )
+                # Always stamp last_created with now() so the admin panel
+                # shows an accurate "Last scraped" time after every cycle.
+                try:
+                    db = get_db()
+                    cur = db.cursor()
+                    cur.execute(
+                        "UPDATE targets SET last_created=%s WHERE type=%s AND name=%s",
+                        (datetime.utcnow(), ttype, name),
+                    )
+                    db.commit()
+                    cur.close()
+                    logger.info(f"Updated last_scraped for {ttype}:{name}")
+                except Exception as e:
+                    logger.error(f"Failed to update last_created for {name}: {e}")
 
             except Exception as e:
                 logger.error(f"Error processing {name}: {e}", exc_info=True)

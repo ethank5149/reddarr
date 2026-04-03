@@ -53,6 +53,7 @@ app = FastAPI(title="Reddit Archive API", version="3.0.0")
 logger.info("API STARTED - version 3.0.0")
 
 ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "/data")
+THUMB_PATH = os.getenv("THUMB_PATH", os.path.join(ARCHIVE_PATH, ".thumbs"))
 
 connection_pool = None
 redis_client = None
@@ -124,6 +125,14 @@ if os.path.exists("dist"):
 @app.get("/media/{path:path}")
 def media(path: str):
     full_path = os.path.join(ARCHIVE_PATH, path)
+    if os.path.exists(full_path):
+        return FileResponse(full_path)
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.get("/thumb/{path:path}")
+def thumb(path: str):
+    full_path = os.path.join(THUMB_PATH, path)
     if os.path.exists(full_path):
         return FileResponse(full_path)
     raise HTTPException(status_code=404, detail="Not Found")
@@ -381,8 +390,8 @@ def admin_stats():
                 t.name,
                 t.enabled,
                 t.last_created,
-                EXTRACT(EPOCH FROM now() - t.last_created) AS seconds_ago,
                 COUNT(DISTINCT p.id) AS post_count,
+                COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
                 COUNT(DISTINCT m.id) AS total_media,
                 COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
                 COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
@@ -401,24 +410,24 @@ def admin_stats():
                 name,
                 enabled,
                 last_created,
-                seconds_ago,
                 post_count,
+                posts_7d,
                 total_media,
                 downloaded_media,
                 pending_media,
             ) = row
-            seconds_ago = float(seconds_ago) if seconds_ago is not None else None
             post_count = post_count or 0
+            posts_7d = posts_7d or 0
             total_media = total_media or 0
             downloaded_media = downloaded_media or 0
             pending_media = pending_media or 0
 
-            rate = 0
+            # Rate = actual subreddit activity over last 7 days (posts/sec)
+            rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
             eta_seconds = None
-            if last_created and seconds_ago and seconds_ago > 0:
-                rate = post_count / seconds_ago
+            if rate > 0:
                 remaining = max(0, 1000 - post_count)
-                if rate > 0:
+                if remaining > 0:
                     eta_seconds = remaining / rate
 
             targets.append(
@@ -633,6 +642,12 @@ def health_check():
     except Exception as e:
         issues.append(f"Archive path: {str(e)}")
 
+    try:
+        if not os.path.exists(THUMB_PATH):
+            issues.append(f"Thumb path not accessible: {THUMB_PATH}")
+    except Exception as e:
+        issues.append(f"Thumb path: {str(e)}")
+
     return {"status": "healthy" if not issues else "degraded", "issues": issues}
 
 
@@ -679,8 +694,8 @@ async def event_stream():
                         t.name,
                         t.enabled,
                         t.last_created,
-                        EXTRACT(EPOCH FROM now() - t.last_created) AS seconds_ago,
                         COUNT(DISTINCT p.id) AS post_count,
+                        COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
                         COUNT(DISTINCT m.id) AS total_media,
                         COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
                         COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
@@ -699,26 +714,24 @@ async def event_stream():
                         name,
                         enabled,
                         last_created,
-                        seconds_ago,
                         post_count,
+                        posts_7d,
                         tot_media,
                         dl_media,
                         pend_media,
                     ) = row
-                    seconds_ago = (
-                        float(seconds_ago) if seconds_ago is not None else None
-                    )
                     post_count = post_count or 0
+                    posts_7d = posts_7d or 0
                     tot_media = tot_media or 0
                     dl_media = dl_media or 0
                     pend_media = pend_media or 0
 
-                    rate = 0
+                    # Rate = actual subreddit activity over last 7 days (posts/sec)
+                    rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
                     eta_seconds = None
-                    if last_created and seconds_ago and seconds_ago > 0:
-                        rate = post_count / seconds_ago
+                    if rate > 0:
                         remaining = max(0, 1000 - post_count)
-                        if rate > 0:
+                        if remaining > 0:
                             eta_seconds = remaining / rate
 
                     targets.append(
@@ -788,6 +801,11 @@ async def event_stream():
                     issues.append(f"Archive path not accessible: {ARCHIVE_PATH}")
             except Exception as e:
                 issues.append(f"Archive path: {str(e)}")
+            try:
+                if not os.path.exists(THUMB_PATH):
+                    issues.append(f"Thumb path not accessible: {THUMB_PATH}")
+            except Exception as e:
+                issues.append(f"Thumb path: {str(e)}")
             return {"status": "healthy" if not issues else "degraded", "issues": issues}
 
         return await asyncio.to_thread(_check)
@@ -1116,19 +1134,20 @@ def reset_all(confirm: str = Query(...)):
                     errors.append(f"Delete failed {p}: {e}")
 
     # 3. Remove organised subdirectories (r/ and u/) left empty after file deletion
-    for subdir in ["r", "u"]:
-        top = os.path.join(ARCHIVE_PATH, subdir)
-        if os.path.isdir(top):
-            for entry in os.scandir(top):
-                if entry.is_dir():
-                    try:
-                        os.rmdir(entry.path)  # only removes if empty
-                    except OSError:
-                        pass
-            try:
-                os.rmdir(top)
-            except OSError:
-                pass
+    for base_dir in [ARCHIVE_PATH, THUMB_PATH]:
+        for subdir in ["r", "u"]:
+            top = os.path.join(base_dir, subdir)
+            if os.path.isdir(top):
+                for entry in os.scandir(top):
+                    if entry.is_dir():
+                        try:
+                            os.rmdir(entry.path)  # only removes if empty
+                        except OSError:
+                            pass
+                try:
+                    os.rmdir(top)
+                except OSError:
+                    pass
 
     # 4. Truncate all tables (CASCADE handles FK constraints)
     try:
