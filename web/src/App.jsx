@@ -12,6 +12,9 @@ export default function App(){
   const [adminData,setAdminData]=useState(null)
   const [logs,setLogs]=useState([])
   const [hoveredCard,setHoveredCard]=useState(null)
+  const [adminLoading, setAdminLoading] = useState(false)
+  const [queueInfo, setQueueInfo] = useState(null)
+  const [healthStatus, setHealthStatus] = useState(null)
   const loader=useRef()
   const searchTimeout=useRef()
 
@@ -24,39 +27,57 @@ export default function App(){
   },[activeTab])
 
   function load(){
-   axios.get(`/api/posts?limit=50&offset=${offset}`)
+    axios.get(`/api/posts?limit=50&offset=${offset}`)
     .then(r=>{
       const newPosts = r.data.map(p => ({
-        id: p[0],
-        title: p[1],
-        url: p[2],
-        selftext: p[3],
-        subreddit: p[4],
-        author: p[5]
+        id: p.id,
+        title: p.title,
+        url: p.image_url,
+        selftext: p.selftext,
+        subreddit: p.subreddit,
+        author: p.author
       }))
       setPosts(prev=>[...prev,...newPosts])
       setOffset(o=>o+50)
+    }).catch(err=>{
+      console.error("Failed to load posts:", err)
     })
   }
 
   function loadAdmin(){
-    axios.get("/api/admin/stats").then(r=>{
-      setAdminData(r.data)
-    })
-    axios.get("/api/admin/logs?limit=20").then(r=>{
-      setLogs(r.data)
+    setAdminLoading(true)
+    Promise.all([
+      axios.get("/api/admin/stats").catch(e => ({data: null})),
+      axios.get("/api/admin/logs?limit=20").catch(e => ({data: []})),
+      axios.get("/api/admin/queue").catch(e => ({data: null})),
+      axios.get("/api/admin/health").catch(e => ({data: null}))
+    ]).then(([statsRes, logsRes, queueRes, healthRes]) => {
+      if (statsRes.data) setAdminData(statsRes.data)
+      if (logsRes.data) setLogs(logsRes.data)
+      if (queueRes.data) setQueueInfo(queueRes.data)
+      if (healthRes.data) setHealthStatus(healthRes.data)
+      setAdminLoading(false)
+    }).catch(err=>{
+      console.error("Failed to load admin data:", err)
+      setAdminLoading(false)
     })
   }
 
   function toggleTarget(ttype, name){
     axios.post(`/api/admin/target/${ttype}/${name}/toggle`).then(()=>{
       loadAdmin()
+    }).catch(err=>{
+      console.error("Failed to toggle target:", err)
+      alert("Failed to toggle target")
     })
   }
 
   function rescanTarget(ttype, name){
     axios.post(`/api/admin/target/${ttype}/${name}/rescan`).then(()=>{
       loadAdmin()
+    }).catch(err=>{
+      console.error("Failed to rescan target:", err)
+      alert("Failed to rescan target")
     })
   }
 
@@ -91,7 +112,7 @@ export default function App(){
     searchTimeout.current = setTimeout(()=>{
       axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}`)
         .then(r=>{
-          setSearchResults(r.data.map(p=>({id:p[0], title:p[1]})))
+          setSearchResults(r.data.map(p=>({id: p.id, title: p.title})))
         })
     },300)
   }
@@ -178,8 +199,34 @@ export default function App(){
         </div>
       </header>
 
-      {activeTab === "admin" && adminData && (
+      {activeTab === "admin" && (
         <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+          {adminLoading && (
+            <div style={{textAlign:"center",padding:"40px",color:"#666"}}>Loading admin data...</div>
+          )}
+          {!adminLoading && !adminData && (
+            <div style={{textAlign:"center",padding:"40px",color:"#ff4500"}}>Failed to load admin data. Check API connection.</div>
+          )}
+          {adminData && (
+            <>
+          <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"24px"}}>
+            <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+            <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>System Status</h2>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,200px)",gap:"12px",marginBottom:"32px"}}>
+            <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+              <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Health</div>
+              <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500"}}>{healthStatus?.status || "unknown"}</div>
+              {healthStatus?.issues?.length > 0 && (
+                <div style={{fontSize:"10px",color:"#ff4500",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>
+              )}
+            </div>
+            <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+              <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Queue</div>
+              <div style={{fontSize:"18px",fontWeight:"600",color:"#fff"}}>{queueInfo?.queue_length || 0}</div>
+              <div style={{fontSize:"10px",color:"#555",marginTop:"4px"}}>pending items</div>
+            </div>
+          </div>
           <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"24px"}}>
             <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
             <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Overview</h2>
@@ -202,12 +249,15 @@ export default function App(){
             ))}
           </div>
 
+          )}
+          {adminData && (
+            <>
           <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
             <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
             <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Scrape Targets</h2>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,360px)",gap:"16px",marginBottom:"40px"}}>
-            {adminData.targets.map(t=>(
+            {adminData.targets && adminData.targets.map(t=>(
               <div key={`${t.type}-${t.name}`} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:t.enabled?"1px solid #ff450044":"1px solid #2a2a2a",opacity:t.enabled?1:0.7,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",transition:"all 0.2s ease"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"16px"}}>
                   <div>
@@ -258,7 +308,7 @@ export default function App(){
                 </tr>
               </thead>
               <tbody>
-                {logs.map(l=>(
+                {logs && logs.map(l=>(
                   <tr key={l.id} style={{borderBottom:"1px solid #222",transition:"background 0.15s ease"}}>
                     <td style={{padding:"12px 16px",color:"#555"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
                     <td style={{padding:"12px 16px"}}><span style={{background:"#ff450022",color:"#ff4500",padding:"4px 8px",borderRadius:"4px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
@@ -269,6 +319,8 @@ export default function App(){
               </tbody>
             </table>
           </div>
+          </>
+          )}
         </div>
       )}
 
