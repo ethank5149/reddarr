@@ -53,7 +53,7 @@ def run():
             src = (
                 reddit.subreddit(name).new(limit=100)
                 if ttype == "subreddit"
-                else reddit.redditor(name).submissions.new(limit=100)
+                else reddit.redditor(name).new(limit=100)
             )
             for p in src:
                 created = datetime.utcfromtimestamp(p.created_utc)
@@ -63,7 +63,7 @@ def run():
                 cur.execute(
                     """INSERT INTO posts(id,subreddit,author,created_utc,title,selftext,url,media_url,raw)
       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
-      ON CONFLICT DO NOTHING""",
+      ON CONFLICT (id) DO NOTHING""",
                     (
                         p.id,
                         str(p.subreddit),
