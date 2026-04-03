@@ -214,7 +214,7 @@ def posts(
     sort_by: Optional[str] = Query("created_utc"),
     sort_order: Optional[str] = Query("desc"),
     has_media: Optional[bool] = None,
-    media_type: Optional[str] = None,
+    media_type: Optional[List[str]] = Query(None),
     nsfw: Optional[str] = None,  # "include" | "exclude" | None (show all)
 ):
     # Whitelist sort fields to prevent SQL injection
@@ -241,12 +241,21 @@ def posts(
             params.append(author)
 
         # media_type supersedes legacy has_media
-        if media_type == "video":
-            query += " AND (url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
-        elif media_type == "image":
-            query += " AND media_url IS NOT NULL AND url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%' AND url NOT LIKE '%streamable.com%'"
-        elif media_type == "text":
-            query += " AND (media_url IS NULL OR media_url = '')"
+        if media_type and len(media_type) > 0:
+            # Build OR conditions for multiple media types
+            media_conditions = []
+            if "video" in media_type:
+                media_conditions.append(
+                    "(url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
+                )
+            if "image" in media_type:
+                media_conditions.append(
+                    "(media_url IS NOT NULL AND url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%' AND url NOT LIKE '%streamable.com%')"
+                )
+            if "text" in media_type:
+                media_conditions.append("(media_url IS NULL OR media_url = '')")
+            if media_conditions:
+                query += " AND (" + " OR ".join(media_conditions) + ")"
         elif has_media is True:
             query += " AND media_url IS NOT NULL"
         elif has_media is False:

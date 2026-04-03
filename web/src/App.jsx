@@ -16,12 +16,12 @@ export default function App(){
   const [queueInfo, setQueueInfo] = useState(null)
   const [healthStatus, setHealthStatus] = useState(null)
   const [newPostsAvailable, setNewPostsAvailable] = useState(0)
+  const [lastUpdated, setLastUpdated] = useState(null)
   const [liveConnected, setLiveConnected] = useState(false)
   const [resetModal, setResetModal] = useState(false)
   const [resetInput, setResetInput] = useState("")
   const [resetLoading, setResetLoading] = useState(false)
   const [resetResult, setResetResult] = useState(null)
-  const [lastUpdated, setLastUpdated] = useState(null)
   const [highlightedRows, setHighlightedRows] = useState(new Set())
   const [addTargetType, setAddTargetType] = useState("subreddit")
   const [addTargetName, setAddTargetName] = useState("")
@@ -35,7 +35,7 @@ export default function App(){
   // Filter + sort state
   const [filterSubreddit, setFilterSubreddit] = useState("")
   const [filterAuthor, setFilterAuthor] = useState("")
-  const [filterMediaType, setFilterMediaType] = useState("all") // all | image | video | text
+  const [filterMediaTypes, setFilterMediaTypes] = useState([]) // array of: image | video | text
   const [showNsfw, setShowNsfw] = useState(() => {
     const saved = localStorage.getItem("showNsfw")
     return saved !== null ? saved === "true" : true
@@ -45,7 +45,7 @@ export default function App(){
   // Refs to avoid stale closures in async callbacks
   const offsetRef = useRef(0)
   const filtersRef = useRef({ 
-    subreddit:"", author:"", mediaType:"all", sort:"last_added", 
+    subreddit:"", author:"", mediaTypes:[], sort:"last_added", 
     nsfw: localStorage.getItem("showNsfw") !== null ? localStorage.getItem("showNsfw") === "true" : true 
   })
   const filteringRef = useRef(false)  // true while applyFilters fetch is in flight
@@ -183,9 +183,9 @@ export default function App(){
     const params = new URLSearchParams({ limit:"50", offset:String(offset) })
     if(f.subreddit) params.set("subreddit", f.subreddit)
     if(f.author) params.set("author", f.author)
-    if(f.mediaType === "image") params.set("media_type", "image")
-    else if(f.mediaType === "video") params.set("media_type", "video")
-    else if(f.mediaType === "text") params.set("media_type", "text")
+    if(f.mediaTypes && f.mediaTypes.length > 0){
+      f.mediaTypes.forEach(mt => params.append("media_type", mt))
+    }
     if(f.sort === "oldest"){ params.set("sort_by","created_utc"); params.set("sort_order","asc") }
     else if(f.sort === "title_asc"){ params.set("sort_by","title"); params.set("sort_order","asc") }
     else if(f.sort === "title_desc"){ params.set("sort_by","title"); params.set("sort_order","desc") }
@@ -251,14 +251,14 @@ export default function App(){
 
   function hasActiveFilters(){
     const f = filtersRef.current
-    return f.subreddit || f.author || f.mediaType !== "all" || f.sort !== "last_added"
+    return f.subreddit || f.author || (f.mediaTypes && f.mediaTypes.length > 0) || f.sort !== "last_added"
   }
 
   function clearFilters(){
-    const defaultFilters = { subreddit:"", author:"", mediaType:"all", sort:"last_added", nsfw:true }
+    const defaultFilters = { subreddit:"", author:"", mediaTypes:[], sort:"last_added", nsfw:true }
     setFilterSubreddit("")
     setFilterAuthor("")
-    setFilterMediaType("all")
+    setFilterMediaTypes([])
     setSortBy("last_added")
     applyFilters(defaultFilters)
   }
@@ -828,22 +828,27 @@ export default function App(){
                 style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
               />
 
-              {/* Media type filter */}
-              <select
-                value={filterMediaType}
-                onChange={e=>{
-                  const v = e.target.value
-                  setFilterMediaType(v)
-                  const f = {...filtersRef.current, mediaType: v}
-                  applyFilters(f)
-                }}
-                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:filterMediaType!=="all"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
-              >
-                <option value="all">All types</option>
-                <option value="image">Images only</option>
-                <option value="video">Videos only</option>
-                <option value="text">Text only</option>
-              </select>
+              {/* Media type filter - multiselect checkboxes */}
+              <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
+                {[
+                  {value:"image", label:"🖼 Images"},
+                  {value:"video", label:"🎬 Videos"},
+                  {value:"text", label:"📝 Text"},
+                ].map(mt => (
+                  <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"4px",cursor:"pointer",padding:"4px 8px",background:filterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"6px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s"}}>
+                    <input type="checkbox" checked={filterMediaTypes.includes(mt.value)} onChange={e=>{
+                      const checked = e.target.checked
+                      const newTypes = checked 
+                        ? [...filterMediaTypes, mt.value]
+                        : filterMediaTypes.filter(t => t !== mt.value)
+                      setFilterMediaTypes(newTypes)
+                      const f = {...filtersRef.current, mediaTypes: newTypes}
+                      applyFilters(f)
+                    }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
+                    <span style={{fontSize:"12px",color:filterMediaTypes.includes(mt.value)?"#ff6a33":"#666",fontWeight:filterMediaTypes.includes(mt.value)?"500":"400"}}>{mt.label}</span>
+                  </label>
+                ))}
+              </div>
 
               {/* NSFW toggle */}
               <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",whiteSpace:"nowrap"}}>

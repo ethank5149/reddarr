@@ -81,6 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit ON posts(subreddit);
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
 CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at);
+CREATE INDEX IF NOT EXISTS idx_posts_created_utc ON posts(created_utc);
 CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets(enabled);
 
 -- Full-text search triggers
