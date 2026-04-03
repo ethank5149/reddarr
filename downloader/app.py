@@ -165,11 +165,11 @@ while True:
     q_author = item.get("author")
     q_title = item.get("title", "")
 
-    logger.info(f"Dequeued: post_id={post_id}, url={url[:60]}...")
-
     if not url:
         logger.warning(f"Skipping {post_id} - no URL")
         continue
+
+    logger.info(f"Dequeued: post_id={post_id}, url={url[:60]}...")
 
     try:
         path = None

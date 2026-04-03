@@ -101,18 +101,23 @@ def get_db_cursor():
     global connection_pool
     if not connection_pool:
         raise HTTPException(status_code=503, detail="Database not available")
-    conn = connection_pool.getconn()
+    conn = None
+    cur = None
     try:
+        conn = connection_pool.getconn()
         cur = conn.cursor()
         yield cur
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         logger.error(f"DB error: {e}")
         raise
     finally:
-        cur.close()
-        connection_pool.putconn(conn)
+        if cur:
+            cur.close()
+        if conn:
+            connection_pool.putconn(conn)
 
 
 def get_redis():
@@ -245,27 +250,35 @@ def posts(
             # Build OR conditions for multiple media types
             media_conditions = []
             if "video" in media_type:
-                # Video if has video media in media table OR URL is a video site
+                # Video if: downloaded video OR video URL
                 media_conditions.append(
-                    "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.file_path LIKE '%.mp4') OR "
+                    "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
+                    "(LOWER(m.file_path) LIKE '%.mp4' OR LOWER(m.file_path) LIKE '%.webm' OR LOWER(m.file_path) LIKE '%.mkv' OR LOWER(m.file_path) LIKE '%.mov')) OR "
                     "url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
                 )
             if "image" in media_type:
-                # Image if has image media in media table (not video) AND URL is not a video site
+                # Image if: downloaded image OR image URL in posts table
                 media_conditions.append(
-                    "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.file_path NOT LIKE '%.mp4' AND m.file_path NOT LIKE '%.webm' AND m.file_path IS NOT NULL))"
+                    "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
+                    "(LOWER(m.file_path) LIKE '%.jpg' OR LOWER(m.file_path) LIKE '%.jpeg' OR LOWER(m.file_path) LIKE '%.png' OR "
+                    "LOWER(m.file_path) LIKE '%.gif' OR LOWER(m.file_path) LIKE '%.webp')) OR "
+                    "(url LIKE '%i.redd.it%' OR url LIKE '%i.imgur.com%' OR url LIKE '%.jpg' OR url LIKE '%.jpeg' OR "
+                    "url LIKE '%.png' OR url LIKE '%.gif' OR url LIKE '%.webp'))"
                 )
             if "text" in media_type:
-                # Text if no media in media table AND no media_url in posts
+                # Text if: no downloaded media AND no image/video URL
                 media_conditions.append(
-                    "(NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id) AND (p.media_url IS NULL OR p.media_url = ''))"
+                    "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND "
+                    "url NOT LIKE '%i.redd.it%' AND url NOT LIKE '%i.imgur.com%' AND url NOT LIKE '%.jpg' AND "
+                    "url NOT LIKE '%.jpeg' AND url NOT LIKE '%.png' AND url NOT LIKE '%.gif' AND url NOT LIKE '%.webp' AND "
+                    "url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%'"
                 )
             if media_conditions:
                 query += " AND (" + " OR ".join(media_conditions) + ")"
         elif has_media is True:
-            query += " AND EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.file_path IS NOT NULL)"
+            query += " AND (EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND m.file_path IS NOT NULL) OR url IS NOT NULL)"
         elif has_media is False:
-            query += " AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id) AND (p.media_url IS NULL OR p.media_url = '')"
+            query += " AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND (url IS NULL OR url = '')"
 
         # NSFW filter - check raw JSON for over_18 field
         if nsfw == "exclude":
@@ -904,17 +917,21 @@ def _run_thumb_job(job_id: str, rows: list, force: bool):
 
         try:
             thumb = _make_thumb(file_path)
-            conn = connection_pool.getconn()
+            conn = None
+            cur = None
             try:
+                conn = connection_pool.getconn()
                 cur = conn.cursor()
                 cur.execute(
                     "UPDATE media SET thumb_path = %s WHERE id = %s",
                     (thumb, media_id),
                 )
                 conn.commit()
-                cur.close()
             finally:
-                connection_pool.putconn(conn)
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
         except Exception as e:
             errors.append(f"id={media_id}: {e}")
             logger.error(f"Thumb job {job_id}: failed for media id={media_id}: {e}")
@@ -1325,8 +1342,18 @@ async def event_stream():
 
     async def db_stats():
         def _query():
-            conn = connection_pool.getconn()
+            conn = None
+            cur = None
             try:
+                if not connection_pool:
+                    return {
+                        "total_posts": 0,
+                        "total_comments": 0,
+                        "downloaded_media": 0,
+                        "pending_media": 0,
+                        "total_media": 0,
+                    }
+                conn = connection_pool.getconn()
                 cur = conn.cursor()
                 cur.execute("SELECT COUNT(*) FROM posts")
                 total_posts = cur.fetchone()[0]
@@ -1346,15 +1373,21 @@ async def event_stream():
                     "total_media": tot_media,
                 }
             finally:
-                cur.close()
-                connection_pool.putconn(conn)
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
 
         return await asyncio.to_thread(_query)
 
     async def db_target_stats():
         def _query():
-            conn = connection_pool.getconn()
+            conn = None
+            cur = None
             try:
+                if not connection_pool:
+                    return []
+                conn = connection_pool.getconn()
                 cur = conn.cursor()
                 cur.execute("""
                     SELECT
@@ -1425,15 +1458,21 @@ async def event_stream():
                     )
                 return targets
             finally:
-                cur.close()
-                connection_pool.putconn(conn)
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
 
         return await asyncio.to_thread(_query)
 
     async def db_new_posts(after_dt):
         def _query():
-            conn = connection_pool.getconn()
+            conn = None
+            cur = None
             try:
+                if not connection_pool:
+                    return []
+                conn = connection_pool.getconn()
                 cur = conn.cursor()
                 if after_dt is None:
                     cur.execute(
@@ -1446,22 +1485,29 @@ async def event_stream():
                     )
                 return cur.fetchall()
             finally:
-                cur.close()
-                connection_pool.putconn(conn)
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
 
         return await asyncio.to_thread(_query)
 
     async def check_health():
         def _check():
             issues = []
+            conn = None
+            cur = None
             try:
-                conn = connection_pool.getconn()
-                try:
-                    cur = conn.cursor()
-                    cur.execute("SELECT 1")
-                    cur.close()
-                finally:
-                    connection_pool.putconn(conn)
+                if connection_pool:
+                    conn = connection_pool.getconn()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("SELECT 1")
+                    finally:
+                        if cur:
+                            cur.close()
+                        if conn and connection_pool:
+                            connection_pool.putconn(conn)
             except Exception as e:
                 issues.append(f"Database: {str(e)}")
             try:
