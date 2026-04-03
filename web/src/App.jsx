@@ -3,7 +3,6 @@ import axios from "axios"
 
 export default function App(){
   const [posts,setPosts]=useState([])
-  const [offset,setOffset]=useState(0)
   const [search,setSearch]=useState("")
   const [searchResults,setSearchResults]=useState(null)
   const [selectedPost,setSelectedPost]=useState(null)
@@ -25,6 +24,17 @@ export default function App(){
   const [highlightedRows, setHighlightedRows] = useState(new Set())
   const [addTargetType, setAddTargetType] = useState("subreddit")
   const [addTargetName, setAddTargetName] = useState("")
+
+  // Filter + sort state
+  const [filterSubreddit, setFilterSubreddit] = useState("")
+  const [filterAuthor, setFilterAuthor] = useState("")
+  const [filterMediaType, setFilterMediaType] = useState("all") // all | image | video | text
+  const [sortBy, setSortBy] = useState("newest") // newest | oldest | title_asc | title_desc
+
+  // Refs to avoid stale closures in async callbacks
+  const offsetRef = useRef(0)
+  const filtersRef = useRef({ subreddit:"", author:"", mediaType:"all", sort:"newest" })
+
   const loader=useRef()
   const searchTimeout=useRef()
   const esRef=useRef(null)
@@ -99,7 +109,10 @@ export default function App(){
     }
   },[])
 
-  useEffect(()=>{load()},[])
+  useEffect(()=>{
+    load()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
 
   useEffect(()=>{
     if(activeTab === "admin" && !adminData){
@@ -136,48 +149,83 @@ export default function App(){
           tags: r.data.tags || [],
           comments: r.data.comments || [],
           created_utc: r.data.created_utc || prev?.created_utc,
+          video_url: r.data.video_url ?? prev?.video_url,
+          is_video: r.data.is_video ?? prev?.is_video,
+          url: r.data.image_url ?? prev?.url,
         } : prev)
       })
       .catch(()=>{})
   },[selectedPost?.id])
 
+  function buildPostsQuery(offset){
+    const f = filtersRef.current
+    const params = new URLSearchParams({ limit:"50", offset:String(offset) })
+    if(f.subreddit) params.set("subreddit", f.subreddit)
+    if(f.author) params.set("author", f.author)
+    if(f.mediaType === "image") params.set("media_type", "image")
+    else if(f.mediaType === "video") params.set("media_type", "video")
+    else if(f.mediaType === "text") params.set("media_type", "text")
+    if(f.sort === "oldest"){ params.set("sort_by","created_utc"); params.set("sort_order","asc") }
+    else if(f.sort === "title_asc"){ params.set("sort_by","title"); params.set("sort_order","asc") }
+    else if(f.sort === "title_desc"){ params.set("sort_by","title"); params.set("sort_order","desc") }
+    else { params.set("sort_by","created_utc"); params.set("sort_order","desc") }
+    return `/api/posts?${params.toString()}`
+  }
+
+  function mapPost(p){
+    return { id:p.id, title:p.title, url:p.image_url, video_url:p.video_url, is_video:p.is_video, selftext:p.selftext, subreddit:p.subreddit, author:p.author, created_utc:p.created_utc }
+  }
+
   function load(){
-    axios.get(`/api/posts?limit=50&offset=${offset}`)
+    const currentOffset = offsetRef.current
+    axios.get(buildPostsQuery(currentOffset))
     .then(r=>{
-      const newPosts = r.data.map(p => ({
-        id: p.id,
-        title: p.title,
-        url: p.image_url,
-        selftext: p.selftext,
-        subreddit: p.subreddit,
-        author: p.author,
-        created_utc: p.created_utc,
-      }))
+      const newPosts = r.data.map(mapPost)
       setPosts(prev=>[...prev,...newPosts])
-      setOffset(o=>o+50)
+      offsetRef.current = currentOffset + 50
     }).catch(err=>{
       console.error("Failed to load posts:", err)
     })
   }
 
   function refreshPosts(){
-    axios.get("/api/posts?limit=50&offset=0")
+    offsetRef.current = 0
+    axios.get(buildPostsQuery(0))
     .then(r=>{
-      const newPosts = r.data.map(p=>({
-        id: p.id,
-        title: p.title,
-        url: p.image_url,
-        selftext: p.selftext,
-        subreddit: p.subreddit,
-        author: p.author,
-        created_utc: p.created_utc,
-      }))
+      const newPosts = r.data.map(mapPost)
       setPosts(newPosts)
-      setOffset(50)
+      offsetRef.current = 50
       setNewPostsAvailable(0)
     }).catch(err=>{
       console.error("Failed to refresh posts:", err)
     })
+  }
+
+  function applyFilters(newFilters){
+    filtersRef.current = newFilters
+    offsetRef.current = 0
+    setPosts([])
+    axios.get(buildPostsQuery(0))
+    .then(r=>{
+      setPosts(r.data.map(mapPost))
+      offsetRef.current = 50
+    }).catch(err=>{
+      console.error("Failed to load posts:", err)
+    })
+  }
+
+  function hasActiveFilters(){
+    const f = filtersRef.current
+    return f.subreddit || f.author || f.mediaType !== "all" || f.sort !== "newest"
+  }
+
+  function clearFilters(){
+    const defaultFilters = { subreddit:"", author:"", mediaType:"all", sort:"newest" }
+    setFilterSubreddit("")
+    setFilterAuthor("")
+    setFilterMediaType("all")
+    setSortBy("newest")
+    applyFilters(defaultFilters)
   }
 
   function loadAdmin(){
@@ -288,6 +336,8 @@ export default function App(){
     })
     if(loader.current) obs.observe(loader.current)
     return ()=> obs.disconnect()
+  // load() uses refs so we only need to re-subscribe when loader/searchResults change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[loader.current, searchResults])
 
   function handleSearch(e){
@@ -551,6 +601,95 @@ export default function App(){
           </div>
         )}
 
+        {/* ── FILTER / SORT BAR ── */}
+        {!searchResults && (
+          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111",padding:"12px 24px"}}>
+            <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+              <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap"}}>Filter</span>
+
+              {/* Subreddit filter */}
+              <input
+                type="text"
+                placeholder="r/ subreddit"
+                value={filterSubreddit}
+                onChange={e=>{
+                  const v = e.target.value
+                  setFilterSubreddit(v)
+                  clearTimeout(searchTimeout._filterSubredddit)
+                  searchTimeout._filterSubredddit = setTimeout(()=>{
+                    const f = {...filtersRef.current, subreddit: v}
+                    applyFilters(f)
+                  }, 400)
+                }}
+                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
+              />
+
+              {/* Author filter */}
+              <input
+                type="text"
+                placeholder="u/ author"
+                value={filterAuthor}
+                onChange={e=>{
+                  const v = e.target.value
+                  setFilterAuthor(v)
+                  clearTimeout(searchTimeout._filterAuthor)
+                  searchTimeout._filterAuthor = setTimeout(()=>{
+                    const f = {...filtersRef.current, author: v}
+                    applyFilters(f)
+                  }, 400)
+                }}
+                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
+              />
+
+              {/* Media type filter */}
+              <select
+                value={filterMediaType}
+                onChange={e=>{
+                  const v = e.target.value
+                  setFilterMediaType(v)
+                  const f = {...filtersRef.current, mediaType: v}
+                  applyFilters(f)
+                }}
+                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:filterMediaType!=="all"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
+              >
+                <option value="all">All types</option>
+                <option value="image">Images only</option>
+                <option value="video">Videos only</option>
+                <option value="text">Text only</option>
+              </select>
+
+              <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap",marginLeft:"8px"}}>Sort</span>
+
+              {/* Sort selector */}
+              <select
+                value={sortBy}
+                onChange={e=>{
+                  const v = e.target.value
+                  setSortBy(v)
+                  const f = {...filtersRef.current, sort: v}
+                  applyFilters(f)
+                }}
+                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:sortBy!=="newest"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="title_asc">Title A → Z</option>
+                <option value="title_desc">Title Z → A</option>
+              </select>
+
+              {/* Clear filters */}
+              {hasActiveFilters() && (
+                <button
+                  onClick={clearFilters}
+                  style={{marginLeft:"auto",padding:"8px 14px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}
+                >
+                  ✕ Clear filters
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {searchResults && (
           <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}}>
@@ -579,7 +718,32 @@ export default function App(){
                 <div key={p.id} onClick={()=>setSelectedPost(p)}
                   onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
                   style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(255,69,0,0.15)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #2a2a2a"}}>
-                  {p.url ? (
+                  {p.is_video ? (
+                    <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
+                      {/* Hover video preview */}
+                      {hoveredCard===p.id && p.video_url && (p.video_url.includes("v.redd.it")||p.video_url.endsWith(".mp4")) ? (
+                        <video
+                          src={p.video_url}
+                          autoPlay muted loop playsInline
+                          style={{width:"100%",height:"100%",objectFit:"cover"}}
+                        />
+                      ) : (
+                        <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)"}}>
+                          <div style={{width:"64px",height:"64px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)"}}>
+                            <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #ff4500",marginLeft:"4px"}}/>
+                          </div>
+                        </div>
+                      )}
+                      {/* Video badge */}
+                      <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"3px 8px",display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",fontWeight:"700",color:"#fff",letterSpacing:"0.5px",border:"1px solid rgba(255,255,255,0.1)"}}>
+                        <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #ff4500"}}/>
+                        VIDEO
+                      </div>
+                      <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
+                        <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                      </div>
+                    </div>
+                  ) : p.url ? (
                     <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
                       <img src={p.url} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
                       <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
@@ -593,7 +757,7 @@ export default function App(){
                       {p.selftext && <div style={{fontSize:"13px",color:"#777",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
                     </div>
                   )}
-                  {p.url && (
+                  {(p.url || p.is_video) && (
                     <div style={{padding:"16px"}}>
                       <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"6px"}}>{p.subreddit||"reddit"}</div>
                       <div style={{fontSize:"14px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
@@ -661,14 +825,49 @@ export default function App(){
       {selectedPost && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>setSelectedPost(null)}>
           <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"720px",width:"100%",maxHeight:"90vh",overflow:"auto",border:"1px solid #222",boxShadow:"0 24px 80px rgba(0,0,0,0.5)"}} onClick={e=>e.stopPropagation()}>
-            {selectedPost.url && (
+            {(selectedPost.is_video || selectedPost.video_url) ? (
+              <div style={{background:"#000",position:"relative",borderRadius:"20px 20px 0 0",overflow:"hidden"}}>
+                {selectedPost.video_url && (selectedPost.video_url.includes("v.redd.it")||selectedPost.video_url.endsWith(".mp4")) ? (
+                  <video
+                    src={selectedPost.video_url}
+                    controls autoPlay muted loop playsInline
+                    style={{width:"100%",maxHeight:"500px",display:"block",background:"#000"}}
+                  />
+                ) : selectedPost.video_url && (selectedPost.video_url.includes("youtube.com")||selectedPost.video_url.includes("youtu.be")) ? (
+                  <div style={{position:"relative",paddingTop:"56.25%"}}>
+                    <iframe
+                      src={`https://www.youtube.com/embed/${selectedPost.video_url.match(/(?:v=|youtu\.be\/)([^&?/]+)/)?.[1]||""}`}
+                      style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",border:"none"}}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  </div>
+                ) : (
+                  <div style={{minHeight:"200px",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"16px",padding:"40px"}}>
+                    <div style={{width:"80px",height:"80px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <div style={{width:0,height:0,borderTop:"16px solid transparent",borderBottom:"16px solid transparent",borderLeft:"26px solid #ff4500",marginLeft:"6px"}}/>
+                    </div>
+                    {selectedPost.url && <a href={selectedPost.url} target="_blank" rel="noopener" style={{color:"#ff4500",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
+                  </div>
+                )}
+                <div style={{position:"absolute",top:"16px",left:"16px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",fontWeight:"700",color:"#fff",border:"1px solid rgba(255,255,255,0.1)"}}>
+                  <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #ff4500"}}/>
+                  VIDEO
+                </div>
+                {selectedPost.url && (
+                  <div style={{position:"absolute",top:"16px",right:"16px"}}>
+                    <a href={selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
+                  </div>
+                )}
+              </div>
+            ) : selectedPost.url ? (
               <div style={{background:"#000",position:"relative"}}>
                 <img src={selectedPost.url} style={{width:"100%",maxHeight:"450px",objectFit:"contain",borderRadius:"20px 20px 0 0"}} onError={e=>e.target.style.display="none"}/>
                 <div style={{position:"absolute",top:"16px",right:"16px"}}>
                   <a href={selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
                 </div>
               </div>
-            )}
+            ) : null}
             <div style={{padding:"28px"}}>
               <div style={{display:"flex",gap:"16px",fontSize:"13px",color:"#666",marginBottom:"20px",flexWrap:"wrap"}}>
                 <span style={{color:"#ff4500",fontWeight:"600"}}>r/{selectedPost.subreddit||"reddit"}</span>

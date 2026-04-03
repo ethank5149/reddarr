@@ -162,13 +162,64 @@ def debug_post(post_id: str):
         return {"id": row[0], "raw": row[1]}
 
 
+_VIDEO_URL_PATTERNS = ("v.redd.it", "youtube.com", "youtu.be", "streamable.com")
+
+
+def _is_video_url(url: Optional[str]) -> bool:
+    if not url:
+        return False
+    return any(pat in url for pat in _VIDEO_URL_PATTERNS)
+
+
+def _extract_video_url(url: Optional[str], raw: Optional[dict]) -> Optional[str]:
+    """Extract a playable video URL from post data."""
+    if not url:
+        return None
+    # Reddit hosted video: get the fallback MP4 from raw media
+    if "v.redd.it" in url:
+        if raw:
+            media = raw.get("media") or {}
+            rv = media.get("reddit_video") or {}
+            fallback = rv.get("fallback_url")
+            if fallback:
+                # Strip query params that cause issues
+                return fallback.split("?")[0]
+            # Also check crosspost
+            for cp in raw.get("crosspost_parent_list", []):
+                media2 = cp.get("media") or {}
+                rv2 = media2.get("reddit_video") or {}
+                fb2 = rv2.get("fallback_url")
+                if fb2:
+                    return fb2.split("?")[0]
+        return url
+    # YouTube: return the original URL (frontend will handle embed)
+    if "youtube.com" in url or "youtu.be" in url:
+        return url
+    # Other video hosts
+    if _is_video_url(url):
+        return url
+    return None
+
+
 @app.get("/api/posts")
 def posts(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     subreddit: Optional[str] = None,
     author: Optional[str] = None,
+    sort_by: Optional[str] = Query("created_utc"),
+    sort_order: Optional[str] = Query("desc"),
+    has_media: Optional[bool] = None,
+    media_type: Optional[str] = None,
 ):
+    # Whitelist sort fields to prevent SQL injection
+    allowed_sort_by = {"created_utc", "title"}
+    allowed_sort_order = {"asc", "desc"}
+    if sort_by not in allowed_sort_by:
+        sort_by = "created_utc"
+    if sort_order not in allowed_sort_order:
+        sort_order = "desc"
+
     with get_db_cursor() as cur:
         query = """
             SELECT id, title, url, media_url, raw, subreddit, author, created_utc 
@@ -184,7 +235,19 @@ def posts(
             query += " AND author = %s"
             params.append(author)
 
-        query += " ORDER BY created_utc DESC LIMIT %s OFFSET %s"
+        # media_type supersedes legacy has_media
+        if media_type == "video":
+            query += " AND (url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
+        elif media_type == "image":
+            query += " AND media_url IS NOT NULL AND url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%' AND url NOT LIKE '%streamable.com%'"
+        elif media_type == "text":
+            query += " AND (media_url IS NULL OR media_url = '')"
+        elif has_media is True:
+            query += " AND media_url IS NOT NULL"
+        elif has_media is False:
+            query += " AND (media_url IS NULL OR media_url = '')"
+
+        query += f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s"
         params.extend([limit, offset])
 
         cur.execute(query, params)
@@ -193,8 +256,10 @@ def posts(
         for row in cur.fetchall():
             post_id, title, url, media_url, raw, subreddit, author, created_utc = row
             image_url = None
+            video_url = None
             selftext = None
             created_ts = None
+            is_video = _is_video_url(url)
 
             if raw:
                 try:
@@ -202,30 +267,35 @@ def posts(
                     selftext = data.get("selftext")
                     created_ts = data.get("created_utc")
 
-                    if "media_metadata" in data:
-                        for img_id, img_data in data.get("media_metadata", {}).items():
-                            if "s" in img_data:
-                                image_url = img_data["s"].get("u")
-                                break
-
-                    if not image_url and "crosspost_parent_list" in data:
-                        for cp in data.get("crosspost_parent_list", []):
-                            if "media_metadata" in cp:
-                                for img_id, img_data in cp.get(
-                                    "media_metadata", {}
-                                ).items():
-                                    if "s" in img_data:
-                                        image_url = img_data["s"].get("u")
-                                        break
-                                if image_url:
+                    if is_video:
+                        video_url = _extract_video_url(url, data)
+                    else:
+                        if "media_metadata" in data:
+                            for img_id, img_data in data.get(
+                                "media_metadata", {}
+                            ).items():
+                                if "s" in img_data:
+                                    image_url = img_data["s"].get("u")
                                     break
 
-                    if not image_url and "preview" in data:
-                        imgs = data.get("preview", {}).get("images", [])
-                        if imgs:
-                            image_url = imgs[0].get("source", {}).get("url") or imgs[
-                                0
-                            ].get("resolutions", [{}])[-1].get("url")
+                        if not image_url and "crosspost_parent_list" in data:
+                            for cp in data.get("crosspost_parent_list", []):
+                                if "media_metadata" in cp:
+                                    for img_id, img_data in cp.get(
+                                        "media_metadata", {}
+                                    ).items():
+                                        if "s" in img_data:
+                                            image_url = img_data["s"].get("u")
+                                            break
+                                    if image_url:
+                                        break
+
+                        if not image_url and "preview" in data:
+                            imgs = data.get("preview", {}).get("images", [])
+                            if imgs:
+                                image_url = imgs[0].get("source", {}).get(
+                                    "url"
+                                ) or imgs[0].get("resolutions", [{}])[-1].get("url")
                 except Exception as e:
                     logger.error(f"ERROR parsing raw for {post_id}: {e}")
 
@@ -234,6 +304,8 @@ def posts(
                     "id": post_id,
                     "title": title,
                     "image_url": image_url,
+                    "video_url": video_url,
+                    "is_video": is_video,
                     "selftext": selftext,
                     "subreddit": subreddit,
                     "author": author,
@@ -289,23 +361,28 @@ def get_post(post_id: str):
             )
 
         image_url = None
+        video_url = None
         selftext = None
+        is_video = _is_video_url(url)
 
         if raw:
             try:
                 data = raw if isinstance(raw, dict) else json.loads(raw)
                 selftext = data.get("selftext")
 
-                if "media_metadata" in data:
-                    for img_id, img_data in data.get("media_metadata", {}).items():
-                        if "s" in img_data:
-                            image_url = img_data["s"].get("u")
-                            break
+                if is_video:
+                    video_url = _extract_video_url(url, data)
+                else:
+                    if "media_metadata" in data:
+                        for img_id, img_data in data.get("media_metadata", {}).items():
+                            if "s" in img_data:
+                                image_url = img_data["s"].get("u")
+                                break
 
-                if not image_url and "preview" in data:
-                    imgs = data.get("preview", {}).get("images", [])
-                    if imgs:
-                        image_url = imgs[0].get("source", {}).get("url")
+                    if not image_url and "preview" in data:
+                        imgs = data.get("preview", {}).get("images", [])
+                        if imgs:
+                            image_url = imgs[0].get("source", {}).get("url")
             except Exception as e:
                 logger.error(f"ERROR parsing raw for {post_id}: {e}")
 
@@ -314,6 +391,8 @@ def get_post(post_id: str):
             "title": title,
             "url": url,
             "image_url": image_url,
+            "video_url": video_url,
+            "is_video": is_video,
             "selftext": selftext,
             "subreddit": subreddit,
             "author": author,
