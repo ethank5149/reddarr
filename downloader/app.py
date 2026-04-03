@@ -2,12 +2,16 @@ import os, json, hashlib, requests, subprocess, sys
 import psycopg2, redis
 from datetime import datetime
 from urllib.parse import urlparse
+from pathlib import Path
 
 sys.stdout.reconfigure(line_buffering=True)
 
 db = psycopg2.connect(os.getenv("DB_URL"))
 rd = redis.Redis(host=os.getenv("REDIS_HOST"))
-MEDIA_DIR = os.getenv("ARCHIVE_PATH", "/data")
+MEDIA_DIR = "/data"
+Path(MEDIA_DIR).mkdir(parents=True, exist_ok=True)
+
+print(f"MEDIA_DIR set to: {MEDIA_DIR}")
 
 session = requests.Session()
 session.headers.update(
