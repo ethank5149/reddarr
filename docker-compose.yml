@@ -63,7 +63,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ${ARCHIVE_PATH}:/data
+      - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
       - ./downloader:/app
 
   api:
@@ -71,13 +71,16 @@ services:
     build: ./web
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      REDIS_HOST: redis
       ARCHIVE_PATH: ${ARCHIVE_PATH}
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ./web:/app
-      - ${ARCHIVE_PATH}:/data
+      - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
 

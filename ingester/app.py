@@ -98,45 +98,92 @@ def fetch_comments(post):
     return comments
 
 
-def extract_media_urls(post):
-    """Extract all media URLs from a post"""
-    urls = []
+_DIRECT_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_DIRECT_MEDIA_HOSTS = (
+    "i.redd.it",
+    "v.redd.it",
+    "youtube.com",
+    "youtu.be",
+    "i.imgur.com",
+)
 
+
+def _is_direct_media_url(url: str) -> bool:
+    """Return True if the URL points directly to a media file (not a page/gallery)."""
+    lower = url.lower().split("?")[0]
+    if any(lower.endswith(ext) for ext in _DIRECT_IMAGE_EXTS):
+        return True
+    return any(host in url for host in _DIRECT_MEDIA_HOSTS)
+
+
+def extract_media_urls(post):
+    """Extract the highest-resolution unique media URLs from a post.
+
+    Selection rules (in priority order):
+    1. Gallery posts (has ``media_metadata``):  use the per-image source ("s")
+       from media_metadata.  ``post.url`` is the gallery landing page and is
+       *not* a downloadable asset.  ``preview`` images are redundant with
+       media_metadata and are skipped to avoid downloading the same content
+       twice at lower quality.
+    2. Single-image / video posts: use ``post.url`` when it is a direct media
+       URL (i.redd.it, image extension, video host …).  ``preview`` images are
+       *not* queued because ``preview.redd.it`` URLs are re-encoded (often
+       WebP-compressed) copies of the same asset already available at full
+       quality via ``post.url``.
+    3. Fallback: if neither of the above yields any URL, fall back to the
+       ``preview`` source as a last resort (e.g. external-link posts where
+       Reddit generated a preview but the original URL is not a media file).
+    """
+    urls = []
     data = post.__dict__
     logger.debug(f"Extracting media from post {post.id}, keys: {list(data.keys())}")
 
-    if hasattr(post, "url") and post.url:
-        logger.debug(f"Post URL: {post.url}")
-        urls.append(post.url)
+    has_media_metadata = bool(data.get("media_metadata"))
 
-    if "media_metadata" in data:
+    if has_media_metadata:
+        # Gallery post — media_metadata is the authoritative source for all images.
+        # preview.images would duplicate (at least) the first image; skip it.
         logger.debug(f"Found media_metadata with {len(data['media_metadata'])} items")
-        for img_id, img_data in data.get("media_metadata", {}).items():
+        for img_id, img_data in data["media_metadata"].items():
             if "s" in img_data:
-                urls.append(img_data["s"].get("u"))
-            elif "p" in img_data:
-                for p in img_data["p"]:
-                    urls.append(p.get("u"))
+                u = img_data["s"].get("u")
+            elif img_data.get("p"):
+                # No source available; fall back to the largest preview variant
+                u = img_data["p"][-1].get("u")
+            else:
+                u = None
+            if u:
+                urls.append(u)
+    else:
+        # Not a gallery — post.url is the primary asset.
+        post_url = getattr(post, "url", None)
+        if post_url and _is_direct_media_url(post_url):
+            logger.debug(f"Direct media URL: {post_url}")
+            urls.append(post_url)
 
-    if "preview" in data:
-        imgs = data.get("preview", {}).get("images", [])
-        logger.debug(f"Found preview with {len(imgs)} images")
-        for img in imgs:
-            if "source" in img:
-                urls.append(img["source"].get("url"))
-            if "resolutions" in img:
-                for res in img["resolutions"]:
-                    urls.append(res.get("url"))
+        # Only fall back to preview when post.url is not a downloadable asset
+        # (e.g. external link posts where Reddit cached a preview image).
+        if not urls and "preview" in data:
+            imgs = data["preview"].get("images", [])
+            logger.debug(f"Falling back to preview with {len(imgs)} image(s)")
+            for img in imgs:
+                u = img.get("source", {}).get("url")
+                if u:
+                    urls.append(u)
+                    break  # One preview source per post is sufficient
 
+    # Crosspost gallery metadata (always full-res, never duplicated by preview)
     if "crosspost_parent_list" in data:
-        logger.debug(f"Found crosspost_parent_list")
+        logger.debug("Found crosspost_parent_list")
         for cp in data.get("crosspost_parent_list", []):
-            if "media_metadata" in cp:
-                for img_id, img_data in cp.get("media_metadata", {}).items():
-                    if "s" in img_data:
-                        urls.append(img_data["s"].get("u"))
+            for img_id, img_data in cp.get("media_metadata", {}).items():
+                if "s" in img_data:
+                    u = img_data["s"].get("u")
+                    if u:
+                        urls.append(u)
 
-    seen = set()
+    # Deduplicate while preserving order
+    seen: set = set()
     unique_urls = []
     for u in urls:
         if u and u not in seen:
@@ -204,7 +251,14 @@ def run():
                                 if url:
                                     rd.lpush(
                                         "media_queue",
-                                        json.dumps({"post_id": p.id, "url": url}),
+                                        json.dumps(
+                                            {
+                                                "post_id": p.id,
+                                                "url": url,
+                                                "subreddit": str(p.subreddit),
+                                                "author": str(p.author),
+                                            }
+                                        ),
                                     )
                                     urls_queued += 1
                                     media_queued.inc()

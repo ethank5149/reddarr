@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import json
@@ -9,7 +10,12 @@ import psycopg2
 from psycopg2 import pool as pg_pool
 from fastapi import FastAPI, Query, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from typing import Optional, List, Dict, Any
 from prometheus_client import (
     Counter,
@@ -619,6 +625,236 @@ def health_check():
     return {"status": "healthy" if not issues else "degraded", "issues": issues}
 
 
+@app.get("/api/events")
+async def event_stream():
+    """Server-Sent Events endpoint for real-time UI updates."""
+
+    async def db_stats():
+        def _query():
+            conn = connection_pool.getconn()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM posts")
+                total_posts = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM comments")
+                total_comments = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM media WHERE status='done'")
+                dl_media = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM media WHERE status='pending'")
+                pend_media = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM media")
+                tot_media = cur.fetchone()[0]
+                return {
+                    "total_posts": total_posts,
+                    "total_comments": total_comments,
+                    "downloaded_media": dl_media,
+                    "pending_media": pend_media,
+                    "total_media": tot_media,
+                }
+            finally:
+                cur.close()
+                connection_pool.putconn(conn)
+
+        return await asyncio.to_thread(_query)
+
+    async def db_target_stats():
+        def _query():
+            conn = connection_pool.getconn()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT type, name, enabled, last_created,
+                           EXTRACT(EPOCH FROM now() - last_created) as seconds_ago
+                    FROM targets ORDER BY type, name
+                """)
+                target_rows = cur.fetchall()
+                targets = []
+                for row in target_rows:
+                    ttype, name, enabled, last_created, seconds_ago = row
+                    # EXTRACT returns Decimal in psycopg2 — cast to float for JSON
+                    seconds_ago = (
+                        float(seconds_ago) if seconds_ago is not None else None
+                    )
+
+                    if ttype == "subreddit":
+                        cur.execute(
+                            "SELECT COUNT(*) FROM posts WHERE subreddit = %s", (name,)
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT COUNT(*) FROM posts WHERE author = %s", (name,)
+                        )
+                    post_count = cur.fetchone()[0]
+
+                    cur.execute(
+                        """
+                        SELECT COUNT(*),
+                               COUNT(CASE WHEN m.status = 'done' THEN 1 END),
+                               COUNT(CASE WHEN m.status = 'pending' THEN 1 END)
+                        FROM media m
+                        JOIN posts p ON m.post_id = p.id
+                        WHERE p.subreddit = %s OR p.author = %s
+                    """,
+                        (name, name),
+                    )
+                    media_row = cur.fetchone()
+                    tot_media = media_row[0] or 0
+                    dl_media = media_row[1] or 0
+                    pend_media = media_row[2] or 0
+
+                    rate = 0
+                    eta_seconds = None
+                    if last_created and seconds_ago and seconds_ago > 0:
+                        rate = post_count / seconds_ago
+                        remaining = max(0, 1000 - post_count)
+                        if rate > 0:
+                            eta_seconds = remaining / rate
+
+                    targets.append(
+                        {
+                            "type": ttype,
+                            "name": name,
+                            "enabled": enabled,
+                            "last_created": last_created.isoformat()
+                            if last_created
+                            else None,
+                            "post_count": post_count,
+                            "total_media": tot_media,
+                            "downloaded_media": dl_media,
+                            "pending_media": pend_media,
+                            "rate_per_second": round(rate, 4),
+                            "eta_seconds": round(eta_seconds, 0)
+                            if eta_seconds
+                            else None,
+                            "progress_percent": min(100, round(post_count / 10, 1))
+                            if post_count > 0
+                            else 0,
+                        }
+                    )
+                return targets
+            finally:
+                cur.close()
+                connection_pool.putconn(conn)
+
+        return await asyncio.to_thread(_query)
+
+    async def db_new_posts(after_dt):
+        def _query():
+            conn = connection_pool.getconn()
+            try:
+                cur = conn.cursor()
+                if after_dt is None:
+                    cur.execute(
+                        "SELECT id, title, subreddit, author, created_utc FROM posts ORDER BY created_utc DESC LIMIT 1"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id, title, subreddit, author, created_utc FROM posts WHERE created_utc > %s ORDER BY created_utc DESC LIMIT 20",
+                        (after_dt,),
+                    )
+                return cur.fetchall()
+            finally:
+                cur.close()
+                connection_pool.putconn(conn)
+
+        return await asyncio.to_thread(_query)
+
+    async def check_health():
+        def _check():
+            issues = []
+            try:
+                conn = connection_pool.getconn()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT 1")
+                    cur.close()
+                finally:
+                    connection_pool.putconn(conn)
+            except Exception as e:
+                issues.append(f"Database: {str(e)}")
+            try:
+                if not os.path.exists(ARCHIVE_PATH):
+                    issues.append(f"Archive path not accessible: {ARCHIVE_PATH}")
+            except Exception as e:
+                issues.append(f"Archive path: {str(e)}")
+            return {"status": "healthy" if not issues else "degraded", "issues": issues}
+
+        return await asyncio.to_thread(_check)
+
+    async def generate():
+        first_run = True
+        last_post_created = None
+
+        while True:
+            try:
+                stats = await db_stats()
+
+                redis_ok = False
+                if redis_client:
+                    try:
+                        stats["queue_length"] = await asyncio.to_thread(
+                            redis_client.llen, "media_queue"
+                        )
+                        redis_ok = True
+                    except Exception:
+                        stats["queue_length"] = 0
+                else:
+                    stats["queue_length"] = 0
+
+                # Per-target stats (post counts, rates, ETAs, media progress)
+                try:
+                    stats["targets"] = await db_target_stats()
+                except Exception as e:
+                    logger.error(f"SSE target stats error: {e}")
+
+                # Health status
+                try:
+                    health = await check_health()
+                    if not redis_ok:
+                        health["issues"].append("Redis: not connected")
+                        health["status"] = "degraded"
+                    stats["health"] = health
+                except Exception as e:
+                    logger.error(f"SSE health check error: {e}")
+
+                new_rows = await db_new_posts(last_post_created)
+
+                if first_run:
+                    first_run = False
+                    if new_rows:
+                        last_post_created = new_rows[0][4]
+                else:
+                    if new_rows:
+                        stats["new_posts"] = [
+                            {
+                                "id": r[0],
+                                "title": r[1],
+                                "subreddit": r[2],
+                                "author": r[3],
+                                "created_utc": r[4].isoformat() if r[4] else None,
+                            }
+                            for r in new_rows
+                        ]
+                        last_post_created = new_rows[0][4]
+
+                yield f"data: {json.dumps(stats)}\n\n"
+            except Exception as e:
+                logger.error(f"SSE generation error: {e}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+            await asyncio.sleep(5)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/metrics")
 def metrics():
     if not redis_client:
@@ -646,7 +882,12 @@ def metrics():
             for row in cur.fetchall():
                 posts_total.labels(subreddit=row[0]).set(row[1] or 0)
 
-            cur.execute("SELECT subreddit, COUNT(*) FROM comments GROUP BY subreddit")
+            cur.execute("""
+                SELECT p.subreddit, COUNT(c.id)
+                FROM comments c
+                JOIN posts p ON c.post_id = p.id
+                GROUP BY p.subreddit
+            """)
             for row in cur.fetchall():
                 comments_total.labels(subreddit=row[0]).set(row[1] or 0)
 
@@ -820,6 +1061,77 @@ def get_media(
             }
             for r in cur.fetchall()
         ]
+
+
+@app.delete("/api/admin/reset")
+def reset_all(confirm: str = Query(...)):
+    """Wipe all archived data: files on disk, every DB table, and the Redis queue."""
+    if confirm != "RESET":
+        raise HTTPException(status_code=400, detail="Pass confirm=RESET to proceed")
+
+    deleted_files = 0
+    deleted_bytes = 0
+    errors = []
+
+    # 1. Collect tracked file paths before truncating tables
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                "SELECT file_path, thumb_path FROM media WHERE file_path IS NOT NULL"
+            )
+            tracked = cur.fetchall()
+    except Exception as e:
+        tracked = []
+        errors.append(f"Could not read media table: {e}")
+
+    # 2. Delete tracked files from disk
+    for file_path, thumb_path in tracked:
+        for p in [file_path, thumb_path]:
+            if p and os.path.exists(p):
+                try:
+                    deleted_bytes += os.path.getsize(p)
+                    os.remove(p)
+                    deleted_files += 1
+                except Exception as e:
+                    errors.append(f"Delete failed {p}: {e}")
+
+    # 3. Remove organised subdirectories (r/ and u/) left empty after file deletion
+    for subdir in ["r", "u"]:
+        top = os.path.join(ARCHIVE_PATH, subdir)
+        if os.path.isdir(top):
+            for entry in os.scandir(top):
+                if entry.is_dir():
+                    try:
+                        os.rmdir(entry.path)  # only removes if empty
+                    except OSError:
+                        pass
+            try:
+                os.rmdir(top)
+            except OSError:
+                pass
+
+    # 4. Truncate all tables (CASCADE handles FK constraints)
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                "TRUNCATE media, post_tags, comments, posts, tags RESTART IDENTITY CASCADE"
+            )
+    except Exception as e:
+        errors.append(f"DB truncate failed: {e}")
+
+    # 5. Clear Redis queue
+    if redis_client:
+        try:
+            redis_client.delete("media_queue")
+        except Exception as e:
+            errors.append(f"Redis flush failed: {e}")
+
+    return {
+        "status": "ok",
+        "deleted_files": deleted_files,
+        "deleted_mb": round(deleted_bytes / 1024 / 1024, 2),
+        "errors": errors,
+    }
 
 
 @app.get("/api/posts/by-date")

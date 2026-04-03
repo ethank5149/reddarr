@@ -64,17 +64,47 @@ def get_best_image_url(url):
     """Follow redirects and get highest resolution image URL"""
     try:
         r = session.head(url, allow_redirects=True, timeout=10)
-        final_url = r.url
-
-        if "i.redd.it" in final_url:
-            base = final_url.split(".")[0]
-            high_res = f"{base}AUTO.format.jpg"
-            logger.debug(f"Upgraded to high-res: {high_res}")
-            return high_res
-        return final_url
+        return r.url
     except Exception as e:
         logger.warning(f"Redirect follow error: {e}")
         return url
+
+
+def get_post_dir(post_id, subreddit=None, author=None):
+    """Return the organised directory for a post: {MEDIA_DIR}/r/{subreddit} or u/{author}.
+
+    Prefers subreddit/author supplied directly from the queue message to avoid a
+    race condition where the downloader queries the DB before the ingester has
+    committed the inserting transaction.  Falls back to a DB lookup only when
+    those fields are absent.
+    """
+
+    def _resolve(subreddit, author):
+        if subreddit and subreddit not in ("", "None"):
+            return Path(MEDIA_DIR) / "r" / subreddit
+        if author and author not in ("", "None"):
+            return Path(MEDIA_DIR) / "u" / author
+        return Path(MEDIA_DIR)
+
+    # Fast path: metadata already in queue message
+    if subreddit or author:
+        d = _resolve(subreddit, author)
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d)
+
+    # Fallback: query the DB (post must already be committed at this point)
+    try:
+        db.rollback()
+        with db.cursor() as cur:
+            cur.execute("SELECT subreddit, author FROM posts WHERE id = %s", (post_id,))
+            row = cur.fetchone()
+        if row:
+            d = _resolve(row[0], row[1])
+            d.mkdir(parents=True, exist_ok=True)
+            return str(d)
+    except Exception as e:
+        logger.warning(f"Could not resolve post dir for {post_id}: {e}")
+    return MEDIA_DIR
 
 
 while True:
@@ -83,6 +113,8 @@ while True:
     item = json.loads(data)
     post_id = item.get("post_id")
     url = item.get("url")
+    q_subreddit = item.get("subreddit")
+    q_author = item.get("author")
 
     logger.info(f"Dequeued: post_id={post_id}, url={url[:60]}...")
 
@@ -108,10 +140,12 @@ while True:
             r = session.get(url, stream=True, timeout=60)
             if r.status_code != 200:
                 logger.warning(f"HTTP {r.status_code} for {url}")
+                db.rollback()
                 continue
 
+            post_dir = get_post_dir(post_id, q_subreddit, q_author)
             name = f"{post_id}_{url.split('/')[-1].split('?')[0][:100]}"
-            path = f"{MEDIA_DIR}/{name}"
+            path = f"{post_dir}/{name}"
 
             bytes_written = 0
             with open(path, "wb") as f:
@@ -123,6 +157,7 @@ while True:
             h = sha256(path)
             logger.debug(f"SHA256: {h}")
 
+            db.rollback()
             with db.cursor() as cur:
                 cur.execute("SELECT file_path FROM media WHERE sha256=%s", (h,))
                 existing = cur.fetchone()
@@ -155,8 +190,9 @@ while True:
 
         elif "v.redd.it" in url or "youtube.com" in url or "youtu.be" in url:
             logger.info(f"Downloading video: {url}")
+            post_dir = get_post_dir(post_id, q_subreddit, q_author)
             result = subprocess.run(
-                ["yt-dlp", "-o", f"{MEDIA_DIR}/%(id)s.%(ext)s", url, "--quiet"],
+                ["yt-dlp", "-o", f"{post_dir}/%(id)s.%(ext)s", url, "--quiet"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -164,7 +200,7 @@ while True:
                 logger.info(f"Video downloaded: {url}")
             else:
                 logger.error(f"Video download failed: {result.stderr.decode()}")
-            path = f"{MEDIA_DIR}/{post_id}_video"
+            path = f"{post_dir}/{post_id}_video"
 
         elif url.startswith("https://preview.redd.it/") or url.startswith(
             "https://external-preview"
@@ -173,14 +209,16 @@ while True:
             logger.info(f"Following preview to: {url[:60]}...")
             r = session.get(url, stream=True, timeout=60)
             if r.status_code == 200:
+                post_dir = get_post_dir(post_id, q_subreddit, q_author)
                 name = f"{post_id}_{url.split('/')[-1].split('?')[0][:100]}"
-                path = f"{MEDIA_DIR}/{name}"
+                path = f"{post_dir}/{name}"
                 with open(path, "wb") as f:
                     for chunk in r.iter_content(8192):
                         f.write(chunk)
                 h = sha256(path)
                 thumb = make_thumb(path)
 
+                db.rollback()
                 with db.cursor() as cur:
                     cur.execute(
                         """
@@ -202,6 +240,7 @@ while True:
                     logger.info(f"Saved preview: {path}")
             else:
                 logger.warning(f"Preview HTTP {r.status_code}")
+                db.rollback()
                 continue
 
         else:
@@ -211,12 +250,14 @@ while True:
                 content_type = r.headers.get("content-type", "")
                 if "image" in content_type:
                     ext = content_type.split("/")[-1].split(";")[0].strip()
-                    path = f"{MEDIA_DIR}/{post_id}.{ext}"
+                    post_dir = get_post_dir(post_id, q_subreddit, q_author)
+                    path = f"{post_dir}/{post_id}.{ext}"
                     with open(path, "wb") as f:
                         f.write(r.content)
                     h = sha256(path)
                     thumb = make_thumb(path)
 
+                    db.rollback()
                     with db.cursor() as cur:
                         cur.execute(
                             """
@@ -241,11 +282,13 @@ while True:
                     continue
             except Exception as e:
                 logger.warning(f"Extraction failed: {e}")
+                db.rollback()
                 continue
 
     except Exception as e:
         logger.error(f"ERROR processing {post_id}: {e}", exc_info=True)
         try:
+            db.rollback()
             with db.cursor() as cur:
                 cur.execute(
                     "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) ON CONFLICT (post_id) DO NOTHING",
