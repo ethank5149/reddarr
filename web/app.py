@@ -3,6 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import logging
 import psycopg2, os, json
+from datetime import datetime, timedelta
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,6 +113,153 @@ def search(q: str, limit: int = 50):
         (q, limit),
     )
     return cur.fetchall()
+
+
+@app.get("/api/admin/stats")
+def admin_stats():
+    cur = db.cursor()
+
+    cur.execute("""
+        SELECT type, name, enabled, last_created,
+               EXTRACT(EPOCH FROM last_created) as last_ts,
+               EXTRACT(EPOCH FROM now() - last_created) as seconds_ago
+        FROM targets
+        ORDER BY type, name
+    """)
+    targets = []
+    for row in cur.fetchall():
+        ttype, name, enabled, last_created, last_ts, seconds_ago = row
+
+        if ttype == "subreddit":
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM posts WHERE subreddit = %s
+            """,
+                (name,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM posts WHERE author = %s
+            """,
+                (name,),
+            )
+        post_count = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            SELECT COUNT(*), COUNT(CASE WHEN status = 'done' THEN 1 END)
+            FROM media m
+            JOIN posts p ON m.post_id = p.id
+            WHERE p.subreddit = %s OR p.author = %s
+        """,
+            (name, name),
+        )
+        media_row = cur.fetchone()
+        total_media = media_row[0] or 0
+        downloaded_media = media_row[1] or 0
+
+        rate = 0
+        eta_seconds = None
+        if last_created and seconds_ago and seconds_ago > 0:
+            rate = post_count / seconds_ago if seconds_ago > 0 else 0
+            remaining = max(0, 1000 - post_count)
+            if rate > 0:
+                eta_seconds = remaining / rate
+
+        targets.append(
+            {
+                "type": ttype,
+                "name": name,
+                "enabled": enabled,
+                "last_created": last_created.isoformat() if last_created else None,
+                "post_count": post_count,
+                "total_media": total_media,
+                "downloaded_media": downloaded_media,
+                "rate_per_second": round(rate, 4),
+                "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
+                "progress_percent": min(100, round(post_count / 10, 1)),
+            }
+        )
+
+    cur.execute("SELECT COUNT(*) FROM posts")
+    total_posts = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM comments")
+    total_comments = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM media WHERE status = 'done'")
+    downloaded_media = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM media")
+    total_media = cur.fetchone()[0]
+
+    cur.execute("""
+        SELECT DATE(created_utc) as day, COUNT(*)
+        FROM posts
+        WHERE created_utc > now() - INTERVAL '7 days'
+        GROUP BY DATE(created_utc)
+        ORDER BY day
+    """)
+    posts_per_day = [{"date": str(r[0]), "count": r[1]} for r in cur.fetchall()]
+
+    return {
+        "targets": targets,
+        "total_posts": total_posts,
+        "total_comments": total_comments,
+        "downloaded_media": downloaded_media,
+        "total_media": total_media,
+        "posts_per_day": posts_per_day,
+    }
+
+
+@app.post("/api/admin/target/{target_type}/{name}/toggle")
+def toggle_target(target_type: str, name: str):
+    cur = db.cursor()
+    cur.execute(
+        "UPDATE targets SET enabled = NOT enabled WHERE type = %s AND name = %s RETURNING enabled",
+        (target_type, name),
+    )
+    result = cur.fetchone()
+    db.commit()
+    if result is None:
+        return {"error": "Target not found"}
+    return {"enabled": result[0]}
+
+
+@app.post("/api/admin/target/{target_type}/{name}/reset")
+def reset_target(target_type: str, name: str):
+    cur = db.cursor()
+    cur.execute(
+        "UPDATE targets SET last_created = NULL WHERE type = %s AND name = %s",
+        (target_type, name),
+    )
+    db.commit()
+    return {"status": "ok"}
+
+
+@app.get("/api/admin/logs")
+def admin_logs(limit: int = 50):
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT p.id, p.subreddit, p.author, p.created_utc, p.title
+        FROM posts p
+        ORDER BY p.created_utc DESC
+        LIMIT %s
+    """,
+        (limit,),
+    )
+    return [
+        {
+            "id": r[0],
+            "subreddit": r[1],
+            "author": r[2],
+            "created_utc": r[3].isoformat() if r[3] else None,
+            "title": r[4],
+        }
+        for r in cur.fetchall()
+    ]
 
 
 @app.post("/api/tag")
