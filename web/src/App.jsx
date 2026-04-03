@@ -53,9 +53,8 @@ export default function App(){
     })
   }
 
-  function resetTarget(ttype, name){
-    if(!confirm(`Reset progress for ${ttype}/${name}? This will restart from beginning.`)) return
-    axios.post(`/api/admin/target/${ttype}/${name}/reset`).then(()=>{
+  function rescanTarget(ttype, name){
+    axios.post(`/api/admin/target/${ttype}/${name}/rescan`).then(()=>{
       loadAdmin()
     })
   }
@@ -120,6 +119,7 @@ export default function App(){
       <header style={{padding:"15px 20px",background:"#2a2a2a",borderBottom:"1px solid #333",position:"sticky",top:0,zIndex:100}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"1400px",margin:"0 auto"}}>
           <div style={{display:"flex",alignItems:"center",gap:"30px"}}>
+            <img src="/icon.png" alt="Logo" style={{width:"36px",height:"36px",borderRadius:"8px"}} />
             <h1 style={{margin:0,fontSize:"24px",color:"#ff4500"}}>Reddit Archive</h1>
             <div style={{display:"flex",gap:"5px"}}>
               {[
@@ -163,12 +163,13 @@ export default function App(){
 
       {activeTab === "admin" && adminData && (
         <div style={{padding:"20px",maxWidth:"1400px",margin:"0 auto"}}>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"15px",marginBottom:"30px"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"15px",marginBottom:"30px"}}>
             {[
               {label:"Total Posts",value:adminData.total_posts,color:"#ff4500"},
               {label:"Comments",value:adminData.total_comments,color:"#7193ff"},
               {label:"Media Downloaded",value:adminData.downloaded_media,color:"#46d160"},
-              {label:"Total Media",value:adminData.total_media,color:"#f9c300"}
+              {label:"Media Pending",value:adminData.pending_media,color:"#f9c300"},
+              {label:"Total Media",value:adminData.total_media,color:"#fff"}
             ].map(s=>(
               <div key={s.label} style={{background:"#2a2a2a",padding:"20px",borderRadius:"10px",border:"1px solid #333"}}>
                 <div style={{fontSize:"13px",color:"#888",marginBottom:"5px"}}>{s.label}</div>
@@ -190,8 +191,8 @@ export default function App(){
                     <button onClick={()=>toggleTarget(t.type,t.name)} style={{padding:"5px 10px",background:t.enabled?"#46d160":"#f9c300",border:"none",borderRadius:"4px",color:"#000",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
                       {t.enabled?"Active":"Paused"}
                     </button>
-                    <button onClick={()=>resetTarget(t.type,t.name)} style={{padding:"5px 10px",background:"#ff4500",border:"none",borderRadius:"4px",color:"#fff",cursor:"pointer",fontSize:"12px"}}>
-                      Reset
+                    <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"5px 10px",background:"#ff4500",border:"none",borderRadius:"4px",color:"#fff",cursor:"pointer",fontSize:"12px"}}>
+                      Rescan
                     </button>
                   </div>
                 </div>
@@ -199,6 +200,7 @@ export default function App(){
                   <div><span style={{color:"#888"}}>Posts:</span> <span style={{fontWeight:"600"}}>{t.post_count}</span></div>
                   <div><span style={{color:"#888"}}>Rate:</span> <span style={{fontWeight:"600"}}>{formatRate(t.rate_per_second)}</span></div>
                   <div><span style={{color:"#888"}}>Media:</span> <span style={{fontWeight:"600"}}>{t.downloaded_media}/{t.total_media}</span></div>
+                  <div><span style={{color:"#888"}}>Pending:</span> <span style={{fontWeight:"600",color:"#f9c300"}}>{t.pending_media}</span></div>
                   <div><span style={{color:"#888"}}>ETA:</span> <span style={{fontWeight:"600",color:"#46d160"}}>{formatEta(t.eta_seconds)}</span></div>
                 </div>
                 <div style={{marginTop:"10px"}}>

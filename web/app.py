@@ -149,7 +149,7 @@ def admin_stats():
 
         cur.execute(
             """
-            SELECT COUNT(*), COUNT(CASE WHEN status = 'done' THEN 1 END)
+            SELECT COUNT(*), COUNT(CASE WHEN status = 'done' THEN 1 END), COUNT(CASE WHEN status = 'pending' THEN 1 END)
             FROM media m
             JOIN posts p ON m.post_id = p.id
             WHERE p.subreddit = %s OR p.author = %s
@@ -159,6 +159,7 @@ def admin_stats():
         media_row = cur.fetchone()
         total_media = media_row[0] or 0
         downloaded_media = media_row[1] or 0
+        pending_media = media_row[2] or 0
 
         rate = 0
         eta_seconds = None
@@ -177,6 +178,7 @@ def admin_stats():
                 "post_count": post_count,
                 "total_media": total_media,
                 "downloaded_media": downloaded_media,
+                "pending_media": pending_media,
                 "rate_per_second": round(rate, 4),
                 "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
                 "progress_percent": min(100, round(post_count / 10, 1)),
@@ -195,6 +197,9 @@ def admin_stats():
     cur.execute("SELECT COUNT(*) FROM media")
     total_media = cur.fetchone()[0]
 
+    cur.execute("SELECT COUNT(*) FROM media WHERE status = 'pending'")
+    pending_media = cur.fetchone()[0]
+
     cur.execute("""
         SELECT DATE(created_utc) as day, COUNT(*)
         FROM posts
@@ -210,6 +215,7 @@ def admin_stats():
         "total_comments": total_comments,
         "downloaded_media": downloaded_media,
         "total_media": total_media,
+        "pending_media": pending_media,
         "posts_per_day": posts_per_day,
     }
 
