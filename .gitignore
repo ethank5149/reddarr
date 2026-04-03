@@ -6,7 +6,7 @@ pgdata/
 redisdata/
 prometheus/data/
 grafana/data/
-
+node_modules/
 # Environment
 .env
 

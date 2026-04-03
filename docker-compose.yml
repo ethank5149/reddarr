@@ -58,10 +58,12 @@ services:
     build: ./web
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      ARCHIVE_PATH: ${ARCHIVE_PATH}
     depends_on:
       - db
     volumes:
       - ./web:/app
+      - ${ARCHIVE_PATH}:/data
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
 

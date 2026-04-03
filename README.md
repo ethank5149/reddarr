@@ -33,7 +33,25 @@ A self-hosted Reddit data archiving platform that collects posts, comments, and 
    docker-compose up -d
    ```
 
-3. Access the API at `http://localhost:8011`
+## Accessing Services
+
+Once running, access the following services:
+
+| Service | URL | Default Credentials |
+|---------|-----|---------------------|
+| **API** | http://localhost:8011 | N/A |
+| **Prometheus** | http://localhost:9011 | N/A |
+| **Grafana** | http://localhost:3011 | admin / admin |
+| **PostgreSQL** | localhost:5432 | reddit / (see secrets/postgres_password) |
+| **Redis** | localhost:6379 | N/A |
+
+### Grafana Setup
+
+1. Login to Grafana at http://localhost:3011
+2. Default credentials: `admin` / `admin`
+3. Add Prometheus as a data source:
+   - URL: `http://prometheus:9090`
+   - Access: Server (default)
 
 ## Configuration
 
@@ -52,8 +70,3 @@ A self-hosted Reddit data archiving platform that collects posts, comments, and 
 - `GET /api/posts` - List posts with pagination
 - `GET /api/search?q=<query>` - Full-text search posts
 - `POST /api/tag?post_id=<id>&tag=<name>` - Tag a post
-
-## Monitoring
-
-- Prometheus: `http://localhost:9011`
-- Grafana: `http://localhost:3011` (default credentials: admin/admin)
