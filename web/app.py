@@ -824,22 +824,25 @@ def thumb_stats():
         cur.execute("SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL")
         total_with_file = cur.fetchone()[0]
 
+        # Pull every row that has a local file so we can check reality on disk
         cur.execute(
-            "SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL AND thumb_path IS NOT NULL"
+            "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL"
         )
-        with_thumb_db = cur.fetchone()[0]
+        rows = cur.fetchall()
 
-        cur.execute(
-            "SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL AND thumb_path IS NULL"
-        )
-        missing_thumb_db = cur.fetchone()[0]
+    missing_no_path = 0  # thumb_path NULL/empty in DB
+    missing_file_gone = 0  # thumb_path set in DB but file absent on disk
+    good_count = 0  # thumb_path set AND file present on disk
 
-        # Rows where the thumb_path DB value is set but the file is gone
-        cur.execute("SELECT id, thumb_path FROM media WHERE thumb_path IS NOT NULL")
-        stale_count = 0
-        for row in cur.fetchall():
-            if not os.path.exists(row[1]):
-                stale_count += 1
+    for media_id, file_path, thumb_path in rows:
+        if not thumb_path:
+            missing_no_path += 1
+        elif not os.path.exists(thumb_path):
+            missing_file_gone += 1
+        else:
+            good_count += 1
+
+    total_missing = missing_no_path + missing_file_gone
 
     # Count .thumb.jpg files on disk
     thumb_files_on_disk = 0
@@ -858,9 +861,10 @@ def thumb_stats():
 
     return {
         "total_media_with_file": total_with_file,
-        "with_thumb_in_db": with_thumb_db,
-        "missing_thumb_in_db": missing_thumb_db,
-        "stale_thumb_db_entries": stale_count,
+        "with_thumb_in_db": good_count,
+        "missing_thumb_in_db": total_missing,
+        "missing_no_db_path": missing_no_path,
+        "missing_file_gone": missing_file_gone,
         "thumb_files_on_disk": thumb_files_on_disk,
         "thumb_disk_mb": round(thumb_bytes / 1024 / 1024, 2),
     }
@@ -873,23 +877,12 @@ def thumb_backfill():
     for progress polling."""
     with get_db_cursor() as cur:
         cur.execute(
-            """
-            SELECT id, file_path, thumb_path
-            FROM media
-            WHERE file_path IS NOT NULL
-              AND (thumb_path IS NULL OR thumb_path = '')
-            ORDER BY id
-            """
+            "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL ORDER BY id"
         )
-        rows = cur.fetchall()
+        all_rows = cur.fetchall()
 
-        # Also include rows where the thumb file is missing from disk
-        cur.execute(
-            "SELECT id, file_path, thumb_path FROM media WHERE thumb_path IS NOT NULL"
-        )
-        for row in cur.fetchall():
-            if row[2] and not os.path.exists(row[2]):
-                rows.append(row)
+    # Include only rows where the thumb is absent: no DB path, or path set but file missing
+    rows = [row for row in all_rows if not row[2] or not os.path.exists(row[2])]
 
     job_id = str(uuid.uuid4())
     with _thumb_jobs_lock:

@@ -636,15 +636,16 @@ export default function App(){
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"12px",marginBottom:"20px"}}>
                 {[
                   {label:"Media with file",value:thumbStats.total_media_with_file,color:"#fff"},
-                  {label:"Thumbs in DB",value:thumbStats.with_thumb_in_db,color:"#46d160"},
-                  {label:"Missing thumbs",value:thumbStats.missing_thumb_in_db,color:thumbStats.missing_thumb_in_db>0?"#f9c300":"#46d160"},
-                  {label:"Stale DB entries",value:thumbStats.stale_thumb_db_entries,color:thumbStats.stale_thumb_db_entries>0?"#ff6b6b":"#46d160"},
+                  {label:"Thumbs OK",value:thumbStats.with_thumb_in_db,color:"#46d160"},
+                  {label:"Missing thumbs",value:thumbStats.missing_thumb_in_db,color:thumbStats.missing_thumb_in_db>0?"#f9c300":"#46d160",
+                   sub:thumbStats.missing_thumb_in_db>0?`${thumbStats.missing_no_db_path} no path · ${thumbStats.missing_file_gone} file gone`:null},
                   {label:"Files on disk",value:thumbStats.thumb_files_on_disk,color:"#7193ff"},
                   {label:"Disk usage",value:`${thumbStats.thumb_disk_mb} MB`,color:"#888"},
                 ].map(s=>(
                   <div key={s.label} style={{background:"#1a1a1a",padding:"14px 16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
                     <div style={{fontSize:"11px",color:"#555",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
                     <div style={{fontSize:"22px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{typeof s.value==="number"?s.value.toLocaleString():s.value}</div>
+                    {s.sub && <div style={{fontSize:"10px",color:"#666",marginTop:"4px"}}>{s.sub}</div>}
                   </div>
                 ))}
               </div>
