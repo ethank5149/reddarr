@@ -1,0 +1,15 @@
+# Secrets
+secrets/
+
+# Data directories
+pgdata/
+redisdata/
+prometheus/data/
+grafana/data/
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc

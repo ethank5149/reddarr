@@ -1,0 +1,5 @@
+psycopg2-binary
+requests
+redis
+praw   # if Reddit API is used later
+ffmpeg-python  # optional if thumbnails are generated here
