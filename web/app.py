@@ -245,21 +245,27 @@ def posts(
             # Build OR conditions for multiple media types
             media_conditions = []
             if "video" in media_type:
+                # Video if has video media in media table OR URL is a video site
                 media_conditions.append(
-                    "(url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
+                    "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.file_path LIKE '%.mp4') OR "
+                    "url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
                 )
             if "image" in media_type:
+                # Image if has image media in media table (not video) AND URL is not a video site
                 media_conditions.append(
-                    "(media_url IS NOT NULL AND url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%' AND url NOT LIKE '%streamable.com%')"
+                    "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.file_path NOT LIKE '%.mp4' AND m.file_path NOT LIKE '%.webm' AND m.file_path IS NOT NULL))"
                 )
             if "text" in media_type:
-                media_conditions.append("(media_url IS NULL OR media_url = '')")
+                # Text if no media in media table AND no media_url in posts
+                media_conditions.append(
+                    "(NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id) AND (p.media_url IS NULL OR p.media_url = ''))"
+                )
             if media_conditions:
                 query += " AND (" + " OR ".join(media_conditions) + ")"
         elif has_media is True:
-            query += " AND media_url IS NOT NULL"
+            query += " AND EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.file_path IS NOT NULL)"
         elif has_media is False:
-            query += " AND (media_url IS NULL OR media_url = '')"
+            query += " AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id) AND (p.media_url IS NULL OR p.media_url = '')"
 
         # NSFW filter - check raw JSON for over_18 field
         if nsfw == "exclude":

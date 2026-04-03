@@ -41,6 +41,7 @@ export default function App(){
     return saved !== null ? saved === "true" : true
   })
   const [sortBy, setSortBy] = useState("last_added") // newest | oldest | title_asc | title_desc | last_added
+  const [isLoading, setIsLoading] = useState(false)
 
   // Refs to avoid stale closures in async callbacks
   const offsetRef = useRef(0)
@@ -237,15 +238,17 @@ export default function App(){
     filtersRef.current = newFilters
     offsetRef.current = 0
     filteringRef.current = true
+    setIsLoading(true)
     setPosts([])
     axios.get(buildPostsQuery(0))
     .then(r=>{
       setPosts(r.data.map(mapPost))
       offsetRef.current = 50
     }).catch(err=>{
-      console.error("Failed to load posts:", err)
+      console.error("Failed to load posts:", err.response?.data || err.message || err)
     }).finally(()=>{
       filteringRef.current = false
+      setIsLoading(false)
     })
   }
 
@@ -990,6 +993,19 @@ export default function App(){
                 </div>
               ))}
             </div>
+            {isLoading && (
+              <div style={{padding:"40px",textAlign:"center",color:"#ff4500",fontSize:"14px"}}>
+                <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
+                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+                  Loading posts...
+                </div>
+              </div>
+            )}
+            {!isLoading && posts.length === 0 && (
+              <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>
+                No posts found. Try adjusting your filters.
+              </div>
+            )}
             <div ref={loader} style={{padding:"60px",textAlign:"center",color:"#444",fontSize:"14px"}}>
               <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
                 <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
