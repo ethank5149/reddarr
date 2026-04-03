@@ -837,7 +837,16 @@ async def event_stream():
                         ]
                         last_post_created = new_rows[0][4]
 
-                yield f"data: {json.dumps(stats)}\n\n"
+                # Serialize — if targets/health contain an unexpected non-serializable
+                # value, strip those fields and still emit the core stats.
+                try:
+                    payload = json.dumps(stats)
+                except Exception as e:
+                    logger.error(f"SSE serialize error (stripping targets/health): {e}")
+                    stats.pop("targets", None)
+                    stats.pop("health", None)
+                    payload = json.dumps(stats)
+                yield f"data: {payload}\n\n"
             except Exception as e:
                 logger.error(f"SSE generation error: {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"

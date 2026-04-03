@@ -1,4 +1,4 @@
-import os, json, hashlib, requests, subprocess, sys
+import os, re, json, hashlib, requests, subprocess, sys
 import psycopg2, redis
 from datetime import datetime
 from urllib.parse import urlparse
@@ -70,6 +70,39 @@ def get_best_image_url(url):
         return url
 
 
+def sanitize_name(s, max_len=60):
+    """Strip filesystem-unsafe characters and collapse whitespace to underscores."""
+    s = re.sub(r"[^\w\s-]", "", str(s)).strip()
+    s = re.sub(r"[\s_]+", "_", s)
+    return s[:max_len].strip("_")
+
+
+def make_filename(subreddit, author, title, post_id, url):
+    """Return a descriptive filename: {r_sub|u_author}_{title}_{post_id}{ext}
+
+    The extension is taken from the source URL when present; the title is
+    sanitized and truncated so the full path stays well under 255 chars.
+    """
+    if subreddit and subreddit not in ("", "None"):
+        prefix = f"r_{sanitize_name(subreddit, 30)}"
+    elif author and author not in ("", "None"):
+        prefix = f"u_{sanitize_name(author, 30)}"
+    else:
+        prefix = post_id
+
+    title_part = sanitize_name(title, 80) if title else ""
+    ext = Path(url.split("?")[0]).suffix  # e.g. ".jpg", "" for extensionless
+
+    if title_part:
+        name = f"{prefix}_{title_part}_{post_id}{ext}"
+    else:
+        name = f"{prefix}_{post_id}{ext}"
+
+    # Hard cap so the filename itself never exceeds 200 chars
+    stem = Path(name).stem[:195]
+    return stem + ext
+
+
 def get_post_dir(post_id, subreddit=None, author=None):
     """Return the organised directory for a post: {MEDIA_DIR}/r/{subreddit} or u/{author}.
 
@@ -115,6 +148,7 @@ while True:
     url = item.get("url")
     q_subreddit = item.get("subreddit")
     q_author = item.get("author")
+    q_title = item.get("title", "")
 
     logger.info(f"Dequeued: post_id={post_id}, url={url[:60]}...")
 
@@ -144,7 +178,7 @@ while True:
                 continue
 
             post_dir = get_post_dir(post_id, q_subreddit, q_author)
-            name = f"{post_id}_{url.split('/')[-1].split('?')[0][:100]}"
+            name = make_filename(q_subreddit, q_author, q_title, post_id, url)
             path = f"{post_dir}/{name}"
 
             bytes_written = 0
@@ -191,8 +225,10 @@ while True:
         elif "v.redd.it" in url or "youtube.com" in url or "youtu.be" in url:
             logger.info(f"Downloading video: {url}")
             post_dir = get_post_dir(post_id, q_subreddit, q_author)
+            video_name = make_filename(q_subreddit, q_author, q_title, post_id, url)
+            video_stem = Path(video_name).stem  # yt-dlp appends the real extension
             result = subprocess.run(
-                ["yt-dlp", "-o", f"{post_dir}/%(id)s.%(ext)s", url, "--quiet"],
+                ["yt-dlp", "-o", f"{post_dir}/{video_stem}.%(ext)s", url, "--quiet"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -200,7 +236,7 @@ while True:
                 logger.info(f"Video downloaded: {url}")
             else:
                 logger.error(f"Video download failed: {result.stderr.decode()}")
-            path = f"{post_dir}/{post_id}_video"
+            path = f"{post_dir}/{video_stem}"
 
         elif url.startswith("https://preview.redd.it/") or url.startswith(
             "https://external-preview"
@@ -210,7 +246,7 @@ while True:
             r = session.get(url, stream=True, timeout=60)
             if r.status_code == 200:
                 post_dir = get_post_dir(post_id, q_subreddit, q_author)
-                name = f"{post_id}_{url.split('/')[-1].split('?')[0][:100]}"
+                name = make_filename(q_subreddit, q_author, q_title, post_id, url)
                 path = f"{post_dir}/{name}"
                 with open(path, "wb") as f:
                     for chunk in r.iter_content(8192):
@@ -249,9 +285,16 @@ while True:
                 r = session.get(url, timeout=30)
                 content_type = r.headers.get("content-type", "")
                 if "image" in content_type:
-                    ext = content_type.split("/")[-1].split(";")[0].strip()
+                    ext = "." + content_type.split("/")[-1].split(";")[0].strip()
                     post_dir = get_post_dir(post_id, q_subreddit, q_author)
-                    path = f"{post_dir}/{post_id}.{ext}"
+                    name = (
+                        make_filename(q_subreddit, q_author, q_title, post_id, url)
+                        or f"{post_id}{ext}"
+                    )
+                    # Ensure the content-type extension is used when URL has none
+                    if not Path(name).suffix:
+                        name = name + ext
+                    path = f"{post_dir}/{name}"
                     with open(path, "wb") as f:
                         f.write(r.content)
                     h = sha256(path)

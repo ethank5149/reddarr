@@ -109,6 +109,25 @@ export default function App(){
     }
   },[activeTab])
 
+  // Polling fallback: re-fetch all admin stats every 10s while on the admin tab.
+  // This ensures numbers update even if the SSE stream is down or erroring.
+  useEffect(()=>{
+    if(activeTab !== "admin") return
+    const poll = setInterval(()=>{
+      axios.get("/api/admin/stats").then(r=>{
+        if(r.data) setAdminData(r.data)
+      }).catch(()=>{})
+      axios.get("/api/admin/queue").then(r=>{
+        if(r.data) setQueueInfo(r.data)
+      }).catch(()=>{})
+      axios.get("/api/admin/health").then(r=>{
+        if(r.data) setHealthStatus(r.data)
+      }).catch(()=>{})
+      setLastUpdated(new Date())
+    }, 10000)
+    return ()=> clearInterval(poll)
+  },[activeTab])
+
   function load(){
     axios.get(`/api/posts?limit=50&offset=${offset}`)
     .then(r=>{

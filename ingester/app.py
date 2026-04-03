@@ -31,6 +31,8 @@ logger.info("Starting ingester...")
 db = psycopg2.connect(os.getenv("DB_URL"))
 rd = redis.Redis(host=os.getenv("REDIS_HOST"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
+SCRAPE_LIMIT = os.getenv("SCRAPE_LIMIT")  # None = no cap (PRAW paginates fully)
+SCRAPE_LIMIT = int(SCRAPE_LIMIT) if SCRAPE_LIMIT else None
 
 logger.info(f"POLL_INTERVAL set to: {POLL_INTERVAL}")
 
@@ -211,9 +213,9 @@ def run():
                 logger.info(f"Processing {ttype}: {name}")
                 try:
                     if ttype == "subreddit":
-                        src = reddit.subreddit(name).new(limit=100)
+                        src = reddit.subreddit(name).new(limit=SCRAPE_LIMIT)
                     else:
-                        src = reddit.redditor(name).submissions.new(limit=100)
+                        src = reddit.redditor(name).submissions.new(limit=SCRAPE_LIMIT)
 
                     oldest_seen = None
                     posts_processed = 0
@@ -257,6 +259,7 @@ def run():
                                                 "url": url,
                                                 "subreddit": str(p.subreddit),
                                                 "author": str(p.author),
+                                                "title": p.title,
                                             }
                                         ),
                                     )
