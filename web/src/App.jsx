@@ -36,11 +36,18 @@ export default function App(){
   const [filterSubreddit, setFilterSubreddit] = useState("")
   const [filterAuthor, setFilterAuthor] = useState("")
   const [filterMediaType, setFilterMediaType] = useState("all") // all | image | video | text
-  const [sortBy, setSortBy] = useState("newest") // newest | oldest | title_asc | title_desc
+  const [showNsfw, setShowNsfw] = useState(() => {
+    const saved = localStorage.getItem("showNsfw")
+    return saved !== null ? saved === "true" : true
+  })
+  const [sortBy, setSortBy] = useState("last_added") // newest | oldest | title_asc | title_desc | last_added
 
   // Refs to avoid stale closures in async callbacks
   const offsetRef = useRef(0)
-  const filtersRef = useRef({ subreddit:"", author:"", mediaType:"all", sort:"newest" })
+  const filtersRef = useRef({ 
+    subreddit:"", author:"", mediaType:"all", sort:"last_added", 
+    nsfw: localStorage.getItem("showNsfw") !== null ? localStorage.getItem("showNsfw") === "true" : true 
+  })
   const filteringRef = useRef(false)  // true while applyFilters fetch is in flight
 
   const loader=useRef()
@@ -184,6 +191,7 @@ export default function App(){
     else if(f.sort === "title_desc"){ params.set("sort_by","title"); params.set("sort_order","desc") }
     else if(f.sort === "last_added"){ params.set("sort_by","ingested_at"); params.set("sort_order","desc") }
     else { params.set("sort_by","created_utc"); params.set("sort_order","desc") }
+    if(f.nsfw === false) params.set("nsfw", "exclude")
     return `/api/posts?${params.toString()}`
   }
 
@@ -194,7 +202,7 @@ export default function App(){
       video_url:p.video_url, video_urls:p.video_urls, 
       is_video:p.is_video, selftext:p.selftext, 
       subreddit:p.subreddit, author:p.author, 
-      created_utc:p.created_utc, thumb_url:p.thumb_url 
+      created_utc:p.created_utc, thumb_url:p.thumb_url, preview_url:p.preview_url 
     }
   }
 
@@ -243,15 +251,15 @@ export default function App(){
 
   function hasActiveFilters(){
     const f = filtersRef.current
-    return f.subreddit || f.author || f.mediaType !== "all" || f.sort !== "newest"
+    return f.subreddit || f.author || f.mediaType !== "all" || f.sort !== "last_added"
   }
 
   function clearFilters(){
-    const defaultFilters = { subreddit:"", author:"", mediaType:"all", sort:"newest" }
+    const defaultFilters = { subreddit:"", author:"", mediaType:"all", sort:"last_added", nsfw:true }
     setFilterSubreddit("")
     setFilterAuthor("")
     setFilterMediaType("all")
-    setSortBy("newest")
+    setSortBy("last_added")
     applyFilters(defaultFilters)
   }
 
@@ -837,6 +845,23 @@ export default function App(){
                 <option value="text">Text only</option>
               </select>
 
+              {/* NSFW toggle */}
+              <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",whiteSpace:"nowrap"}}>
+                <input
+                  type="checkbox"
+                  checked={showNsfw}
+                  onChange={e=>{
+                    const v = e.target.checked
+                    setShowNsfw(v)
+                    localStorage.setItem("showNsfw", String(v))
+                    const f = {...filtersRef.current, nsfw: v}
+                    applyFilters(f)
+                  }}
+                  style={{width:"16px",height:"16px",accentColor:"#ff4500"}}
+                />
+                <span style={{fontSize:"12px",color:showNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
+              </label>
+
               <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap",marginLeft:"8px"}}>Sort</span>
 
               {/* Sort selector */}
@@ -910,9 +935,9 @@ export default function App(){
                       ) : (
                         <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
                           {/* Static thumbnail behind play button */}
-                          {p.thumb_url && (
+                          {(p.thumb_url || p.preview_url) && (
                             <img
-                              src={p.thumb_url}
+                              src={p.thumb_url || p.preview_url}
                               style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}}
                               onError={e=>e.target.style.display="none"}
                             />
@@ -1041,22 +1066,22 @@ export default function App(){
                     <div style={{width:"80px",height:"80px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center"}}>
                       <div style={{width:0,height:0,borderTop:"16px solid transparent",borderBottom:"16px solid transparent",borderLeft:"26px solid #ff4500",marginLeft:"6px"}}/>
                     </div>
-                    {selectedPost.url && <a href={selectedPost.url} target="_blank" rel="noopener" style={{color:"#ff4500",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
+                    {(selectedPost.video_urls?.[0] || selectedPost.url) && <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener" style={{color:"#ff4500",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
                   </div>
                 )}
                 <div style={{position:"absolute",top:"16px",left:"16px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",fontWeight:"700",color:"#fff",border:"1px solid rgba(255,255,255,0.1)"}}>
                   <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #ff4500"}}/>
                   VIDEO
                 </div>
-                {selectedPost.url && (
+                {(selectedPost.video_urls?.[0] || selectedPost.url) && (
                   <div style={{position:"absolute",top:"16px",right:"16px"}}>
-                    <a href={selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
+                    <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
                   </div>
                 )}
               </div>
             ) : (selectedPost.url || selectedPost.image_urls?.[0]) ? (
               <div style={{background:"#000",position:"relative"}}>
-                <img src={selectedPost.url || selectedPost.image_urls?.[galleryIdx] || selectedPost.image_urls?.[0]} style={{width:"100%",maxHeight:"450px",objectFit:"contain",borderRadius:"20px 20px 0 0"}} onError={e=>e.target.style.display="none"}/>
+                <img src={selectedPost.image_urls?.[galleryIdx] || selectedPost.url || selectedPost.image_urls?.[0]} style={{width:"100%",maxHeight:"450px",objectFit:"contain",borderRadius:"20px 20px 0 0"}} onError={e=>e.target.style.display="none"}/>
                 {/* Gallery navigation */}
                 {selectedPost.image_urls?.length > 1 && (
                   <>
@@ -1072,7 +1097,7 @@ export default function App(){
                   </>
                 )}
                 <div style={{position:"absolute",top:"16px",right:"16px"}}>
-                  <a href={selectedPost.url || selectedPost.image_urls?.[galleryIdx] || selectedPost.image_urls?.[0]} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
+                  <a href={selectedPost.image_urls?.[galleryIdx] || selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
                 </div>
               </div>
             ) : null}

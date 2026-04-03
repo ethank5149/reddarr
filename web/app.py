@@ -215,6 +215,7 @@ def posts(
     sort_order: Optional[str] = Query("desc"),
     has_media: Optional[bool] = None,
     media_type: Optional[str] = None,
+    nsfw: Optional[str] = None,  # "include" | "exclude" | None (show all)
 ):
     # Whitelist sort fields to prevent SQL injection
     allowed_sort_by = {"created_utc", "title", "ingested_at"}
@@ -250,6 +251,12 @@ def posts(
             query += " AND media_url IS NOT NULL"
         elif has_media is False:
             query += " AND (media_url IS NULL OR media_url = '')"
+
+        # NSFW filter - check raw JSON for over_18 field
+        if nsfw == "exclude":
+            query += " AND (raw IS NULL OR raw::text NOT LIKE '%\"over_18\":true%')"
+        elif nsfw == "include":
+            pass  # show all (default behavior)
 
         query += f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s"
         params.extend([limit, offset])
@@ -299,12 +306,21 @@ def posts(
                     rel = os.path.relpath(m_thumb_path, THUMB_PATH)
                     thumb_url = f"/thumb/{rel}"
 
+            preview_url = None
             # Only use remote URLs as fallback when no local files
             if raw:
                 try:
                     data = raw if isinstance(raw, dict) else json.loads(raw)
                     selftext = data.get("selftext")
                     created_ts = data.get("created_utc")
+
+                    # Extract preview thumbnail (works for both videos and images)
+                    if not thumb_url and "preview" in data:
+                        for img in data.get("preview", {}).get("images", []):
+                            u = img.get("source", {}).get("url")
+                            if u:
+                                preview_url = u
+                                break
 
                     # For videos: use remote as fallback only if no local
                     if is_video:
@@ -365,6 +381,7 @@ def posts(
                     "created_utc": created_ts
                     or (created_utc.isoformat() if created_utc else None),
                     "thumb_url": thumb_url,
+                    "preview_url": preview_url,
                 }
             )
         return results
@@ -859,6 +876,9 @@ def _run_thumb_job(job_id: str, rows: list, force: bool):
             continue
 
         if not file_path or not os.path.exists(file_path):
+            err_msg = f"source file not found: {file_path}"
+            errors.append(err_msg)
+            logger.warning(f"Thumb job {job_id}: {err_msg}")
             with _thumb_jobs_lock:
                 _thumb_jobs[job_id]["done"] += 1
                 _thumb_jobs[job_id]["skipped"] = (
@@ -960,8 +980,27 @@ def thumb_backfill():
         )
         all_rows = cur.fetchall()
 
-    # Include only rows where the thumb is absent: no DB path, or path set but file missing
-    rows = [row for row in all_rows if not row[2] or not os.path.exists(row[2])]
+    # Include only rows where the thumb is absent or stale
+    rows = []
+    files_missing = 0
+    thums_missing = 0
+    for row in all_rows:
+        media_id, file_path, thumb_path = row
+        # Check if source file exists
+        if not file_path or not os.path.exists(file_path):
+            files_missing += 1
+            continue
+        # Check if thumb is missing or stale
+        if not thumb_path or not os.path.exists(thumb_path):
+            thums_missing += 1
+            rows.append(row)
+
+    logger.info(
+        f"Backfill: {len(all_rows)} total, {files_missing} files missing, {thums_missing} need thumbs"
+    )
+
+    if not rows:
+        return {"job_id": None, "total": 0, "message": "No items need thumbnails"}
 
     job_id = str(uuid.uuid4())
     with _thumb_jobs_lock:
@@ -1161,49 +1200,72 @@ def media_rescan():
         all_existing = existing_urls | queued_urls
 
     new_queue_count = 0
-    post_count = 0
+    posts_scanned = 0
     urls_found = 0
+    errors = []
 
-    for post_id, url, raw, subreddit, author, title in post_rows:
-        if not raw:
-            continue
+    try:
+        for post_id, url, raw, subreddit, author, title in post_rows:
+            if not raw:
+                continue
 
-        try:
-            data = raw if isinstance(raw, dict) else json.loads(raw)
-        except:
-            continue
+            try:
+                data = raw if isinstance(raw, dict) else json.loads(raw)
+            except Exception as e:
+                errors.append(f"post {post_id}: parse error")
+                continue
 
-        # Extract all media URLs from this post's raw JSON
-        extracted = _extract_media_urls_from_raw(data, url)
+            # Extract all media URLs from this post's raw JSON
+            try:
+                extracted = _extract_media_urls_from_raw(data, url)
+            except Exception as e:
+                errors.append(f"post {post_id}: extract error - {e}")
+                continue
 
-        for media_url in extracted:
-            if media_url not in all_existing:
-                # Queue this new URL
-                rd.lpush(
-                    "media_queue",
-                    json.dumps(
-                        {
-                            "post_id": post_id,
-                            "url": media_url,
-                            "subreddit": subreddit,
-                            "author": author,
-                            "title": title or "",
-                        }
-                    ),
-                )
-                new_queue_count += 1
-                all_existing.add(media_url)  # prevent duplicates within same batch
+            for media_url in extracted:
+                if media_url not in all_existing:
+                    # Queue this new URL
+                    try:
+                        rd.lpush(
+                            "media_queue",
+                            json.dumps(
+                                {
+                                    "post_id": post_id,
+                                    "url": media_url,
+                                    "subreddit": subreddit,
+                                    "author": author,
+                                    "title": title or "",
+                                }
+                            ),
+                        )
+                        new_queue_count += 1
+                        all_existing.add(
+                            media_url
+                        )  # prevent duplicates within same batch
+                    except Exception as e:
+                        errors.append(f"queue error for {media_url}: {e}")
 
-        if extracted:
-            post_count += 1
-            urls_found += len(extracted)
+            if extracted:
+                posts_scanned += 1
+                urls_found += len(extracted)
+    except Exception as e:
+        logger.error(f"Media rescan error: {e}")
+        return {
+            "error": str(e),
+            "posts_scanned": posts_scanned,
+            "urls_found": urls_found,
+            "newly_queued": new_queue_count,
+        }
+
+    if errors:
+        logger.warning(f"Media rescan had {len(errors)} errors: {errors[:10]}")
 
     logger.info(
-        f"Media rescan: found {urls_found} URLs across {post_count} posts, queued {new_queue_count} new"
+        f"Media rescan: found {urls_found} URLs across {posts_scanned} posts, queued {new_queue_count} new"
     )
 
     return {
-        "posts_scanned": len(post_count),
+        "posts_scanned": posts_scanned,
         "urls_found": urls_found,
         "newly_queued": new_queue_count,
     }
