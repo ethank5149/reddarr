@@ -45,15 +45,15 @@ export default function App(){
           setLastUpdated(new Date())
 
           // Update live stats + per-target data in admin panel
-          setAdminData(prev => prev ? {
-            ...prev,
-            total_posts: data.total_posts ?? prev.total_posts,
-            total_comments: data.total_comments ?? prev.total_comments,
-            downloaded_media: data.downloaded_media ?? prev.downloaded_media,
-            pending_media: data.pending_media ?? prev.pending_media,
-            total_media: data.total_media ?? prev.total_media,
-            targets: data.targets ?? prev.targets,
-          } : prev)
+          setAdminData(prev => ({
+            ...(prev || {}),
+            total_posts: data.total_posts ?? prev?.total_posts,
+            total_comments: data.total_comments ?? prev?.total_comments,
+            downloaded_media: data.downloaded_media ?? prev?.downloaded_media,
+            pending_media: data.pending_media ?? prev?.pending_media,
+            total_media: data.total_media ?? prev?.total_media,
+            targets: data.targets ?? prev?.targets,
+          }))
 
           // Update health status
           if(data.health) setHealthStatus(data.health)

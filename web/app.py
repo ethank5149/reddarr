@@ -28,8 +28,8 @@ from prometheus_client import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-posts_total = Counter("reddit_posts_total", "Total posts ingested", ["subreddit"])
-comments_total = Counter(
+posts_total = Gauge("reddit_posts_total", "Total posts ingested", ["subreddit"])
+comments_total = Gauge(
     "reddit_comments_total", "Total comments ingested", ["subreddit"]
 )
 media_queued = Counter("reddit_media_queued_total", "Total media items queued")
@@ -134,6 +134,13 @@ def root():
     if os.path.exists("dist/index.html"):
         return FileResponse("dist/index.html")
     return {"detail": "Not Found"}
+
+
+@app.get("/icon.png")
+def icon():
+    if os.path.exists("dist/icon.png"):
+        return FileResponse("dist/icon.png")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 @app.get("/api/debug/{post_id}")
@@ -369,43 +376,47 @@ def list_authors(limit: int = Query(50, ge=1, le=200)):
 def admin_stats():
     with get_db_cursor() as cur:
         cur.execute("""
-            SELECT type, name, enabled, last_created,
-                   EXTRACT(EPOCH FROM last_created) as last_ts,
-                   EXTRACT(EPOCH FROM now() - last_created) as seconds_ago
-            FROM targets
-            ORDER BY type, name
+            SELECT
+                t.type,
+                t.name,
+                t.enabled,
+                t.last_created,
+                EXTRACT(EPOCH FROM now() - t.last_created) AS seconds_ago,
+                COUNT(DISTINCT p.id) AS post_count,
+                COUNT(DISTINCT m.id) AS total_media,
+                COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
+                COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
+            FROM targets t
+            LEFT JOIN posts p ON (t.type = 'subreddit' AND p.subreddit = t.name)
+                              OR (t.type = 'user'      AND p.author    = t.name)
+            LEFT JOIN media m ON m.post_id = p.id
+            GROUP BY t.type, t.name, t.enabled, t.last_created
+            ORDER BY t.type, t.name
         """)
         targets = []
 
         for row in cur.fetchall():
-            ttype, name, enabled, last_created, last_ts, seconds_ago = row
-
-            if ttype == "subreddit":
-                cur.execute("SELECT COUNT(*) FROM posts WHERE subreddit = %s", (name,))
-            else:
-                cur.execute("SELECT COUNT(*) FROM posts WHERE author = %s", (name,))
-            post_count = cur.fetchone()[0]
-
-            cur.execute(
-                """
-                SELECT COUNT(*), 
-                       COUNT(CASE WHEN m.status = 'done' THEN 1 END), 
-                       COUNT(CASE WHEN m.status = 'pending' THEN 1 END)
-                FROM media m
-                JOIN posts p ON m.post_id = p.id
-                WHERE p.subreddit = %s OR p.author = %s
-            """,
-                (name, name),
-            )
-            media_row = cur.fetchone()
-            total_media = media_row[0] or 0
-            downloaded_media = media_row[1] or 0
-            pending_media = media_row[2] or 0
+            (
+                ttype,
+                name,
+                enabled,
+                last_created,
+                seconds_ago,
+                post_count,
+                total_media,
+                downloaded_media,
+                pending_media,
+            ) = row
+            seconds_ago = float(seconds_ago) if seconds_ago is not None else None
+            post_count = post_count or 0
+            total_media = total_media or 0
+            downloaded_media = downloaded_media or 0
+            pending_media = pending_media or 0
 
             rate = 0
             eta_seconds = None
             if last_created and seconds_ago and seconds_ago > 0:
-                rate = post_count / seconds_ago if seconds_ago > 0 else 0
+                rate = post_count / seconds_ago
                 remaining = max(0, 1000 - post_count)
                 if rate > 0:
                     eta_seconds = remaining / rate
@@ -663,44 +674,44 @@ async def event_stream():
             try:
                 cur = conn.cursor()
                 cur.execute("""
-                    SELECT type, name, enabled, last_created,
-                           EXTRACT(EPOCH FROM now() - last_created) as seconds_ago
-                    FROM targets ORDER BY type, name
+                    SELECT
+                        t.type,
+                        t.name,
+                        t.enabled,
+                        t.last_created,
+                        EXTRACT(EPOCH FROM now() - t.last_created) AS seconds_ago,
+                        COUNT(DISTINCT p.id) AS post_count,
+                        COUNT(DISTINCT m.id) AS total_media,
+                        COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
+                        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
+                    FROM targets t
+                    LEFT JOIN posts p ON (t.type = 'subreddit' AND p.subreddit = t.name)
+                                      OR (t.type = 'user'      AND p.author    = t.name)
+                    LEFT JOIN media m ON m.post_id = p.id
+                    GROUP BY t.type, t.name, t.enabled, t.last_created
+                    ORDER BY t.type, t.name
                 """)
                 target_rows = cur.fetchall()
                 targets = []
                 for row in target_rows:
-                    ttype, name, enabled, last_created, seconds_ago = row
-                    # EXTRACT returns Decimal in psycopg2 — cast to float for JSON
+                    (
+                        ttype,
+                        name,
+                        enabled,
+                        last_created,
+                        seconds_ago,
+                        post_count,
+                        tot_media,
+                        dl_media,
+                        pend_media,
+                    ) = row
                     seconds_ago = (
                         float(seconds_ago) if seconds_ago is not None else None
                     )
-
-                    if ttype == "subreddit":
-                        cur.execute(
-                            "SELECT COUNT(*) FROM posts WHERE subreddit = %s", (name,)
-                        )
-                    else:
-                        cur.execute(
-                            "SELECT COUNT(*) FROM posts WHERE author = %s", (name,)
-                        )
-                    post_count = cur.fetchone()[0]
-
-                    cur.execute(
-                        """
-                        SELECT COUNT(*),
-                               COUNT(CASE WHEN m.status = 'done' THEN 1 END),
-                               COUNT(CASE WHEN m.status = 'pending' THEN 1 END)
-                        FROM media m
-                        JOIN posts p ON m.post_id = p.id
-                        WHERE p.subreddit = %s OR p.author = %s
-                    """,
-                        (name, name),
-                    )
-                    media_row = cur.fetchone()
-                    tot_media = media_row[0] or 0
-                    dl_media = media_row[1] or 0
-                    pend_media = media_row[2] or 0
+                    post_count = post_count or 0
+                    tot_media = tot_media or 0
+                    dl_media = dl_media or 0
+                    pend_media = pend_media or 0
 
                     rate = 0
                     eta_seconds = None
@@ -866,12 +877,12 @@ async def event_stream():
 
 @app.get("/metrics")
 def metrics():
-    if not redis_client:
-        return PlainTextResponse("Redis not available", status_code=503)
-
-    rd = get_redis()
-    queue_len = rd.llen("media_queue")
-    queue_length.set(queue_len)
+    if redis_client:
+        try:
+            queue_len = redis_client.llen("media_queue")
+            queue_length.set(queue_len)
+        except Exception as e:
+            logger.warning(f"Redis unavailable for metrics: {e}")
 
     try:
         with get_db_cursor() as cur:

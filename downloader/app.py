@@ -334,7 +334,7 @@ while True:
             db.rollback()
             with db.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) ON CONFLICT (post_id) DO NOTHING",
+                    "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1)",
                     (post_id, url),
                 )
                 db.commit()
