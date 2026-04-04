@@ -688,7 +688,7 @@ export default function App(){
             <div style={{display:"flex",gap:"4px",background:"#1a1a1a",padding:"4px",borderRadius:"10px"}}>
               {[
                 {to:"/",label:"Browse",icon:"⊞"},
-                {to:"/archive",label:"Archive",icon:"🗃"},
+                {to:"/archive",label:"Hidden",icon:"👁"},
                 {to:"/audit",label:"Audit",icon:"✓"},
                 {to:"/admin",label:"Admin",icon:"⚙"}
               ].map(tab=>(
@@ -708,7 +708,7 @@ export default function App(){
             )}
             <div style={{position:"relative"}}>
               <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
-              <input type="text" placeholder="Search archived posts..." value={search} onChange={handleSearch}
+              <input type="text" placeholder="Search all posts..." value={search} onChange={handleSearch}
                 style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"320px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"all 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
             </div>
           </div>
@@ -722,7 +722,7 @@ export default function App(){
             <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
               <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#46d160,#2da64d)",borderRadius:"2px"}} />
               <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Audit Dashboard</h2>
-              <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>Archived Assets</span>
+              <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>Hidden Assets</span>
             </div>
             <button onClick={()=>{loadAuditSummary();loadAuditPosts()}} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
           </div>
@@ -730,7 +730,7 @@ export default function App(){
           {auditData && (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"16px",marginBottom:"32px"}}>
               {[
-                {label:"Total Archived",value:auditData.total_archived_posts,color:"#fff",icon:"📦"},
+                {label:"Total Posts",value:auditData.total_archived_posts,color:"#fff",icon:"📦"},
                 {label:"Posts All OK",value:auditData.posts_all_ok,color:"#46d160",icon:"✓"},
                 {label:"Posts w/Issues",value:auditData.posts_with_issues,color:auditData.posts_with_issues>0?"#ff4500":"#46d160",icon:"⚠"},
                 {label:"Media OK",value:auditData.media_ok,color:"#46d160",icon:"✓"},
@@ -898,7 +898,7 @@ export default function App(){
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"16px",marginBottom:"40px"}}>
               {[
                 {label:"Active Posts",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
-                {label:"Archived Posts",value:adminData.archived_posts,color:"#888",icon:"🗃"},
+                {label:"Hidden Posts",value:adminData.archived_posts,color:"#888",icon:"👁"},
                 {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
                 {label:"Media Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
                 {label:"Media Pending",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
@@ -1351,9 +1351,9 @@ export default function App(){
                         <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
                       </div>
-                      <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Archive this post"
+                      <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Hide this post"
                         style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
-                        🗃
+                        👁
                       </button>
                     </div>
                 </div>
@@ -1383,13 +1383,13 @@ export default function App(){
         )}
       </>)}
 
-      {/* ── ARCHIVE TAB ── */}
+      {/* ── HIDDEN TAB ── */}
       {activeTab === "archive" && (<>
-        {/* Archive filter/sort bar */}
+        {/* Hidden filter/sort bar */}
         {!archiveSearchResults && (
           <div style={{borderBottom:"1px solid #1e1e1e",background:"#111",padding:"12px 24px"}}>
             <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
-              <span style={{fontSize:"12px",color:"#888",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap"}}>🗃 Archive</span>
+              <span style={{fontSize:"12px",color:"#888",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap"}}>👁 Hidden</span>
               <input type="text" placeholder="r/ subreddit" value={archiveFilterSubreddit}
                 onChange={e=>{
                   const v=e.target.value; setArchiveFilterSubreddit(v)
@@ -1440,7 +1440,7 @@ export default function App(){
               {/* Archive search */}
               <div style={{position:"relative",marginLeft:"auto"}}>
                 <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
-                <input type="text" placeholder="Search archived posts..." value={archiveSearch} onChange={handleArchiveSearch}
+                <input type="text" placeholder="Search hidden posts..." value={archiveSearch} onChange={handleArchiveSearch}
                   style={{padding:"10px 16px 10px 40px",borderRadius:"20px",border:"1px solid #333",width:"280px",background:"#1a1a1a",color:"#fff",fontSize:"13px",outline:"none"}}/>
               </div>
             </div>
@@ -1472,7 +1472,7 @@ export default function App(){
           {!archiveSearchResults && (
             <>
               {archivePosts.length===0 && !archiveIsLoading && (
-                <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>No archived posts yet.</div>
+                <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>No hidden posts yet.</div>
               )}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
                 {archivePosts.map(p=>(
@@ -1522,9 +1522,9 @@ export default function App(){
                         <div style={{fontSize:"11px",color:"#555",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#888"}}>{p.title}</div>
                       </div>
-                      <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unarchive this post"
-                        style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"6px",color:"#46d160",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
-                        ↩
+                      <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unhide this post"
+                        style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                        👁
                       </button>
                     </div>
                   </div>
@@ -1665,17 +1665,17 @@ export default function App(){
                 </div>
               )}
 
-              {/* Archive / Unarchive */}
+              {/* Hide / Unhide */}
               <div style={{marginBottom:"20px"}}>
                 {selectedPost.archived ? (
                   <button onClick={()=>unarchivePost(selectedPost.id)}
                     style={{padding:"10px 20px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
-                    ↩ Unarchive Post
+                    ↩ Unhide Post
                   </button>
                 ) : (
                   <button onClick={()=>archivePost(selectedPost.id)}
                     style={{padding:"10px 20px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
-                    🗃 Archive Post
+                    👁 Hide Post
                   </button>
                 )}
               </div>
