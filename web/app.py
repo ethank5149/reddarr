@@ -401,23 +401,23 @@ def posts(
             if "video" in media_type:
                 media_conditions.append(
                     "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
-                    "(LOWER(m.file_path) LIKE '%.mp4' OR LOWER(m.file_path) LIKE '%.webm' OR LOWER(m.file_path) LIKE '%.mkv' OR LOWER(m.file_path) LIKE '%.mov')) OR "
-                    "url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
+                    "(LOWER(m.file_path) LIKE '%%.mp4' OR LOWER(m.file_path) LIKE '%%.webm' OR LOWER(m.file_path) LIKE '%%.mkv' OR LOWER(m.file_path) LIKE '%%.mov')) OR "
+                    "url LIKE '%%v.redd.it%%' OR url LIKE '%%youtube.com%%' OR url LIKE '%%youtu.be%%' OR url LIKE '%%streamable.com%%')"
                 )
             if "image" in media_type:
                 media_conditions.append(
                     "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
-                    "(LOWER(m.file_path) LIKE '%.jpg' OR LOWER(m.file_path) LIKE '%.jpeg' OR LOWER(m.file_path) LIKE '%.png' OR "
-                    "LOWER(m.file_path) LIKE '%.gif' OR LOWER(m.file_path) LIKE '%.webp')) OR "
-                    "(url LIKE '%i.redd.it%' OR url LIKE '%i.imgur.com%' OR url LIKE '%.jpg' OR url LIKE '%.jpeg' OR "
-                    "url LIKE '%.png' OR url LIKE '%.gif' OR url LIKE '%.webp'))"
+                    "(LOWER(m.file_path) LIKE '%%.jpg' OR LOWER(m.file_path) LIKE '%%.jpeg' OR LOWER(m.file_path) LIKE '%%.png' OR "
+                    "LOWER(m.file_path) LIKE '%%.gif' OR LOWER(m.file_path) LIKE '%%.webp')) OR "
+                    "(url LIKE '%%i.redd.it%%' OR url LIKE '%%i.imgur.com%%' OR url LIKE '%%.jpg' OR url LIKE '%%.jpeg' OR "
+                    "url LIKE '%%.png' OR url LIKE '%%.gif' OR url LIKE '%%.webp'))"
                 )
             if "text" in media_type:
                 media_conditions.append(
                     "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND "
-                    "(url IS NULL OR (url NOT LIKE '%i.redd.it%' AND url NOT LIKE '%i.imgur.com%' AND url NOT LIKE '%.jpg' AND "
-                    "url NOT LIKE '%.jpeg' AND url NOT LIKE '%.png' AND url NOT LIKE '%.gif' AND url NOT LIKE '%.webp' AND "
-                    "url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%'))"
+                    "(url IS NULL OR (url NOT LIKE '%%i.redd.it%%' AND url NOT LIKE '%%i.imgur.com%%' AND url NOT LIKE '%%.jpg' AND "
+                    "url NOT LIKE '%%.jpeg' AND url NOT LIKE '%%.png' AND url NOT LIKE '%%.gif' AND url NOT LIKE '%%.webp' AND "
+                    "url NOT LIKE '%%v.redd.it%%' AND url NOT LIKE '%%youtube.com%%' AND url NOT LIKE '%%youtu.be%%'))"
                 )
             if media_conditions:
                 query += " AND (" + " OR ".join(media_conditions) + ")"
