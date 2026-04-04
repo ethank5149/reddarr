@@ -363,7 +363,7 @@ def posts(
     has_media: Optional[bool] = None,
     media_type: Optional[List[str]] = Query(None),
     nsfw: Optional[str] = None,  # "include" | "exclude" | None (show all)
-    archived: Optional[bool] = Query(False),  # default: only non-archived posts
+    archived: Optional[bool] = Query(None),  # default: all posts (None shows all)
 ):
     # Whitelist sort fields to prevent SQL injection
     allowed_sort_by = {"created_utc", "title", "ingested_at"}
@@ -381,11 +381,12 @@ def posts(
         """
         params: list[Any] = []
 
-        # Archive filter
-        if archived:
-            query += " AND p.archived = TRUE"
-        else:
-            query += " AND p.archived = FALSE"
+        # Archive/Hidden filter - None shows all, True shows hidden, False shows visible
+        if archived is not None:
+            if archived:
+                query += " AND p.archived = TRUE"
+            else:
+                query += " AND p.archived = FALSE"
 
         if subreddit:
             query += " AND subreddit = %s"
@@ -1166,17 +1167,19 @@ def backfill_status():
 
 @app.get("/api/admin/audit/summary")
 def audit_summary():
-    """Get summary statistics for the audit dashboard."""
+    """Get summary statistics for the audit dashboard.
+
+    Shows all posts since all scraped content is considered fully archived.
+    """
     with get_db_cursor() as cur:
-        # Total archived posts
-        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
-        total_archived = cur.fetchone()[0] or 0
+        # Total posts (all are considered archived since they're fully scraped)
+        cur.execute("SELECT COUNT(*) FROM posts")
+        total_posts = cur.fetchone()[0] or 0
 
         # Posts with media
         cur.execute("""
             SELECT COUNT(DISTINCT p.id) FROM posts p
             JOIN media m ON m.post_id = p.id
-            WHERE p.archived = TRUE
         """)
         posts_with_media = cur.fetchone()[0] or 0
 
@@ -1184,7 +1187,7 @@ def audit_summary():
         cur.execute("""
             SELECT COUNT(DISTINCT p.id) FROM posts p
             JOIN media m ON m.post_id = p.id
-            WHERE p.archived = TRUE AND m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
+            WHERE m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
         """)
         posts_all_downloaded = cur.fetchone()[0] or 0
 
@@ -1192,23 +1195,19 @@ def audit_summary():
         cur.execute("""
             SELECT COUNT(DISTINCT p.id) FROM posts p
             JOIN media m ON m.post_id = p.id
-            WHERE p.archived = TRUE AND (
-                m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
-            )
+            WHERE m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
         """)
         posts_with_missing = cur.fetchone()[0] or 0
 
         # Total media items
-        cur.execute(
-            "SELECT COUNT(*) FROM media m JOIN posts p ON m.post_id = p.id WHERE p.archived = TRUE"
-        )
+        cur.execute("SELECT COUNT(*) FROM media m JOIN posts p ON m.post_id = p.id")
         total_media = cur.fetchone()[0] or 0
 
         # Media downloaded
         cur.execute("""
             SELECT COUNT(*) FROM media m
             JOIN posts p ON m.post_id = p.id
-            WHERE p.archived = TRUE AND m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
+            WHERE m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
         """)
         media_downloaded = cur.fetchone()[0] or 0
 
@@ -1216,25 +1215,12 @@ def audit_summary():
         cur.execute("""
             SELECT COUNT(*) FROM media m
             JOIN posts p ON m.post_id = p.id
-            WHERE p.archived = TRUE AND (m.status != 'done' OR m.file_path IS NULL OR m.file_path = '')
+            WHERE m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
         """)
         media_missing = cur.fetchone()[0] or 0
 
-        # Media files on disk but DB says missing (orphans)
-        cur.execute("""
-            SELECT COUNT(*) FROM media m
-            JOIN posts p ON m.post_id = p.id
-            WHERE p.archived = TRUE AND m.status = 'done' AND (m.file_path IS NULL OR m.file_path = '' OR NOT exists (SELECT 1 from media m2 where m2.file_path = m.file_path))
-        """)
-        # This is handled differently - let's count posts by status
-        cur.execute("""
-            SELECT COUNT(DISTINCT p.id) FROM posts p
-            WHERE p.archived = TRUE
-        """)
-        total_archived_check = cur.fetchone()[0] or 0
-
         return {
-            "total_archived_posts": total_archived,
+            "total_archived_posts": total_posts,
             "posts_with_media": posts_with_media,
             "posts_all_ok": posts_all_downloaded,
             "posts_with_issues": posts_with_missing,
@@ -1251,13 +1237,12 @@ def audit_posts(
     status_filter: Optional[str] = None,  # "ok" | "missing" | "partial"
     subreddit: Optional[str] = None,
 ):
-    """Get detailed audit results for each archived post."""
+    """Get detailed audit results for each post."""
     with get_db_cursor() as cur:
-        # Build query based on filters
+        # Build query based on filters - show all posts
         base_query = """
             SELECT p.id, p.title, p.subreddit, p.author, p.created_utc, p.url
             FROM posts p
-            WHERE p.archived = TRUE
         """
         params: list[Any] = []
 
