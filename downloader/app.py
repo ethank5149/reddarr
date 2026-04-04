@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from pathlib import Path
 import logging
-from prometheus_client import Counter, Gauge, Histogram, generate_latest
+from prometheus_client import (
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    start_http_server,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -21,6 +27,18 @@ media_download_bytes = Counter(
     "reddit_media_download_bytes_total", "Total bytes downloaded"
 )
 download_duration = Histogram("reddit_download_duration_seconds", "Download duration")
+downloader_errors_total = Counter(
+    "reddit_downloader_errors_total", "Total downloader errors", ["error_type"]
+)
+queue_wait_seconds = Histogram(
+    "reddit_queue_wait_seconds",
+    "Time item spent in queue before processing",
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600),
+)
+
+# Start Prometheus metrics HTTP server on port 8002
+start_http_server(8002)
+logger.info("Prometheus metrics server started on port 8002")
 
 logger.info("Starting downloader...")
 
@@ -193,7 +211,9 @@ def get_post_dir(post_id, subreddit=None, author=None):
 
 while True:
     logger.info("Waiting for media in queue...")
+    _dequeue_start = time.monotonic()
     _, data = rd.brpop("media_queue")
+    queue_wait_seconds.observe(time.monotonic() - _dequeue_start)
     item = json.loads(data)
     post_id = item.get("post_id")
     url = item.get("url")
@@ -463,6 +483,7 @@ while True:
     except Exception as e:
         logger.error(f"ERROR processing {post_id}: {e}", exc_info=True)
         media_downloaded.labels(status="failed").inc()
+        downloader_errors_total.labels(error_type="processing").inc()
         try:
             conn = get_db()
             conn.rollback()

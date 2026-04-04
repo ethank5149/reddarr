@@ -2,7 +2,13 @@ import os, time, json, threading
 import praw, psycopg2, redis
 from datetime import datetime, timezone
 import logging
-from prometheus_client import Counter, Gauge, Histogram, generate_latest
+from prometheus_client import (
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    start_http_server,
+)
 
 import sys
 
@@ -25,6 +31,16 @@ ingest_cycle_duration = Histogram(
     "reddit_ingest_cycle_duration_seconds", "Ingest cycle duration"
 )
 targets_enabled = Gauge("reddit_targets_enabled", "Number of enabled targets")
+ingester_errors_total = Counter(
+    "reddit_ingester_errors_total", "Total ingester errors", ["error_type"]
+)
+posts_skipped_total = Counter(
+    "reddit_posts_skipped_total", "Posts already in DB (skipped)", ["subreddit"]
+)
+
+# Start Prometheus metrics HTTP server on port 8001
+start_http_server(8001)
+logger.info("Prometheus metrics server started on port 8001")
 
 logger.info("Starting ingester...")
 
@@ -214,6 +230,7 @@ def ingest_post(db, p):
         cur.execute("SELECT id FROM posts WHERE id=%s", (p.id,))
         if cur.fetchone() is not None:
             cur.close()
+            posts_skipped_total.labels(subreddit=str(p.subreddit)).inc()
             return False  # already exists
 
         created = datetime.fromtimestamp(p.created_utc, tz=timezone.utc).replace(
@@ -338,6 +355,7 @@ def scrape_target(ttype, name, sort_method="new"):
                     new_posts_found += 1
             except Exception as e:
                 logger.error(f"Failed to ingest post {p.id}: {e}")
+                ingester_errors_total.labels(error_type="ingest_post").inc()
 
             if oldest_seen is None or created < oldest_seen:
                 oldest_seen = created
@@ -348,6 +366,7 @@ def scrape_target(ttype, name, sort_method="new"):
 
     except Exception as e:
         logger.error(f"Error scraping {ttype}:{name} ({sort_method}): {e}")
+        ingester_errors_total.labels(error_type="scrape_target").inc()
 
     return new_posts_found, posts_processed
 

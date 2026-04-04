@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import json
+import time
 import redis
 import shutil
 import subprocess
@@ -54,7 +55,42 @@ target_last_fetch = Gauge(
 )
 ingest_duration = Histogram("reddit_ingest_duration_seconds", "Ingest cycle duration")
 
+# HTTP request metrics
+http_requests_total = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "endpoint", "status_code"],
+)
+http_request_duration_seconds = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request duration in seconds",
+    ["method", "endpoint"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
 app = FastAPI(title="Reddit Archive API", version="4.0.0")
+
+
+@app.middleware("http")
+async def metrics_middleware(request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    duration = time.monotonic() - start
+    # Use route template to avoid high-cardinality path labels
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", request.url.path)
+    http_requests_total.labels(
+        method=request.method,
+        endpoint=endpoint,
+        status_code=str(response.status_code),
+    ).inc()
+    http_request_duration_seconds.labels(
+        method=request.method,
+        endpoint=endpoint,
+    ).observe(duration)
+    return response
+
+
 logger.info("API STARTED - version 4.0.0")
 
 # Use absolute paths anchored to this file's location for dist assets

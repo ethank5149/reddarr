@@ -1,0 +1,203 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {"list": []},
+  "description": "High-level overview of the Reddit Archive system",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {"title": "Ingestion", "url": "/d/reddit-ingestion", "type": "dashboards", "icon": "external link"},
+    {"title": "Downloads", "url": "/d/reddit-downloads", "type": "dashboards", "icon": "external link"},
+    {"title": "Infrastructure", "url": "/d/reddit-infra", "type": "dashboards", "icon": "external link"}
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Posts in DB",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_posts_in_db", "instant": true, "legendFormat": "Posts"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}, "unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}}
+    },
+    {
+      "id": 2,
+      "title": "Total Comments in DB",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_comments_in_db", "instant": true, "legendFormat": "Comments"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "purple"}, "unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "purple", "value": null}]}}}
+    },
+    {
+      "id": 3,
+      "title": "Total Media Records",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_media_in_db", "instant": true, "legendFormat": "Media"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "orange"}, "unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "orange", "value": null}]}}}
+    },
+    {
+      "id": 4,
+      "title": "Downloaded Media",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_media_downloaded_in_db", "instant": true, "legendFormat": "Downloaded"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "green"}, "unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 5,
+      "title": "Queue Depth",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_queue_length", "instant": true, "legendFormat": "Queue"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 100}, {"color": "red", "value": 1000}]}}}
+    },
+    {
+      "id": 6,
+      "title": "Download Coverage",
+      "type": "gauge",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_media_downloaded_in_db / clamp_min(reddit_media_in_db, 1) * 100", "instant": true, "legendFormat": "Coverage %"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "showThresholdLabels": false, "showThresholdMarkers": true},
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 50}, {"color": "green", "value": 90}]}}}
+    },
+    {
+      "id": 7,
+      "title": "Posts & Comments Over Time",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_posts_in_db", "legendFormat": "Posts"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_comments_in_db", "legendFormat": "Comments"}
+      ],
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "id": 8,
+      "title": "Queue Length & Media Downloaded Over Time",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_queue_length", "legendFormat": "Queue Depth"},
+        {"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_media_downloaded_in_db", "legendFormat": "Downloaded Media"}
+      ],
+      "options": {"tooltip": {"mode": "multi"}, "legend": {"displayMode": "list", "placement": "bottom"}},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"lineWidth": 2, "fillOpacity": 10}}}
+    },
+    {
+      "id": 9,
+      "title": "Posts per Subreddit (Top 20)",
+      "type": "bargauge",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "topk(20, reddit_posts_total)", "instant": true, "legendFormat": "{{subreddit}}"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}}
+    },
+    {
+      "id": 10,
+      "title": "Enabled Targets",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_targets_enabled", "instant": true, "legendFormat": "Targets"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}}
+    },
+    {
+      "id": 11,
+      "title": "Post Ingestion Rate (5m)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(rate(reddit_posts_ingested_total[5m]))", "instant": true, "legendFormat": "Posts/s"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "reqps", "decimals": 4, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 12,
+      "title": "Download Rate (5m)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(reddit_media_downloaded_total{status='done'}[5m])", "instant": true, "legendFormat": "Downloads/s"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "reqps", "decimals": 4, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 13,
+      "title": "API Status",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 12, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job='api'}", "instant": true, "legendFormat": "API"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "textMode": "value_and_name"},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"1": {"text": "UP"}, "0": {"text": "DOWN"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 14,
+      "title": "Ingester Status",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 16, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job='ingester'}", "instant": true, "legendFormat": "Ingester"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "textMode": "value_and_name"},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"1": {"text": "UP"}, "0": {"text": "DOWN"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 15,
+      "title": "Downloader Status",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 20, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "up{job='downloader'}", "instant": true, "legendFormat": "Downloader"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "textMode": "value_and_name"},
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"1": {"text": "UP"}, "0": {"text": "DOWN"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}}
+    },
+    {
+      "id": 16,
+      "title": "Bytes Downloaded Total",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 6, "x": 12, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "reddit_media_download_bytes_total", "instant": true, "legendFormat": "Bytes"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}}
+    },
+    {
+      "id": 17,
+      "title": "Download Error Rate (5m)",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 6, "x": 18, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(reddit_media_downloaded_total{status='failed'}[5m]) / clamp_min(rate(reddit_media_downloaded_total[5m]), 0.0001) * 100", "instant": true, "legendFormat": "Error %"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["reddit-archive"],
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Reddit Archive - Overview",
+  "uid": "reddit-overview",
+  "version": 1
+}

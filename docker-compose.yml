@@ -92,6 +92,37 @@ services:
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
 
+  postgres-exporter:
+    container_name: reddit_archive_postgres_exporter
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis-exporter:
+    container_name: reddit_archive_redis_exporter
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  node-exporter:
+    container_name: reddit_archive_node_exporter
+    image: prom/node-exporter:latest
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/host:ro
+    pid: host
+    restart: unless-stopped
+
   prometheus:
     container_name: reddit_archive_prometheus
     image: prom/prometheus
@@ -100,15 +131,30 @@ services:
       - ./prometheus/data:/prometheus
     ports:
       - "${REDDIT_ARCHIVE_PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - api
+      - ingester
+      - downloader
+      - postgres-exporter
+      - redis-exporter
+      - node-exporter
+    restart: unless-stopped
 
   grafana:
     container_name: reddit_archive_grafana
     image: grafana/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/overview.json
     volumes:
       - ./grafana/data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
     ports:
       - "${REDDIT_ARCHIVE_GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
 
 secrets:
   postgres_password:
