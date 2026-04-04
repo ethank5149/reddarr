@@ -17,6 +17,7 @@ RUN npm ci --silent
 # Copy React source and build
 COPY index.html vite.config.js ./
 COPY src ./src
+COPY public ./public
 RUN npm run build
 
 # Copy Python requirements and app

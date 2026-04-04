@@ -230,7 +230,10 @@ while True:
                     """
                    INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                    VALUES(%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (sha256) DO UPDATE SET post_id = EXCLUDED.post_id
+                   ON CONFLICT (sha256) DO UPDATE SET 
+                     post_id = EXCLUDED.post_id,
+                     downloaded_at = EXCLUDED.downloaded_at,
+                     status = EXCLUDED.status
                    """,
                     (
                         post_id,
@@ -285,7 +288,11 @@ while True:
                         """
                         INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                         VALUES(%s,%s,%s,%s,%s,%s,%s)
-                        ON CONFLICT (sha256) DO UPDATE SET post_id = EXCLUDED.post_id, thumb_path = EXCLUDED.thumb_path
+                        ON CONFLICT (sha256) DO UPDATE SET 
+                          post_id = EXCLUDED.post_id, 
+                          thumb_path = EXCLUDED.thumb_path,
+                          downloaded_at = EXCLUDED.downloaded_at,
+                          status = EXCLUDED.status
                         """,
                         (post_id, url, path, thumb, h, datetime.utcnow(), status),
                     )
@@ -318,7 +325,10 @@ while True:
                         """
                        INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                        VALUES(%s,%s,%s,%s,%s,%s,%s)
-                       ON CONFLICT (sha256) DO UPDATE SET post_id = EXCLUDED.post_id
+                       ON CONFLICT (sha256) DO UPDATE SET 
+                         post_id = EXCLUDED.post_id,
+                         downloaded_at = EXCLUDED.downloaded_at,
+                         status = EXCLUDED.status
                        """,
                         (
                             post_id,
@@ -364,7 +374,10 @@ while True:
                             """
                            INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                            VALUES(%s,%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT (sha256) DO UPDATE SET post_id = EXCLUDED.post_id
+                           ON CONFLICT (sha256) DO UPDATE SET 
+                             post_id = EXCLUDED.post_id,
+                             downloaded_at = EXCLUDED.downloaded_at,
+                             status = EXCLUDED.status
                            """,
                             (
                                 post_id,

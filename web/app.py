@@ -3,6 +3,7 @@ import logging
 import os
 import json
 import redis
+import shutil
 import subprocess
 import threading
 import uuid
@@ -53,11 +54,21 @@ target_last_fetch = Gauge(
 )
 ingest_duration = Histogram("reddit_ingest_duration_seconds", "Ingest cycle duration")
 
-app = FastAPI(title="Reddit Archive API", version="3.0.0")
-logger.info("API STARTED - version 3.0.0")
+app = FastAPI(title="Reddit Archive API", version="4.0.0")
+logger.info("API STARTED - version 4.0.0")
+
+# Use absolute paths anchored to this file's location for dist assets
+_HERE = Path(__file__).parent
+DIST_DIR = _HERE / "dist"
 
 ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "/data")
 THUMB_PATH = os.getenv("THUMB_PATH", os.path.join(ARCHIVE_PATH, ".thumbs"))
+# Path where archived posts' media files are moved to
+ARCHIVE_MEDIA_PATH = os.getenv(
+    "ARCHIVE_MEDIA_PATH", os.path.join(ARCHIVE_PATH, ".archive")
+)
+# Thumbnails for archived posts mirror under THUMB_PATH/.archive
+ARCHIVE_THUMB_PATH = os.path.join(THUMB_PATH, ".archive")
 
 connection_pool = None
 redis_client = None
@@ -86,6 +97,13 @@ def startup():
     except Exception as e:
         logger.warning(f"Redis not available (queue features disabled): {e}")
         redis_client = None
+
+    # Ensure archive directories exist
+    for d in [ARCHIVE_MEDIA_PATH, ARCHIVE_THUMB_PATH]:
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
 
 
 @app.on_event("shutdown")
@@ -127,13 +145,22 @@ def get_redis():
     return redis_client
 
 
-if os.path.exists("dist"):
-    app.mount("/static", StaticFiles(directory="dist/static"), name="static")
+dist_dir = str(DIST_DIR)
+if (DIST_DIR / "static").exists():
+    app.mount("/static", StaticFiles(directory=str(DIST_DIR / "static")), name="static")
 
 
 @app.get("/media/{path:path}")
 def media(path: str):
     full_path = os.path.join(ARCHIVE_PATH, path)
+    if os.path.exists(full_path):
+        return FileResponse(full_path)
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.get("/archived-media/{path:path}")
+def archived_media(path: str):
+    full_path = os.path.join(ARCHIVE_MEDIA_PATH, path)
     if os.path.exists(full_path):
         return FileResponse(full_path)
     raise HTTPException(status_code=404, detail="Not Found")
@@ -147,17 +174,31 @@ def thumb(path: str):
     raise HTTPException(status_code=404, detail="Not Found")
 
 
+@app.get("/archived-thumb/{path:path}")
+def archived_thumb(path: str):
+    full_path = os.path.join(ARCHIVE_THUMB_PATH, path)
+    if os.path.exists(full_path):
+        return FileResponse(full_path)
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
 @app.get("/")
 def root():
-    if os.path.exists("dist/index.html"):
-        return FileResponse("dist/index.html")
+    idx = DIST_DIR / "index.html"
+    if idx.exists():
+        return FileResponse(str(idx))
     return {"detail": "Not Found"}
 
 
 @app.get("/icon.png")
 def icon():
-    if os.path.exists("dist/icon.png"):
-        return FileResponse("dist/icon.png")
+    ico = DIST_DIR / "icon.png"
+    if ico.exists():
+        return FileResponse(str(ico))
+    # Fallback to public/icon.png if dist hasn't been built yet
+    pub = _HERE / "public" / "icon.png"
+    if pub.exists():
+        return FileResponse(str(pub))
     raise HTTPException(status_code=404, detail="Not Found")
 
 
@@ -210,6 +251,36 @@ def _extract_video_url(url: Optional[str], raw: Optional[dict]) -> Optional[str]
     return None
 
 
+def _build_media_url(file_path: str) -> Optional[str]:
+    """Return the API URL for a media file, handling both regular and archived paths."""
+    if not file_path:
+        return None
+    if file_path.startswith(ARCHIVE_MEDIA_PATH):
+        rel = os.path.relpath(file_path, ARCHIVE_MEDIA_PATH)
+        return f"/archived-media/{rel}"
+    else:
+        try:
+            rel = os.path.relpath(file_path, ARCHIVE_PATH)
+            return f"/media/{rel}"
+        except ValueError:
+            return None
+
+
+def _build_thumb_url(thumb_path: str) -> Optional[str]:
+    """Return the API URL for a thumbnail, handling both regular and archived paths."""
+    if not thumb_path:
+        return None
+    if thumb_path.startswith(ARCHIVE_THUMB_PATH):
+        rel = os.path.relpath(thumb_path, ARCHIVE_THUMB_PATH)
+        return f"/archived-thumb/{rel}"
+    else:
+        try:
+            rel = os.path.relpath(thumb_path, THUMB_PATH)
+            return f"/thumb/{rel}"
+        except ValueError:
+            return None
+
+
 @app.get("/api/posts")
 def posts(
     limit: int = Query(50, ge=1, le=200),
@@ -221,6 +292,7 @@ def posts(
     has_media: Optional[bool] = None,
     media_type: Optional[List[str]] = Query(None),
     nsfw: Optional[str] = None,  # "include" | "exclude" | None (show all)
+    archived: Optional[bool] = Query(False),  # default: only non-archived posts
 ):
     # Whitelist sort fields to prevent SQL injection
     allowed_sort_by = {"created_utc", "title", "ingested_at"}
@@ -232,11 +304,17 @@ def posts(
 
     with get_db_cursor() as cur:
         query = """
-            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.archived
             FROM posts p
             WHERE 1=1
         """
         params = []
+
+        # Archive filter
+        if archived:
+            query += " AND p.archived = TRUE"
+        else:
+            query += " AND p.archived = FALSE"
 
         if subreddit:
             query += " AND subreddit = %s"
@@ -250,14 +328,12 @@ def posts(
             # Build OR conditions for multiple media types
             media_conditions = []
             if "video" in media_type:
-                # Video if: downloaded video OR video URL
                 media_conditions.append(
                     "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
                     "(LOWER(m.file_path) LIKE '%.mp4' OR LOWER(m.file_path) LIKE '%.webm' OR LOWER(m.file_path) LIKE '%.mkv' OR LOWER(m.file_path) LIKE '%.mov')) OR "
                     "url LIKE '%v.redd.it%' OR url LIKE '%youtube.com%' OR url LIKE '%youtu.be%' OR url LIKE '%streamable.com%')"
                 )
             if "image" in media_type:
-                # Image if: downloaded image OR image URL in posts table
                 media_conditions.append(
                     "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
                     "(LOWER(m.file_path) LIKE '%.jpg' OR LOWER(m.file_path) LIKE '%.jpeg' OR LOWER(m.file_path) LIKE '%.png' OR "
@@ -266,7 +342,6 @@ def posts(
                     "url LIKE '%.png' OR url LIKE '%.gif' OR url LIKE '%.webp'))"
                 )
             if "text" in media_type:
-                # Text if: no downloaded media AND no image/video URL
                 media_conditions.append(
                     "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND "
                     "url NOT LIKE '%i.redd.it%' AND url NOT LIKE '%i.imgur.com%' AND url NOT LIKE '%.jpg' AND "
@@ -302,6 +377,7 @@ def posts(
                 subreddit,
                 author,
                 created_utc,
+                is_archived,
             ) = row
             selftext = None
             created_ts = None
@@ -321,18 +397,16 @@ def posts(
 
             for m_id, m_file_path, m_thumb_path in media_rows:
                 if m_file_path and os.path.exists(m_file_path):
-                    rel = os.path.relpath(m_file_path, ARCHIVE_PATH)
-                    local_url = f"/media/{rel}"
-                    # Check extension to determine type
-                    if m_file_path.lower().endswith(
-                        (".mp4", ".webm", ".mkv", ".mov", ".avi")
-                    ):
-                        video_urls.append(local_url)
-                    else:
-                        image_urls.append(local_url)
+                    local_url = _build_media_url(m_file_path)
+                    if local_url:
+                        if m_file_path.lower().endswith(
+                            (".mp4", ".webm", ".mkv", ".mov", ".avi")
+                        ):
+                            video_urls.append(local_url)
+                        else:
+                            image_urls.append(local_url)
                 if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
-                    rel = os.path.relpath(m_thumb_path, THUMB_PATH)
-                    thumb_url = f"/thumb/{rel}"
+                    thumb_url = _build_thumb_url(m_thumb_path)
 
             preview_url = None
             # Only use remote URLs as fallback when no local files
@@ -410,6 +484,7 @@ def posts(
                     or (created_utc.isoformat() if created_utc else None),
                     "thumb_url": thumb_url,
                     "preview_url": preview_url,
+                    "archived": is_archived,
                 }
             )
         return results
@@ -420,7 +495,7 @@ def get_post(post_id: str):
     with get_db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, url, media_url, raw, subreddit, author, created_utc 
+            SELECT id, title, url, media_url, raw, subreddit, author, created_utc, archived
             FROM posts WHERE id = %s
         """,
             (post_id,),
@@ -429,17 +504,17 @@ def get_post(post_id: str):
         if not row:
             raise HTTPException(status_code=404, detail="Post not found")
 
-        post_id, title, url, media_url, raw, subreddit, author, created_utc = row
-
-        cur.execute(
-            """
-            SELECT name FROM tags 
-            JOIN post_tags ON tags.id = post_tags.tag_id 
-            WHERE post_id = %s
-        """,
-            (post_id,),
-        )
-        tags = [r[0] for r in cur.fetchall()]
+        (
+            post_id,
+            title,
+            url,
+            media_url,
+            raw,
+            subreddit,
+            author,
+            created_utc,
+            is_archived,
+        ) = row
 
         cur.execute(
             """
@@ -473,17 +548,16 @@ def get_post(post_id: str):
 
         for m_id, m_file_path, m_thumb_path in media_rows:
             if m_file_path and os.path.exists(m_file_path):
-                rel = os.path.relpath(m_file_path, ARCHIVE_PATH)
-                local_url = f"/media/{rel}"
-                if m_file_path.lower().endswith(
-                    (".mp4", ".webm", ".mkv", ".mov", ".avi")
-                ):
-                    video_urls.append(local_url)
-                else:
-                    image_urls.append(local_url)
+                local_url = _build_media_url(m_file_path)
+                if local_url:
+                    if m_file_path.lower().endswith(
+                        (".mp4", ".webm", ".mkv", ".mov", ".avi")
+                    ):
+                        video_urls.append(local_url)
+                    else:
+                        image_urls.append(local_url)
             if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
-                rel = os.path.relpath(m_thumb_path, THUMB_PATH)
-                thumb_url = f"/thumb/{rel}"
+                thumb_url = _build_thumb_url(m_thumb_path)
 
         # Build fallback URLs from raw JSON
         selftext = None
@@ -546,23 +620,171 @@ def get_post(post_id: str):
             "subreddit": subreddit,
             "author": author,
             "created_utc": created_utc.isoformat() if created_utc else None,
-            "tags": tags,
+            "archived": is_archived,
             "comments": comments,
         }
 
 
+# ---------------------------------------------------------------------------
+# Archive / Unarchive endpoints
+# ---------------------------------------------------------------------------
+
+
+def _move_post_media(post_id: str, archive: bool):
+    """Move all media files for a post between active and archive directories.
+    Updates media.file_path and media.thumb_path in the DB.
+    Returns (files_moved, errors)."""
+    if archive:
+        src_media_root = ARCHIVE_PATH
+        dst_media_root = ARCHIVE_MEDIA_PATH
+        src_thumb_root = THUMB_PATH
+        dst_thumb_root = ARCHIVE_THUMB_PATH
+    else:
+        src_media_root = ARCHIVE_MEDIA_PATH
+        dst_media_root = ARCHIVE_PATH
+        src_thumb_root = ARCHIVE_THUMB_PATH
+        dst_thumb_root = THUMB_PATH
+
+    files_moved = 0
+    errors = []
+
+    conn = None
+    cur = None
+    try:
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
+            (post_id,),
+        )
+        media_rows = cur.fetchall()
+
+        for media_id, file_path, thumb_path in media_rows:
+            new_file_path = file_path
+            new_thumb_path = thumb_path
+
+            # Move the main media file
+            if file_path and os.path.exists(file_path):
+                try:
+                    rel = os.path.relpath(file_path, src_media_root)
+                    new_path = os.path.join(dst_media_root, rel)
+                    os.makedirs(os.path.dirname(new_path), exist_ok=True)
+                    shutil.move(file_path, new_path)
+                    new_file_path = new_path
+                    files_moved += 1
+                except Exception as e:
+                    errors.append(f"move {file_path}: {e}")
+                    logger.error(f"Archive move error: {e}")
+
+            # Move the thumbnail
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    rel = os.path.relpath(thumb_path, src_thumb_root)
+                    new_tp = os.path.join(dst_thumb_root, rel)
+                    os.makedirs(os.path.dirname(new_tp), exist_ok=True)
+                    shutil.move(thumb_path, new_tp)
+                    new_thumb_path = new_tp
+                except Exception as e:
+                    errors.append(f"move thumb {thumb_path}: {e}")
+                    logger.error(f"Archive thumb move error: {e}")
+
+            # Update DB paths if anything changed
+            if new_file_path != file_path or new_thumb_path != thumb_path:
+                cur.execute(
+                    "UPDATE media SET file_path = %s, thumb_path = %s WHERE id = %s",
+                    (new_file_path, new_thumb_path, media_id),
+                )
+
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        errors.append(str(e))
+    finally:
+        if cur:
+            cur.close()
+        if conn and connection_pool:
+            connection_pool.putconn(conn)
+
+    return files_moved, errors
+
+
+@app.post("/api/post/{post_id}/archive")
+def archive_post(post_id: str):
+    """Mark a post as archived and move its media files to the archive directory."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT id, archived FROM posts WHERE id = %s", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if row[1]:
+            return {"status": "already_archived", "post_id": post_id}
+
+    # Move media files
+    files_moved, errors = _move_post_media(post_id, archive=True)
+
+    # Update post archived flag
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE posts SET archived = TRUE, archived_at = now() WHERE id = %s",
+            (post_id,),
+        )
+
+    return {
+        "status": "ok",
+        "post_id": post_id,
+        "files_moved": files_moved,
+        "errors": errors,
+    }
+
+
+@app.post("/api/post/{post_id}/unarchive")
+def unarchive_post(post_id: str):
+    """Unarchive a post and move its media files back to the active directory."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT id, archived FROM posts WHERE id = %s", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if not row[1]:
+            return {"status": "not_archived", "post_id": post_id}
+
+    # Move media files back
+    files_moved, errors = _move_post_media(post_id, archive=False)
+
+    # Update post archived flag
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE posts SET archived = FALSE, archived_at = NULL WHERE id = %s",
+            (post_id,),
+        )
+
+    return {
+        "status": "ok",
+        "post_id": post_id,
+        "files_moved": files_moved,
+        "errors": errors,
+    }
+
+
 @app.get("/api/search")
-def search(q: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+def search(
+    q: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    archived: Optional[bool] = Query(False),
+):
     with get_db_cursor() as cur:
         cur.execute(
             """
             SELECT id, title, subreddit, author, created_utc 
             FROM posts
             WHERE tsv @@ plainto_tsquery(%s)
+              AND archived = %s
             ORDER BY created_utc DESC
             LIMIT %s OFFSET %s
         """,
-            (q, limit, offset),
+            (q, archived, limit, offset),
         )
 
         return [
@@ -676,8 +898,11 @@ def admin_stats():
                 }
             )
 
-        cur.execute("SELECT COUNT(*) FROM posts")
+        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = FALSE")
         total_posts = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
+        archived_posts = cur.fetchone()[0]
 
         cur.execute("SELECT COUNT(*) FROM comments")
         total_comments = cur.fetchone()[0]
@@ -695,6 +920,7 @@ def admin_stats():
             SELECT DATE(created_utc) as day, COUNT(*)
             FROM posts
             WHERE created_utc > now() - INTERVAL '7 days'
+              AND archived = FALSE
             GROUP BY DATE(created_utc)
             ORDER BY day
         """)
@@ -703,6 +929,7 @@ def admin_stats():
         return {
             "targets": targets,
             "total_posts": total_posts,
+            "archived_posts": archived_posts,
             "total_comments": total_comments,
             "downloaded_media": downloaded_media,
             "total_media": total_media,
@@ -974,12 +1201,20 @@ _thumb_jobs_lock = threading.Lock()
 def _make_thumb(src_path: str) -> str:
     """Generate a .thumb.jpg for *src_path* inside THUMB_PATH, mirroring the
     directory structure relative to ARCHIVE_PATH.  Returns the thumb path."""
-    try:
-        rel = os.path.relpath(src_path, ARCHIVE_PATH)
-    except ValueError:
-        rel = Path(src_path).name
+    # Handle archived files (in ARCHIVE_MEDIA_PATH) -> put thumbs in ARCHIVE_THUMB_PATH
+    if src_path.startswith(ARCHIVE_MEDIA_PATH):
+        try:
+            rel = os.path.relpath(src_path, ARCHIVE_MEDIA_PATH)
+        except ValueError:
+            rel = Path(src_path).name
+        thumb_subdir = Path(ARCHIVE_THUMB_PATH) / Path(rel).parent
+    else:
+        try:
+            rel = os.path.relpath(src_path, ARCHIVE_PATH)
+        except ValueError:
+            rel = Path(src_path).name
+        thumb_subdir = Path(THUMB_PATH) / Path(rel).parent
 
-    thumb_subdir = Path(THUMB_PATH) / Path(rel).parent
     thumb_subdir.mkdir(parents=True, exist_ok=True)
     thumb = str(thumb_subdir / (Path(src_path).stem + ".thumb.jpg"))
 
@@ -1071,15 +1306,14 @@ def thumb_stats():
         cur.execute("SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL")
         total_with_file = cur.fetchone()[0]
 
-        # Pull every row that has a local file so we can check reality on disk
         cur.execute(
             "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL"
         )
         rows = cur.fetchall()
 
-    missing_no_path = 0  # thumb_path NULL/empty in DB
-    missing_file_gone = 0  # thumb_path set in DB but file absent on disk
-    good_count = 0  # thumb_path set AND file present on disk
+    missing_no_path = 0
+    missing_file_gone = 0
+    good_count = 0
 
     for media_id, file_path, thumb_path in rows:
         if not thumb_path:
@@ -1091,20 +1325,21 @@ def thumb_stats():
 
     total_missing = missing_no_path + missing_file_gone
 
-    # Count .thumb.jpg files on disk
+    # Count .thumb.jpg files across both thumb directories
     thumb_files_on_disk = 0
     thumb_bytes = 0
-    try:
-        for dirpath, _, filenames in os.walk(THUMB_PATH):
-            for fn in filenames:
-                if fn.endswith(".thumb.jpg"):
-                    thumb_files_on_disk += 1
-                    try:
-                        thumb_bytes += os.path.getsize(os.path.join(dirpath, fn))
-                    except OSError:
-                        pass
-    except Exception:
-        pass
+    for thumb_root in [THUMB_PATH, ARCHIVE_THUMB_PATH]:
+        try:
+            for dirpath, _, filenames in os.walk(thumb_root):
+                for fn in filenames:
+                    if fn.endswith(".thumb.jpg"):
+                        thumb_files_on_disk += 1
+                        try:
+                            thumb_bytes += os.path.getsize(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+        except Exception:
+            pass
 
     return {
         "total_media_with_file": total_with_file,
@@ -1119,26 +1354,21 @@ def thumb_stats():
 
 @app.post("/api/admin/thumbnails/backfill")
 def thumb_backfill():
-    """Generate thumbnails for all media rows that are missing one (or whose
-    thumb file no longer exists on disk).  Runs in background; returns a job_id
-    for progress polling."""
+    """Generate thumbnails for all media rows that are missing one."""
     with get_db_cursor() as cur:
         cur.execute(
             "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL ORDER BY id"
         )
         all_rows = cur.fetchall()
 
-    # Include only rows where the thumb is absent or stale
     rows = []
     files_missing = 0
     thums_missing = 0
     for row in all_rows:
         media_id, file_path, thumb_path = row
-        # Check if source file exists
         if not file_path or not os.path.exists(file_path):
             files_missing += 1
             continue
-        # Check if thumb is missing or stale
         if not thumb_path or not os.path.exists(thumb_path):
             thums_missing += 1
             rows.append(row)
@@ -1171,8 +1401,7 @@ def thumb_backfill():
 
 @app.post("/api/admin/thumbnails/rebuild-all")
 def thumb_rebuild_all():
-    """Force-regenerate thumbnails for every media row that has a local file,
-    overwriting existing thumbnails.  Runs in background; returns a job_id."""
+    """Force-regenerate thumbnails for every media row that has a local file."""
     with get_db_cursor() as cur:
         cur.execute(
             "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL ORDER BY id"
@@ -1200,9 +1429,7 @@ def thumb_rebuild_all():
 
 @app.post("/api/admin/thumbnails/purge-orphans")
 def thumb_purge_orphans():
-    """Delete .thumb.jpg files on disk that have no corresponding DB row.
-    Returns counts and any errors."""
-    # Collect all thumb paths stored in DB for O(1) lookup
+    """Delete .thumb.jpg files on disk that have no corresponding DB row."""
     with get_db_cursor() as cur:
         cur.execute("SELECT thumb_path FROM media WHERE thumb_path IS NOT NULL")
         db_paths = {row[0] for row in cur.fetchall()}
@@ -1211,21 +1438,22 @@ def thumb_purge_orphans():
     freed_bytes = 0
     errors = []
 
-    try:
-        for dirpath, _, filenames in os.walk(THUMB_PATH):
-            for fn in filenames:
-                if not fn.endswith(".thumb.jpg"):
-                    continue
-                full = os.path.join(dirpath, fn)
-                if full not in db_paths:
-                    try:
-                        freed_bytes += os.path.getsize(full)
-                        os.remove(full)
-                        deleted += 1
-                    except Exception as e:
-                        errors.append(str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    for thumb_root in [THUMB_PATH, ARCHIVE_THUMB_PATH]:
+        try:
+            for dirpath, _, filenames in os.walk(thumb_root):
+                for fn in filenames:
+                    if not fn.endswith(".thumb.jpg"):
+                        continue
+                    full = os.path.join(dirpath, fn)
+                    if full not in db_paths:
+                        try:
+                            freed_bytes += os.path.getsize(full)
+                            os.remove(full)
+                            deleted += 1
+                        except Exception as e:
+                            errors.append(str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "deleted": deleted,
@@ -1278,7 +1506,6 @@ def _extract_media_urls_from_raw(raw: dict, post_url: str) -> list:
                 u = img.get("source", {}).get("url")
                 if u:
                     urls.append(u)
-                # variants (nsfw, gif, etc)
                 for var_type, var_imgs in img.get("variants", {}).items():
                     if isinstance(var_imgs, dict):
                         vu = var_imgs.get("url")
@@ -1311,26 +1538,21 @@ def _extract_media_urls_from_raw(raw: dict, post_url: str) -> list:
 
 @app.post("/api/admin/media/rescan")
 def media_rescan():
-    """Re-scan existing posts for additional media that wasn't queued.
-    Compares extracted URLs against what's already in media table,
-    queues new ones to Redis. Returns count of newly queued items."""
+    """Re-scan existing posts for additional media that wasn't queued."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
 
     rd = get_redis()
 
     with get_db_cursor() as cur:
-        # Get all posts with raw JSON
         cur.execute(
             "SELECT id, url, raw, subreddit, author, title FROM posts WHERE raw IS NOT NULL"
         )
         post_rows = cur.fetchall()
 
-        # Get all URLs already queued or downloaded for any post
         cur.execute("SELECT url FROM media")
         existing_urls = {row[0] for row in cur.fetchall() if row[0]}
 
-        # Also get URLs currently in the queue
         queued_urls = set()
         try:
             queue_items = rd.lrange("media_queue", 0, -1)
@@ -1363,7 +1585,6 @@ def media_rescan():
                 errors.append(f"post {post_id}: parse error")
                 continue
 
-            # Extract all media URLs from this post's raw JSON
             try:
                 extracted = _extract_media_urls_from_raw(data, url)
             except Exception as e:
@@ -1372,7 +1593,6 @@ def media_rescan():
 
             for media_url in extracted:
                 if media_url not in all_existing:
-                    # Queue this new URL
                     try:
                         rd.lpush(
                             "media_queue",
@@ -1387,9 +1607,7 @@ def media_rescan():
                             ),
                         )
                         new_queue_count += 1
-                        all_existing.add(
-                            media_url
-                        )  # prevent duplicates within same batch
+                        all_existing.add(media_url)
                     except Exception as e:
                         errors.append(f"queue error for {media_url}: {e}")
 
@@ -1437,17 +1655,16 @@ def health_check():
     except Exception as e:
         issues.append(f"Redis: {str(e)}")
 
-    try:
-        if not os.path.exists(ARCHIVE_PATH):
-            issues.append(f"Archive path not accessible: {ARCHIVE_PATH}")
-    except Exception as e:
-        issues.append(f"Archive path: {str(e)}")
-
-    try:
-        if not os.path.exists(THUMB_PATH):
-            issues.append(f"Thumb path not accessible: {THUMB_PATH}")
-    except Exception as e:
-        issues.append(f"Thumb path: {str(e)}")
+    for label, path in [
+        ("Archive path", ARCHIVE_PATH),
+        ("Thumb path", THUMB_PATH),
+        ("Archive media path", ARCHIVE_MEDIA_PATH),
+    ]:
+        try:
+            if not os.path.exists(path):
+                issues.append(f"{label} not accessible: {path}")
+        except Exception as e:
+            issues.append(f"{label}: {str(e)}")
 
     return {"status": "healthy" if not issues else "degraded", "issues": issues}
 
@@ -1471,8 +1688,10 @@ async def event_stream():
                     }
                 conn = connection_pool.getconn()
                 cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM posts")
+                cur.execute("SELECT COUNT(*) FROM posts WHERE archived = FALSE")
                 total_posts = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
+                archived_posts = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM comments")
                 total_comments = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM media WHERE status='done'")
@@ -1483,6 +1702,7 @@ async def event_stream():
                 tot_media = cur.fetchone()[0]
                 return {
                     "total_posts": total_posts,
+                    "archived_posts": archived_posts,
                     "total_comments": total_comments,
                     "downloaded_media": dl_media,
                     "pending_media": pend_media,
@@ -1543,7 +1763,6 @@ async def event_stream():
                     dl_media = dl_media or 0
                     pend_media = pend_media or 0
 
-                    # Rate = actual subreddit activity over last 7 days (posts/sec)
                     rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
                     eta_seconds = None
                     if rate > 0:
@@ -1592,11 +1811,11 @@ async def event_stream():
                 cur = conn.cursor()
                 if after_dt is None:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts ORDER BY ingested_at DESC LIMIT 1"
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE archived = FALSE ORDER BY ingested_at DESC LIMIT 1"
                     )
                 else:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE ingested_at > %s ORDER BY ingested_at DESC LIMIT 20",
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE archived = FALSE AND ingested_at > %s ORDER BY ingested_at DESC LIMIT 20",
                         (after_dt,),
                     )
                 return cur.fetchall()
@@ -1668,8 +1887,6 @@ async def event_stream():
         return await asyncio.to_thread(_check)
 
     async def generate():
-        # Seed watermarks from the current most-recent rows so we only emit
-        # events for things that arrive *after* the SSE connection is opened.
         seed_posts = await db_new_posts(None)
         last_post_ingested = seed_posts[0][5] if seed_posts else None
 
@@ -1692,13 +1909,11 @@ async def event_stream():
                 else:
                     stats["queue_length"] = 0
 
-                # Per-target stats (post counts, rates, ETAs, media progress)
                 try:
                     stats["targets"] = await db_target_stats()
                 except Exception as e:
                     logger.error(f"SSE target stats error: {e}")
 
-                # Health status
                 try:
                     health = await check_health()
                     if not redis_ok:
@@ -1722,7 +1937,6 @@ async def event_stream():
                     ]
                     last_post_ingested = new_rows[0][5]
 
-                # Check for newly downloaded media
                 media_rows = await db_new_media(last_media_downloaded)
                 if media_rows:
                     stats["new_media"] = [
@@ -1736,8 +1950,6 @@ async def event_stream():
                     ]
                     last_media_downloaded = media_rows[0][4]
 
-                # Serialize — if targets/health contain an unexpected non-serializable
-                # value, strip those fields and still emit the core stats.
                 try:
                     payload = json.dumps(stats)
                 except Exception as e:
@@ -1810,75 +2022,6 @@ def metrics():
         logger.error(f"Metrics error: {e}")
 
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-
-@app.post("/api/tag")
-def add_tag(post_id: str, tag: str):
-    with get_db_cursor() as cur:
-        cur.execute(
-            "INSERT INTO tags(name) VALUES(%s) ON CONFLICT(name) DO NOTHING", (tag,)
-        )
-        cur.execute("SELECT id FROM tags WHERE name = %s", (tag,))
-        tag_id = cur.fetchone()
-
-        if tag_id is None:
-            tag_id = cur.execute(
-                "INSERT INTO tags(name) VALUES(%s) RETURNING id", (tag,)
-            )
-            tag_id = cur.fetchone()
-
-        cur.execute(
-            "INSERT INTO post_tags(post_id, tag_id) VALUES(%s, %s) ON CONFLICT DO NOTHING",
-            (post_id, tag_id[0]),
-        )
-
-    return {"status": "ok"}
-
-
-@app.get("/api/post/{post_id}/tags")
-def get_post_tags(post_id: str):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT t.name FROM tags t
-            JOIN post_tags pt ON t.id = pt.tag_id
-            WHERE pt.post_id = %s
-        """,
-            (post_id,),
-        )
-        return [r[0] for r in cur.fetchall()]
-
-
-@app.delete("/api/post/{post_id}/tag/{tag}")
-def remove_tag(post_id: str, tag: str):
-    with get_db_cursor() as cur:
-        cur.execute("SELECT id FROM tags WHERE name = %s", (tag,))
-        tag_row = cur.fetchone()
-
-        if tag_row:
-            cur.execute(
-                "DELETE FROM post_tags WHERE post_id = %s AND tag_id = %s",
-                (post_id, tag_row[0]),
-            )
-
-    return {"status": "ok"}
-
-
-@app.get("/api/tags")
-def list_tags(limit: int = Query(50, ge=1, le=200)):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT t.name, COUNT(pt.post_id) as cnt
-            FROM tags t
-            LEFT JOIN post_tags pt ON t.id = pt.tag_id
-            GROUP BY t.id
-            ORDER BY cnt DESC
-            LIMIT %s
-        """,
-            (limit,),
-        )
-        return [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
 
 
 @app.get("/api/comments")
@@ -1992,7 +2135,7 @@ def reset_all(confirm: str = Query(...)):
         tracked = []
         errors.append(f"Could not read media table: {e}")
 
-    # 2. Delete tracked files from disk
+    # 2. Delete tracked files from disk (both active and archived)
     for file_path, thumb_path in tracked:
         for p in [file_path, thumb_path]:
             if p and os.path.exists(p):
@@ -2003,15 +2146,15 @@ def reset_all(confirm: str = Query(...)):
                 except Exception as e:
                     errors.append(f"Delete failed {p}: {e}")
 
-    # 3. Remove organised subdirectories (r/ and u/) left empty after file deletion
-    for base_dir in [ARCHIVE_PATH, THUMB_PATH]:
+    # 3. Remove organised subdirectories left empty after file deletion
+    for base_dir in [ARCHIVE_PATH, THUMB_PATH, ARCHIVE_MEDIA_PATH, ARCHIVE_THUMB_PATH]:
         for subdir in ["r", "u"]:
             top = os.path.join(base_dir, subdir)
             if os.path.isdir(top):
                 for entry in os.scandir(top):
                     if entry.is_dir():
                         try:
-                            os.rmdir(entry.path)  # only removes if empty
+                            os.rmdir(entry.path)
                         except OSError:
                             pass
                 try:
@@ -2022,9 +2165,7 @@ def reset_all(confirm: str = Query(...)):
     # 4. Truncate all tables (CASCADE handles FK constraints)
     try:
         with get_db_cursor() as cur:
-            cur.execute(
-                "TRUNCATE media, post_tags, comments, posts, tags RESTART IDENTITY CASCADE"
-            )
+            cur.execute("TRUNCATE media, comments, posts RESTART IDENTITY CASCADE")
     except Exception as e:
         errors.append(f"DB truncate failed: {e}")
 
@@ -2049,10 +2190,11 @@ def posts_by_date(
     end_date: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    archived: Optional[bool] = Query(False),
 ):
     with get_db_cursor() as cur:
-        query = "SELECT id, title, subreddit, author, created_utc FROM posts WHERE 1=1"
-        params = []
+        query = "SELECT id, title, subreddit, author, created_utc FROM posts WHERE archived = %s"
+        params = [archived]
 
         if start_date:
             query += " AND created_utc >= %s"

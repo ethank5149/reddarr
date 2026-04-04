@@ -1,5 +1,5 @@
--- Consolidated Database Schema v3.0
--- All migrations merged into single initialization script
+-- Consolidated Database Schema v4.0
+-- Tags system removed; archive feature added
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -30,11 +30,15 @@ CREATE TABLE IF NOT EXISTS posts (
     media_url TEXT,
     raw JSONB,
     tsv tsvector,
-    ingested_at TIMESTAMP DEFAULT now()
+    ingested_at TIMESTAMP DEFAULT now(),
+    archived BOOLEAN DEFAULT FALSE NOT NULL,
+    archived_at TIMESTAMP
 );
 
--- Add ingested_at to existing installations
+-- Add columns to existing installations
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP DEFAULT now();
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
 
 -- COMMENTS table
 CREATE TABLE IF NOT EXISTS comments (
@@ -60,19 +64,6 @@ CREATE TABLE IF NOT EXISTS media (
     retries INT DEFAULT 0
 );
 
--- TAGS table
-CREATE TABLE IF NOT EXISTS tags (
-    id SERIAL PRIMARY KEY,
-    name TEXT UNIQUE
-);
-
--- POST_TAGS junction table
-CREATE TABLE IF NOT EXISTS post_tags (
-    post_id TEXT REFERENCES posts(id),
-    tag_id INT REFERENCES tags(id),
-    PRIMARY KEY(post_id, tag_id)
-);
-
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_posts_tsv ON posts USING GIN(tsv);
 CREATE INDEX IF NOT EXISTS idx_comments_tsv ON comments USING GIN(tsv);
@@ -83,6 +74,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
 CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at);
 CREATE INDEX IF NOT EXISTS idx_posts_created_utc ON posts(created_utc);
 CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets(enabled);
+CREATE INDEX IF NOT EXISTS idx_posts_archived ON posts(archived);
 
 -- Full-text search triggers
 CREATE OR REPLACE FUNCTION posts_tsv_trigger() RETURNS trigger AS $$

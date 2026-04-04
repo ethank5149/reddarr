@@ -7,8 +7,22 @@ export default function App(){
   const [searchResults,setSearchResults]=useState(null)
   const [selectedPost,setSelectedPost]=useState(null)
   const [galleryIdx,setGalleryIdx]=useState(0)
-  const [tagInput,setTagInput]=useState("")
   const [activeTab,setActiveTab]=useState("browse")
+  const [archivePosts,setArchivePosts]=useState([])
+  const [archiveOffset,setArchiveOffset]=useState(0)
+  const archiveOffsetRef=useRef(0)
+  const archiveFilteringRef=useRef(false)
+  const [archiveFilterSubreddit,setArchiveFilterSubreddit]=useState("")
+  const [archiveFilterAuthor,setArchiveFilterAuthor]=useState("")
+  const [archiveFilterMediaTypes,setArchiveFilterMediaTypes]=useState([])
+  const [archiveSortBy,setArchiveSortBy]=useState("last_added")
+  const [archiveShowNsfw,setArchiveShowNsfw]=useState(true)
+  const [archiveIsLoading,setArchiveIsLoading]=useState(false)
+  const archiveLoader=useRef()
+  const archiveFiltersRef=useRef({subreddit:"",author:"",mediaTypes:[],sort:"last_added",nsfw:true})
+  const [archiveSearch,setArchiveSearch]=useState("")
+  const [archiveSearchResults,setArchiveSearchResults]=useState(null)
+  const archiveSearchTimeout=useRef()
   const [adminData,setAdminData]=useState(null)
   const [logs,setLogs]=useState([])
   const [hoveredCard,setHoveredCard]=useState(null)
@@ -171,7 +185,7 @@ export default function App(){
     return ()=> clearInterval(poll)
   },[activeTab])
 
-  // Fetch full post detail (tags + comments) when modal opens
+  // Fetch full post detail (comments) when modal opens
   useEffect(()=>{
     if(!selectedPost?.id) return
     axios.get(`/api/post/${selectedPost.id}`)
@@ -179,20 +193,21 @@ export default function App(){
         if(!r.data) return
         setSelectedPost(prev => prev?.id === r.data.id ? {
           ...prev,
-          tags: r.data.tags || [],
           comments: r.data.comments || [],
           created_utc: r.data.created_utc || prev?.created_utc,
           video_url: r.data.video_url ?? prev?.video_url,
           is_video: r.data.is_video ?? prev?.is_video,
           url: r.data.image_url ?? prev?.url,
+          archived: r.data.archived ?? prev?.archived,
         } : prev)
       })
       .catch(()=>{})
   },[selectedPost?.id])
 
-  function buildPostsQuery(offset){
-    const f = filtersRef.current
+  function buildPostsQuery(offset, filtersOverride, archivedFlag=false){
+    const f = filtersOverride || filtersRef.current
     const params = new URLSearchParams({ limit:"50", offset:String(offset) })
+    if(archivedFlag) params.set("archived","true")
     if(f.subreddit) params.set("subreddit", f.subreddit)
     if(f.author) params.set("author", f.author)
     if(f.mediaTypes && f.mediaTypes.length > 0){
@@ -214,7 +229,8 @@ export default function App(){
       video_url:p.video_url, video_urls:p.video_urls, 
       is_video:p.is_video, selftext:p.selftext, 
       subreddit:p.subreddit, author:p.author, 
-      created_utc:p.created_utc, thumb_url:p.thumb_url, preview_url:p.preview_url 
+      created_utc:p.created_utc, thumb_url:p.thumb_url, preview_url:p.preview_url,
+      archived:p.archived
     }
   }
 
@@ -275,6 +291,76 @@ export default function App(){
     setFilterMediaTypes([])
     setSortBy("last_added")
     applyFilters(defaultFilters)
+  }
+
+  // ── Archive tab load helpers ──
+  function loadArchive(){
+    if(archiveFilteringRef.current) return
+    const currentOffset = archiveOffsetRef.current
+    axios.get(buildPostsQuery(currentOffset, archiveFiltersRef.current, true))
+    .then(r=>{
+      if(archiveFilteringRef.current) return
+      const newPosts = r.data.map(mapPost)
+      setArchivePosts(prev=>[...prev,...newPosts])
+      archiveOffsetRef.current = currentOffset + 50
+    }).catch(err=>console.error("Failed to load archive posts:", err))
+  }
+
+  function applyArchiveFilters(newFilters){
+    archiveFiltersRef.current = newFilters
+    archiveOffsetRef.current = 0
+    archiveFilteringRef.current = true
+    setArchiveIsLoading(true)
+    setArchivePosts([])
+    axios.get(buildPostsQuery(0, newFilters, true))
+    .then(r=>{
+      setArchivePosts(r.data.map(mapPost))
+      archiveOffsetRef.current = 50
+    }).catch(err=>console.error("Failed to load archive posts:", err))
+    .finally(()=>{ archiveFilteringRef.current=false; setArchiveIsLoading(false) })
+  }
+
+  function clearArchiveFilters(){
+    const d={subreddit:"",author:"",mediaTypes:[],sort:"last_added",nsfw:true}
+    setArchiveFilterSubreddit(""); setArchiveFilterAuthor(""); setArchiveFilterMediaTypes([]); setArchiveSortBy("last_added")
+    applyArchiveFilters(d)
+  }
+
+  function hasActiveArchiveFilters(){
+    const f=archiveFiltersRef.current
+    return f.subreddit||f.author||(f.mediaTypes&&f.mediaTypes.length>0)||f.sort!=="last_added"
+  }
+
+  function archivePost(postId){
+    axios.post(`/api/post/${postId}/archive`)
+      .then(()=>{
+        setPosts(prev=>prev.filter(p=>p.id!==postId))
+        setArchivePosts([])
+        archiveOffsetRef.current=0
+        if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,archived:true}))
+      })
+      .catch(()=>alert("Failed to archive post"))
+  }
+
+  function unarchivePost(postId){
+    axios.post(`/api/post/${postId}/unarchive`)
+      .then(()=>{
+        setArchivePosts(prev=>prev.filter(p=>p.id!==postId))
+        setPosts([])
+        offsetRef.current=0
+        if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,archived:false}))
+      })
+      .catch(()=>alert("Failed to unarchive post"))
+  }
+
+  function handleArchiveSearch(e){
+    setArchiveSearch(e.target.value)
+    clearTimeout(archiveSearchTimeout.current)
+    if(!e.target.value.trim()){ setArchiveSearchResults(null); return }
+    archiveSearchTimeout.current=setTimeout(()=>{
+      axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}&archived=true`)
+        .then(r=>setArchiveSearchResults(r.data.map(p=>({id:p.id,title:p.title,subreddit:p.subreddit,author:p.author,created_utc:p.created_utc}))))
+    },300)
   }
 
   function loadAdmin(){
@@ -352,7 +438,8 @@ export default function App(){
       .then(r=>{
         setResetResult(r.data)
         setResetLoading(false)
-        setPosts([]); setOffset(0); setNewPostsAvailable(0); setLogs([])
+        setPosts([]); offsetRef.current=0; setNewPostsAvailable(0); setLogs([])
+        setArchivePosts([]); archiveOffsetRef.current=0
         loadAdmin()
       })
       .catch(err=>{
@@ -410,24 +497,6 @@ export default function App(){
       .catch(err=>alert("Purge failed: " + (err.response?.data?.detail||err.message)))
   }
 
-  function removeTag(tag){
-    if(!selectedPost) return
-    axios.delete(`/api/post/${selectedPost.id}/tag/${encodeURIComponent(tag)}`)
-      .then(()=>{
-        setSelectedPost(prev=>prev ? {...prev, tags:(prev.tags||[]).filter(t=>t!==tag)} : prev)
-      })
-      .catch(()=>alert("Failed to remove tag"))
-  }
-
-  function addTag(){
-    if(!tagInput.trim() || !selectedPost) return
-    axios.post(`/api/tag?post_id=${selectedPost.id}&tag=${encodeURIComponent(tagInput)}`)
-      .then(()=>{
-        setSelectedPost(prev=>prev ? {...prev, tags:[...(prev.tags||[]),tagInput]} : prev)
-        setTagInput("")
-      })
-  }
-
   function formatEta(seconds){
     if(!seconds) return "N/A"
     if(seconds < 60) return `${Math.round(seconds)}s`
@@ -460,9 +529,26 @@ export default function App(){
     })
     if(loader.current) obs.observe(loader.current)
     return ()=> obs.disconnect()
-  // load() uses refs so we only need to re-subscribe when loader/searchResults change
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[loader.current, searchResults])
+
+  // Archive infinite scroll
+  useEffect(()=>{
+    const obs = new IntersectionObserver(entries=>{
+      if(entries[0].isIntersecting && !archiveSearchResults) loadArchive()
+    })
+    if(archiveLoader.current) obs.observe(archiveLoader.current)
+    return ()=> obs.disconnect()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[archiveLoader.current, archiveSearchResults])
+
+  // Load archive posts when archive tab is first opened
+  useEffect(()=>{
+    if(activeTab==="archive" && archivePosts.length===0 && archiveOffsetRef.current===0){
+      loadArchive()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[activeTab])
 
   function handleSearch(e){
     setSearch(e.target.value)
@@ -534,7 +620,7 @@ export default function App(){
             </div>
             <h1 style={{margin:0,fontSize:"22px",fontWeight:"700",background:"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Reddit Archive</h1>
             <div style={{display:"flex",gap:"4px",background:"#1a1a1a",padding:"4px",borderRadius:"10px"}}>
-              {[{id:"browse",label:"Browse",icon:"⊞"},{id:"admin",label:"Admin",icon:"⚙"}].map(tab=>(
+              {[{id:"browse",label:"Browse",icon:"⊞"},{id:"archive",label:"Archive",icon:"🗃"},{id:"admin",label:"Admin",icon:"⚙"}].map(tab=>(
                 <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{padding:"8px 16px",background:activeTab===tab.id?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontWeight:activeTab===tab.id?"600":"400",fontSize:"14px",display:"flex",alignItems:"center",gap:"6px",transition:"all 0.2s ease"}}>
                   <span style={{fontSize:"16px"}}>{tab.icon}</span>{tab.label}
                 </button>
@@ -602,9 +688,10 @@ export default function App(){
               <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
               <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Overview</h2>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:"16px",marginBottom:"40px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"16px",marginBottom:"40px"}}>
               {[
-                {label:"Total Posts",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
+                {label:"Active Posts",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
+                {label:"Archived Posts",value:adminData.archived_posts,color:"#888",icon:"🗃"},
                 {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
                 {label:"Media Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
                 {label:"Media Pending",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
@@ -1030,9 +1117,15 @@ export default function App(){
                     </div>
                   )}
                   {(p.url || p.is_video) && (
-                    <div style={{padding:"16px"}}>
-                      <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"6px"}}>{p.subreddit||"reddit"}</div>
-                      <div style={{fontSize:"14px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
+                    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
+                      </div>
+                      <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Archive this post"
+                        style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                        🗃
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1060,6 +1153,166 @@ export default function App(){
             </div>
           </div>
         )}
+      </>)}
+
+      {/* ── ARCHIVE TAB ── */}
+      {activeTab === "archive" && (<>
+        {/* Archive filter/sort bar */}
+        {!archiveSearchResults && (
+          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111",padding:"12px 24px"}}>
+            <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+              <span style={{fontSize:"12px",color:"#888",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap"}}>🗃 Archive</span>
+              <input type="text" placeholder="r/ subreddit" value={archiveFilterSubreddit}
+                onChange={e=>{
+                  const v=e.target.value; setArchiveFilterSubreddit(v)
+                  clearTimeout(archiveSearchTimeout._sub)
+                  archiveSearchTimeout._sub=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)
+                }}
+                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+              <input type="text" placeholder="u/ author" value={archiveFilterAuthor}
+                onChange={e=>{
+                  const v=e.target.value; setArchiveFilterAuthor(v)
+                  clearTimeout(archiveSearchTimeout._auth)
+                  archiveSearchTimeout._auth=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,author:v}),400)
+                }}
+                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+              <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
+                {[{value:"image",label:"🖼 Images"},{value:"video",label:"🎬 Videos"},{value:"text",label:"📝 Text"}].map(mt=>(
+                  <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"4px",cursor:"pointer",padding:"4px 8px",background:archiveFilterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"6px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s"}}>
+                    <input type="checkbox" checked={archiveFilterMediaTypes.includes(mt.value)} onChange={e=>{
+                      const newTypes=e.target.checked?[...archiveFilterMediaTypes,mt.value]:archiveFilterMediaTypes.filter(t=>t!==mt.value)
+                      setArchiveFilterMediaTypes(newTypes)
+                      applyArchiveFilters({...archiveFiltersRef.current,mediaTypes:newTypes})
+                    }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
+                    <span style={{fontSize:"12px",color:archiveFilterMediaTypes.includes(mt.value)?"#ff6a33":"#666"}}>{mt.label}</span>
+                  </label>
+                ))}
+              </div>
+              <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",whiteSpace:"nowrap"}}>
+                <input type="checkbox" checked={archiveShowNsfw} onChange={e=>{
+                  const v=e.target.checked; setArchiveShowNsfw(v)
+                  applyArchiveFilters({...archiveFiltersRef.current,nsfw:v})
+                }} style={{width:"16px",height:"16px",accentColor:"#ff4500"}}/>
+                <span style={{fontSize:"12px",color:archiveShowNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
+              </label>
+              <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap",marginLeft:"8px"}}>Sort</span>
+              <select value={archiveSortBy} onChange={e=>{
+                const v=e.target.value; setArchiveSortBy(v)
+                applyArchiveFilters({...archiveFiltersRef.current,sort:v})
+              }} style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                <option value="last_added">Last added</option>
+                <option value="newest">Reddit date ↓</option>
+                <option value="oldest">Reddit date ↑</option>
+                <option value="title_asc">Title A → Z</option>
+                <option value="title_desc">Title Z → A</option>
+              </select>
+              {hasActiveArchiveFilters() && (
+                <button onClick={clearArchiveFilters} style={{marginLeft:"auto",padding:"8px 14px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear filters</button>
+              )}
+              {/* Archive search */}
+              <div style={{position:"relative",marginLeft:"auto"}}>
+                <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
+                <input type="text" placeholder="Search archived posts..." value={archiveSearch} onChange={handleArchiveSearch}
+                  style={{padding:"10px 16px 10px 40px",borderRadius:"20px",border:"1px solid #333",width:"280px",background:"#1a1a1a",color:"#fff",fontSize:"13px",outline:"none"}}/>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+          {archiveSearchResults && (
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#888,#555)",borderRadius:"2px"}}/>
+                  <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#666",fontWeight:"400"}}>({archiveSearchResults.length})</span></h2>
+                </div>
+                <button onClick={()=>{setArchiveSearchResults(null);setArchiveSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
+                {archiveSearchResults.map(p=>(
+                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
+                    <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit?`r/${p.subreddit}`:""}</div>
+                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
+                    {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!archiveSearchResults && (
+            <>
+              {archivePosts.length===0 && !archiveIsLoading && (
+                <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>No archived posts yet.</div>
+              )}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
+                {archivePosts.map(p=>(
+                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
+                    onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
+                    style={{background:"linear-gradient(145deg,#1a1a1a,#141414)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(0,0,0,0.3)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #222",opacity:0.9}}>
+                    {p.is_video ? (
+                      <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
+                        {hoveredCard===p.id && p.video_url && (p.video_url.includes("v.redd.it")||p.video_url.endsWith(".mp4")) ? (
+                          <video src={p.video_url} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                        ) : (
+                          <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
+                            {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>}
+                            <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(100,100,100,0.6)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                              <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #888",marginLeft:"4px"}}/>
+                            </div>
+                          </div>
+                        )}
+                        <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"3px 8px",display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",fontWeight:"700",color:"#888",letterSpacing:"0.5px",border:"1px solid rgba(255,255,255,0.08)"}}>
+                          <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #888"}}/>VIDEO
+                        </div>
+                        <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",borderRadius:"4px",padding:"2px 6px",fontSize:"9px",color:"#666",fontWeight:"600"}}>ARCHIVED</div>
+                        <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
+                          <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                        </div>
+                      </div>
+                    ) : (p.url||p.image_urls?.[0]) ? (
+                      <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
+                        <img src={p.url||p.image_urls?.[0]} style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.85}} onError={e=>e.target.style.display="none"}/>
+                        {p.image_urls?.length>1 && (
+                          <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>1/{p.image_urls.length}</div>
+                        )}
+                        <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",borderRadius:"4px",padding:"2px 6px",fontSize:"9px",color:"#666",fontWeight:"600"}}>ARCHIVED</div>
+                        <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
+                          <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{padding:"24px",background:"linear-gradient(135deg,#161616 0%,#1e1e1e 100%)",minHeight:"180px",display:"flex",flexDirection:"column"}}>
+                        <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#bbb"}}>{p.title}</div>
+                        {p.selftext && <div style={{fontSize:"13px",color:"#555",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
+                      </div>
+                    )}
+                    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontSize:"11px",color:"#555",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#888"}}>{p.title}</div>
+                      </div>
+                      <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unarchive this post"
+                        style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"6px",color:"#46d160",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                        ↩
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {archiveIsLoading && (
+                <div style={{padding:"40px",textAlign:"center",color:"#555",fontSize:"14px"}}>
+                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#888",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+                </div>
+              )}
+              <div ref={archiveLoader} style={{padding:"60px",textAlign:"center",color:"#333",fontSize:"14px"}}>
+                <span style={{width:"20px",height:"20px",border:"2px solid #222",borderTopColor:"#555",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+              </div>
+            </>
+          )}
+        </div>
       </>)}
 
       {/* ── RESET MODAL ── */}
@@ -1184,24 +1437,18 @@ export default function App(){
                 </div>
               )}
 
-              {/* Tags */}
+              {/* Archive / Unarchive */}
               <div style={{marginBottom:"20px"}}>
-                <div style={{display:"flex",gap:"12px",alignItems:"center",marginBottom:"12px"}}>
-                  <input type="text" placeholder="Add a tag..." value={tagInput}
-                    onChange={e=>setTagInput(e.target.value)}
-                    onKeyDown={e=>e.key==="Enter"&&addTag()}
-                    style={{flex:1,padding:"12px 16px",borderRadius:"10px",border:"1px solid #333",background:"#141414",color:"#fff",fontSize:"14px",outline:"none"}}/>
-                  <button onClick={addTag} style={{padding:"12px 24px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:"#fff",cursor:"pointer",fontWeight:"600",fontSize:"14px",whiteSpace:"nowrap"}}>Add Tag</button>
-                </div>
-                {selectedPost.tags && selectedPost.tags.length > 0 && (
-                  <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                    {selectedPost.tags.map(t=>(
-                      <span key={t} style={{background:"#ff450022",color:"#ff4500",padding:"5px 10px",borderRadius:"20px",fontSize:"12px",fontWeight:"500",display:"flex",alignItems:"center",gap:"6px"}}>
-                        {t}
-                        <button onClick={()=>removeTag(t)} style={{background:"none",border:"none",color:"#ff4500",cursor:"pointer",fontSize:"14px",lineHeight:1,padding:"0",opacity:0.7}}>×</button>
-                      </span>
-                    ))}
-                  </div>
+                {selectedPost.archived ? (
+                  <button onClick={()=>unarchivePost(selectedPost.id)}
+                    style={{padding:"10px 20px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
+                    ↩ Unarchive Post
+                  </button>
+                ) : (
+                  <button onClick={()=>archivePost(selectedPost.id)}
+                    style={{padding:"10px 20px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
+                    🗃 Archive Post
+                  </button>
                 )}
               </div>
 

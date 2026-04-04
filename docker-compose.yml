@@ -59,6 +59,7 @@ services:
       REDIS_HOST: redis
       ARCHIVE_PATH: ${ARCHIVE_PATH}
       THUMB_PATH: ${THUMB_PATH}
+      ARCHIVE_MEDIA_PATH: ${ARCHIVE_MEDIA_PATH}
     depends_on:
       db:
         condition: service_healthy
@@ -67,6 +68,7 @@ services:
     volumes:
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
       - ${THUMB_PATH}:${THUMB_PATH}
+      - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
       - ./downloader:/app
 
   api:
@@ -77,6 +79,7 @@ services:
       REDIS_HOST: redis
       ARCHIVE_PATH: ${ARCHIVE_PATH}
       THUMB_PATH: ${THUMB_PATH}
+      ARCHIVE_MEDIA_PATH: ${ARCHIVE_MEDIA_PATH}
     depends_on:
       db:
         condition: service_healthy
@@ -85,6 +88,7 @@ services:
     volumes:
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
       - ${THUMB_PATH}:${THUMB_PATH}
+      - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
 
