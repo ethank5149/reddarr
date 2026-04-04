@@ -380,11 +380,11 @@ export default function App(){
   }
 
   function toggleTarget(ttype,name){
-    axios.post(`/api/admin/target/${ttype}/${name}/toggle`).then(()=>loadAdmin()).catch(()=>alert("Failed to toggle target"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`).then(()=>loadAdmin()).catch(()=>alert("Failed to toggle target"))
   }
 
   function rescanTarget(ttype,name){
-    axios.post(`/api/admin/target/${ttype}/${name}/rescan`).then(()=>loadAdmin()).catch(()=>alert("Failed to rescan target"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`).then(()=>loadAdmin()).catch(()=>alert("Failed to rescan target"))
   }
 
   function scrapeNow(){
@@ -394,12 +394,7 @@ export default function App(){
   }
 
   function triggerBackfill(){
-    const passes = prompt("Number of backfill passes (1-10, default 2):", "2")
-    if (passes === null) return
-    const workers = prompt("Parallel workers (1-20, default 3):", "3")
-    if (workers === null) return
-    
-    axios.post(`/api/admin/backfill?passes=${passes}&workers=${workers}`)
+    axios.post(`/api/admin/backfill?passes=2&workers=3`)
       .then(()=>{ setBackfillTriggered(true); setTimeout(()=>setBackfillTriggered(false), 3000) })
       .catch(()=>alert("Failed to trigger backfill"))
   }
@@ -412,10 +407,10 @@ export default function App(){
     // Second confirm: offer to also prune posts/media
     const shouldPrune = confirm(`Also delete all posts and media associated with ${name}?\n\nClick OK to delete posts and media.\nClick Cancel to keep them.`)
     if (!shouldPrune) {
-      axios.delete(`/api/admin/target/${ttype}/${name}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
     } else {
       const alsoDeleteFiles = confirm("Also delete downloaded media files from disk? (This cannot be undone)")
-      axios.delete(`/api/admin/target/${ttype}/${name}?prune=true&delete_files=${alsoDeleteFiles}`)
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}?prune=true&delete_files=${alsoDeleteFiles}`)
         .then(r=>alert(`Deleted: ${r.data.deleted_posts} posts, ${r.data.deleted_media} media, ${r.data.deleted_files} files`))
         .then(()=>loadAdmin())
         .catch(()=>alert("Failed to delete target"))

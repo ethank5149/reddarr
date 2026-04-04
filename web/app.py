@@ -1131,6 +1131,14 @@ def add_target(target_type: str, name: str):
         raise HTTPException(status_code=400, detail="Invalid target type")
 
     with get_db_cursor() as cur:
+        # Check case-insensitively first to prevent pseudo-duplicates
+        cur.execute(
+            "SELECT id FROM targets WHERE type = %s AND LOWER(name) = LOWER(%s)",
+            (target_type, name),
+        )
+        if cur.fetchone():
+            raise HTTPException(status_code=409, detail="Target already exists")
+
         cur.execute(
             "INSERT INTO targets(type, name, enabled) VALUES(%s, %s, true) ON CONFLICT (name) DO NOTHING RETURNING id",
             (target_type, name),
@@ -1791,13 +1799,14 @@ async def event_stream():
     """Server-Sent Events endpoint for real-time UI updates."""
 
     async def db_stats():
-        def _query():
+        def _query() -> Dict[str, Any]:
             conn = None
             cur = None
             try:
                 if not connection_pool:
                     return {
                         "total_posts": 0,
+                        "archived_posts": 0,
                         "total_comments": 0,
                         "downloaded_media": 0,
                         "pending_media": 0,
@@ -2311,7 +2320,7 @@ def posts_by_date(
 ):
     with get_db_cursor() as cur:
         query = "SELECT id, title, subreddit, author, created_utc FROM posts WHERE archived = %s"
-        params = [archived]
+        params: list[Any] = [archived]
 
         if start_date:
             query += " AND created_utc >= %s"
