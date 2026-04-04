@@ -379,7 +379,7 @@ def posts(
             FROM posts p
             WHERE 1=1
         """
-        params = []
+        params: list[Any] = []
 
         # Archive filter
         if archived:
@@ -415,9 +415,9 @@ def posts(
             if "text" in media_type:
                 media_conditions.append(
                     "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND "
-                    "url NOT LIKE '%i.redd.it%' AND url NOT LIKE '%i.imgur.com%' AND url NOT LIKE '%.jpg' AND "
+                    "(url IS NULL OR (url NOT LIKE '%i.redd.it%' AND url NOT LIKE '%i.imgur.com%' AND url NOT LIKE '%.jpg' AND "
                     "url NOT LIKE '%.jpeg' AND url NOT LIKE '%.png' AND url NOT LIKE '%.gif' AND url NOT LIKE '%.webp' AND "
-                    "url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%'"
+                    "url NOT LIKE '%v.redd.it%' AND url NOT LIKE '%youtube.com%' AND url NOT LIKE '%youtu.be%'))"
                 )
             if media_conditions:
                 query += " AND (" + " OR ".join(media_conditions) + ")"
@@ -428,7 +428,9 @@ def posts(
 
         # NSFW filter - use native JSONB operator for correctness and performance
         if nsfw == "exclude":
-            query += " AND (raw IS NULL OR NOT (raw->>'over_18')::boolean)"
+            query += (
+                " AND (raw IS NULL OR NOT COALESCE((raw->>'over_18')::boolean, false))"
+            )
         elif nsfw == "include":
             pass  # show all (default behavior)
 
@@ -1238,7 +1240,7 @@ def admin_logs(
             FROM posts p
             WHERE 1=1
         """
-        params = []
+        params: list[Any] = []
 
         if subreddit:
             query += " AND p.subreddit = %s"
