@@ -1115,8 +1115,7 @@ export default function App(){
                       {p.selftext && <div style={{fontSize:"13px",color:"#777",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
                     </div>
                   )}
-                  {(p.url || p.is_video) && (
-                    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                       <div style={{minWidth:0}}>
                         <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
@@ -1126,7 +1125,6 @@ export default function App(){
                         🗃
                       </button>
                     </div>
-                  )}
                 </div>
               ))}
             </div>
