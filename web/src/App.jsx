@@ -46,6 +46,10 @@ export default function App(){
   const [thumbJobResult, setThumbJobResult] = useState(null)  // last finished job
   const thumbPollRef = useRef(null)
 
+  // Backfill status
+  const [backfillStatus, setBackfillStatus] = useState(null)
+  const backfillPollRef = useRef(null)
+
   // Scrape trigger feedback
   const [scrapeTriggered, setScrapeTriggered] = useState(false)
   const [backfillTriggered, setBackfillTriggered] = useState(false)
@@ -395,9 +399,36 @@ export default function App(){
 
   function triggerBackfill(){
     axios.post(`/api/admin/backfill?passes=2&workers=3`)
-      .then(()=>{ setBackfillTriggered(true); setTimeout(()=>setBackfillTriggered(false), 3000) })
+      .then(()=>{ 
+        setBackfillTriggered(true); 
+        startBackfillPoll();
+        setTimeout(()=>setBackfillTriggered(false), 3000) 
+      })
       .catch(()=>alert("Failed to trigger backfill"))
   }
+
+  function startBackfillPoll(){
+    if(backfillPollRef.current) clearInterval(backfillPollRef.current)
+    backfillPollRef.current = setInterval(()=>{
+      axios.get("/api/admin/backfill/status")
+        .then(r=>{
+          setBackfillStatus(r.data)
+          if(r.data.status === "done" || r.data.status === "partial" || r.data.status === "none"){
+            clearInterval(backfillPollRef.current)
+            backfillPollRef.current = null
+          }
+        })
+        .catch(()=>setBackfillStatus(null))
+    }, 2000)
+  }
+
+  function stopBackfillPoll(){
+    if(backfillPollRef.current){ clearInterval(backfillPollRef.current); backfillPollRef.current = null }
+  }
+
+  useEffect(()=>{
+    return () => { if(backfillPollRef.current) clearInterval(backfillPollRef.current) }
+  }, [])
 
   function deleteTarget(ttype,name){
     // First confirm: OK = remove target only, Cancel = abort entirely
@@ -722,6 +753,29 @@ export default function App(){
                   {backfillTriggered ? "✓ Triggered" : "📜 Backfill"}
                 </button>
               </div>
+              {/* Backfill Status Display */}
+              {backfillStatus && backfillStatus.status !== "none" && (
+                <div style={{marginBottom:"16px",padding:"12px",background:backfillStatus.status==="done"?"#0d2818":backfillStatus.status==="partial"?"#2d2000":"#1e3a5f",borderRadius:"8px",border:`1px solid ${backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#2a5a8a"}`}}>
+                  <div style={{fontSize:"13px",fontWeight:"600",color:backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#7ab3e0",marginBottom:"8px"}}>
+                    {backfillStatus.status === "done" ? "✓ Backfill Complete" : backfillStatus.status === "partial" ? "⚠ Backfill Partial" : "🔄 Backfill Running..."}
+                  </div>
+                  <div style={{display:"flex",gap:"16px",fontSize:"12px",color:"#ccc",marginBottom:"8px",flexWrap:"wrap"}}>
+                    <span>Total: <b style={{color:"#fff"}}>{backfillStatus.total}</b></span>
+                    <span>New: <b style={{color:"#46d160"}}>{backfillStatus.new}</b></span>
+                    <span>Skipped: <b style={{color:"#888"}}>{backfillStatus.skipped}</b></span>
+                    <span>Completed: <b style={{color:"#fff"}}>{backfillStatus.completed}</b>/{backfillStatus.targets_total}</span>
+                    {backfillStatus.rate_limited > 0 && (
+                      <span style={{color:"#f9c300"}}>Rate Limited: <b>{backfillStatus.rate_limited}</b></span>
+                    )}
+                  </div>
+                  {backfillStatus.errors && backfillStatus.errors.length > 0 && (
+                    <div style={{fontSize:"11px",color:"#ff6a33",background:"#1a0a00",padding:"8px",borderRadius:"4px",maxHeight:"100px",overflowY:"auto"}}>
+                      <div style={{fontWeight:"600",marginBottom:"4px",color:"#ff4500"}}>Errors:</div>
+                      {backfillStatus.errors.map((e,i)=><div key={i} style={{fontFamily:"monospace",marginBottom:"2px"}}>{e}</div>)}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Add target form */}
               <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
                 <select value={addTargetType} onChange={e=>setAddTargetType(e.target.value)}

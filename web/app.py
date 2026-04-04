@@ -1125,6 +1125,20 @@ def trigger_backfill(
     }
 
 
+@app.get("/api/admin/backfill/status")
+def backfill_status():
+    """Poll the status of the last backfill run."""
+    rd = get_redis()
+    if not rd:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    status = rd.get("backfill_status")
+    if not status:
+        return {"status": "none", "message": "No backfill run yet"}
+
+    return json.loads(status)
+
+
 @app.post("/api/admin/target/{target_type}")
 def add_target(target_type: str, name: str):
     if target_type not in ("subreddit", "user"):

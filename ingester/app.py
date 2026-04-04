@@ -320,6 +320,8 @@ def scrape_target(ttype, name, sort_method="new"):
     posts_processed = 0
     oldest_seen = None
 
+    rate_limited = False
+
     try:
         if ttype == "subreddit":
             sr = reddit.subreddit(name)
@@ -354,6 +356,9 @@ def scrape_target(ttype, name, sort_method="new"):
                 if is_new:
                     new_posts_found += 1
             except Exception as e:
+                err_str = str(e).lower()
+                if "rate" in err_str or "429" in err_str or "too many" in err_str:
+                    rate_limited = True
                 logger.error(f"Failed to ingest post {p.id}: {e}")
                 ingester_errors_total.labels(error_type="ingest_post").inc()
 
@@ -365,10 +370,15 @@ def scrape_target(ttype, name, sort_method="new"):
         )
 
     except Exception as e:
-        logger.error(f"Error scraping {ttype}:{name} ({sort_method}): {e}")
+        err_str = str(e).lower()
+        if "rate" in err_str or "429" in err_str or "too many" in err_str:
+            rate_limited = True
+            logger.warning(f"Rate limited on {ttype}:{name} ({sort_method}): {e}")
+        else:
+            logger.error(f"Error scraping {ttype}:{name} ({sort_method}): {e}")
         ingester_errors_total.labels(error_type="scrape_target").inc()
 
-    return new_posts_found, posts_processed
+    return new_posts_found, posts_processed, rate_limited
 
 
 def run_backfill_parallel(targets, passes=None, workers=None):
@@ -380,22 +390,63 @@ def run_backfill_parallel(targets, passes=None, workers=None):
 
     logger.info(f"Starting parallel backfill with {workers} workers, {passes} passes")
 
+    backfill_errors = []
+    backfill_stats = {"total": 0, "new": 0, "skipped": 0}
+    rate_limited_count = 0
+
+    def submit_with_retry(ttype, name, sort_method, retry_count=0):
+        """Submit a scrape task with exponential backoff on rate limit."""
+        if retry_count > 2:
+            return None
+        future = executor.submit(scrape_target, ttype, name, sort_method)
+        return future
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
         for ttype, name, last in targets:
             for pass_num in range(passes):
                 sort_method = "top_all" if pass_num == 0 else "new"
                 future = executor.submit(scrape_target, ttype, name, sort_method)
-                futures[future] = (ttype, name, sort_method)
+                futures[future] = (ttype, name, sort_method, 0)
 
         completed_targets: set = set()
         for future in as_completed(futures):
-            ttype, name, sort_method = futures[future]
+            ttype, name, sort_method, retries = futures[future]
             try:
-                new_found, processed = future.result()
+                new_found, processed, was_limited = future.result()
                 completed_targets.add((ttype, name))
+                backfill_stats["total"] += processed
+                backfill_stats["new"] += new_found
+                backfill_stats["skipped"] += processed - new_found
+
+                if was_limited:
+                    rate_limited_count += 1
+                    if retries < 2:
+                        logger.info(
+                            f"Retrying {ttype}:{name} after rate limit (retry {retries + 1})"
+                        )
+                        new_future = executor.submit(
+                            scrape_target, ttype, name, sort_method
+                        )
+                        futures[new_future] = (ttype, name, sort_method, retries + 1)
             except Exception as e:
-                logger.error(f"Backfill failed for {ttype}:{name} ({sort_method}): {e}")
+                err_str = str(e).lower()
+                if "rate" in err_str or "429" in err_str:
+                    rate_limited_count += 1
+                err_msg = f"{ttype}:{name} ({sort_method}): {e}"
+                logger.error(f"Backfill failed for {err_msg}")
+                backfill_errors.append(err_msg)
+                ingester_errors_total.labels(error_type="backfill").inc()
+
+    if rate_limited_count > 0:
+        logger.warning(
+            f"Rate limited {rate_limited_count} times - consider reducing workers"
+        )
+        # Could auto-reduce workers for next run
+        try:
+            rd.set("backfill_last_rate_limit", f"{rate_limited_count}")
+        except Exception:
+            pass
 
     # Update last_created for all targets that completed at least one pass
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -413,6 +464,24 @@ def run_backfill_parallel(targets, passes=None, workers=None):
             logger.error(
                 f"Failed to update last_created after backfill for {name}: {e}"
             )
+
+    # Store backfill results in Redis for UI polling
+    try:
+        result = {
+            "status": "done" if not backfill_errors else "partial",
+            "total": backfill_stats["total"],
+            "new": backfill_stats["new"],
+            "skipped": backfill_stats["skipped"],
+            "errors": backfill_errors[-20:],  # keep last 20 errors
+            "completed": len(completed_targets),
+            "targets_total": len(targets) * passes,
+            "rate_limited": rate_limited_count,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        rd.setex("backfill_status", 300, json.dumps(result))
+        logger.info(f"Backfill result stored: {backfill_stats}")
+    except Exception as e:
+        logger.error(f"Failed to store backfill status: {e}")
 
     logger.info("Parallel backfill completed")
 
