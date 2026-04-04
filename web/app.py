@@ -402,7 +402,8 @@ def posts(
                 media_conditions.append(
                     "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND "
                     "(LOWER(m.file_path) LIKE '%%.mp4' OR LOWER(m.file_path) LIKE '%%.webm' OR LOWER(m.file_path) LIKE '%%.mkv' OR LOWER(m.file_path) LIKE '%%.mov')) OR "
-                    "url LIKE '%%v.redd.it%%' OR url LIKE '%%youtube.com%%' OR url LIKE '%%youtu.be%%' OR url LIKE '%%streamable.com%%')"
+                    "url LIKE '%%v.redd.it%%' OR url LIKE '%%youtube.com%%' OR url LIKE '%%youtu.be%%' OR url LIKE '%%streamable.com%%' OR "
+                    "(raw IS NOT NULL AND (raw->'media'->'reddit_video') IS NOT NULL))"
                 )
             if "image" in media_type:
                 media_conditions.append(
@@ -410,14 +411,19 @@ def posts(
                     "(LOWER(m.file_path) LIKE '%%.jpg' OR LOWER(m.file_path) LIKE '%%.jpeg' OR LOWER(m.file_path) LIKE '%%.png' OR "
                     "LOWER(m.file_path) LIKE '%%.gif' OR LOWER(m.file_path) LIKE '%%.webp')) OR "
                     "(url LIKE '%%i.redd.it%%' OR url LIKE '%%i.imgur.com%%' OR url LIKE '%%.jpg' OR url LIKE '%%.jpeg' OR "
-                    "url LIKE '%%.png' OR url LIKE '%%.gif' OR url LIKE '%%.webp'))"
+                    "url LIKE '%%.png' OR url LIKE '%%.gif' OR url LIKE '%%.webp') OR "
+                    "(raw IS NOT NULL AND ((raw->>'media_metadata') IS NOT NULL OR (raw->'preview'->'images') IS NOT NULL)))"
                 )
             if "text" in media_type:
                 media_conditions.append(
                     "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND "
                     "(url IS NULL OR (url NOT LIKE '%%i.redd.it%%' AND url NOT LIKE '%%i.imgur.com%%' AND url NOT LIKE '%%.jpg' AND "
                     "url NOT LIKE '%%.jpeg' AND url NOT LIKE '%%.png' AND url NOT LIKE '%%.gif' AND url NOT LIKE '%%.webp' AND "
-                    "url NOT LIKE '%%v.redd.it%%' AND url NOT LIKE '%%youtube.com%%' AND url NOT LIKE '%%youtu.be%%'))"
+                    "url NOT LIKE '%%v.redd.it%%' AND url NOT LIKE '%%youtube.com%%' AND url NOT LIKE '%%youtu.be%%')) AND "
+                    "(raw IS NULL OR "
+                    "(raw->>'media_metadata') IS NULL AND "
+                    "(raw->'preview'->'images') IS NULL AND "
+                    "(raw->'media'->'reddit_video') IS NULL))"
                 )
             if media_conditions:
                 query += " AND (" + " OR ".join(media_conditions) + ")"
@@ -455,6 +461,16 @@ def posts(
             selftext = None
             created_ts = None
             is_video = _is_video_url(url)
+
+            # Check raw JSONB for embedded media that wasn't captured in url field
+            if raw:
+                try:
+                    data = raw if isinstance(raw, dict) else json.loads(raw)
+                    # If raw has reddit_video, this is a video post even if URL doesn't match patterns
+                    if data.get("media") and data["media"].get("reddit_video"):
+                        is_video = True
+                except Exception:
+                    pass
 
             # Get all media rows for this post
             cur.execute(
@@ -639,6 +655,10 @@ def get_post(post_id: str):
             try:
                 data = raw if isinstance(raw, dict) else json.loads(raw)
                 selftext = data.get("selftext")
+
+                # If raw has reddit_video, this is a video post even if URL doesn't match patterns
+                if data.get("media") and data["media"].get("reddit_video"):
+                    is_video = True
 
                 if is_video:
                     if not video_urls:
@@ -1137,6 +1157,327 @@ def backfill_status():
         return {"status": "none", "message": "No backfill run yet"}
 
     return json.loads(status)
+
+
+# ---------------------------------------------------------------------------
+# Audit endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/admin/audit/summary")
+def audit_summary():
+    """Get summary statistics for the audit dashboard."""
+    with get_db_cursor() as cur:
+        # Total archived posts
+        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
+        total_archived = cur.fetchone()[0] or 0
+
+        # Posts with media
+        cur.execute("""
+            SELECT COUNT(DISTINCT p.id) FROM posts p
+            JOIN media m ON m.post_id = p.id
+            WHERE p.archived = TRUE
+        """)
+        posts_with_media = cur.fetchone()[0] or 0
+
+        # Posts where all media is downloaded (file exists)
+        cur.execute("""
+            SELECT COUNT(DISTINCT p.id) FROM posts p
+            JOIN media m ON m.post_id = p.id
+            WHERE p.archived = TRUE AND m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
+        """)
+        posts_all_downloaded = cur.fetchone()[0] or 0
+
+        # Posts with some missing media
+        cur.execute("""
+            SELECT COUNT(DISTINCT p.id) FROM posts p
+            JOIN media m ON m.post_id = p.id
+            WHERE p.archived = TRUE AND (
+                m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
+            )
+        """)
+        posts_with_missing = cur.fetchone()[0] or 0
+
+        # Total media items
+        cur.execute(
+            "SELECT COUNT(*) FROM media m JOIN posts p ON m.post_id = p.id WHERE p.archived = TRUE"
+        )
+        total_media = cur.fetchone()[0] or 0
+
+        # Media downloaded
+        cur.execute("""
+            SELECT COUNT(*) FROM media m
+            JOIN posts p ON m.post_id = p.id
+            WHERE p.archived = TRUE AND m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
+        """)
+        media_downloaded = cur.fetchone()[0] or 0
+
+        # Media missing/failed
+        cur.execute("""
+            SELECT COUNT(*) FROM media m
+            JOIN posts p ON m.post_id = p.id
+            WHERE p.archived = TRUE AND (m.status != 'done' OR m.file_path IS NULL OR m.file_path = '')
+        """)
+        media_missing = cur.fetchone()[0] or 0
+
+        # Media files on disk but DB says missing (orphans)
+        cur.execute("""
+            SELECT COUNT(*) FROM media m
+            JOIN posts p ON m.post_id = p.id
+            WHERE p.archived = TRUE AND m.status = 'done' AND (m.file_path IS NULL OR m.file_path = '' OR NOT exists (SELECT 1 from media m2 where m2.file_path = m.file_path))
+        """)
+        # This is handled differently - let's count posts by status
+        cur.execute("""
+            SELECT COUNT(DISTINCT p.id) FROM posts p
+            WHERE p.archived = TRUE
+        """)
+        total_archived_check = cur.fetchone()[0] or 0
+
+        return {
+            "total_archived_posts": total_archived,
+            "posts_with_media": posts_with_media,
+            "posts_all_ok": posts_all_downloaded,
+            "posts_with_issues": posts_with_missing,
+            "total_media_items": total_media,
+            "media_ok": media_downloaded,
+            "media_missing": media_missing,
+        }
+
+
+@app.get("/api/admin/audit/posts")
+def audit_posts(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status_filter: Optional[str] = None,  # "ok" | "missing" | "partial"
+    subreddit: Optional[str] = None,
+):
+    """Get detailed audit results for each archived post."""
+    with get_db_cursor() as cur:
+        # Build query based on filters
+        base_query = """
+            SELECT p.id, p.title, p.subreddit, p.author, p.created_utc, p.url
+            FROM posts p
+            WHERE p.archived = TRUE
+        """
+        params: list[Any] = []
+
+        if subreddit:
+            base_query += " AND LOWER(p.subreddit) = LOWER(%s)"
+            params.append(subreddit)
+
+        if status_filter == "ok":
+            base_query += """
+                AND NOT EXISTS (
+                    SELECT 1 FROM media m WHERE m.post_id = p.id AND (
+                        m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
+                    )
+                )
+            """
+        elif status_filter == "missing":
+            base_query += """
+                AND EXISTS (
+                    SELECT 1 FROM media m WHERE m.post_id = p.id AND (
+                        m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
+                    )
+                )
+            """
+
+        # Get total count
+        count_query = base_query.replace(
+            "SELECT p.id, p.title, p.subreddit, p.author, p.created_utc, p.url",
+            "SELECT COUNT(*)",
+        )
+        cur.execute(count_query, params)
+        total = cur.fetchone()[0] or 0
+
+        # Get paginated results
+        base_query += " ORDER BY p.created_utc DESC LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+        cur.execute(base_query, params)
+
+        results = []
+        for row in cur.fetchall():
+            post_id, title, subreddit, author, created_utc, url = row
+
+            # Get media for this post
+            cur.execute(
+                """
+                SELECT id, url, file_path, thumb_path, status
+                FROM media WHERE post_id = %s
+            """,
+                (post_id,),
+            )
+            media_rows = cur.fetchall()
+
+            media_items = []
+            ok_count = 0
+            missing_count = 0
+
+            for m_id, m_url, m_file_path, m_thumb_path, m_status in media_rows:
+                file_exists = (
+                    m_file_path and os.path.exists(m_file_path)
+                    if m_file_path
+                    else False
+                )
+                thumb_exists = (
+                    m_thumb_path and os.path.exists(m_thumb_path)
+                    if m_thumb_path
+                    else False
+                )
+
+                if m_status == "done" and file_exists:
+                    status = "ok"
+                    ok_count += 1
+                elif m_status == "done" and not file_exists:
+                    status = "missing_file"
+                    missing_count += 1
+                elif m_status == "pending":
+                    status = "pending"
+                    missing_count += 1
+                elif m_status == "failed":
+                    status = "failed"
+                    missing_count += 1
+                else:
+                    status = "unknown"
+                    missing_count += 1
+
+                media_items.append(
+                    {
+                        "id": m_id,
+                        "url": m_url,
+                        "file_path": m_file_path,
+                        "file_exists": file_exists,
+                        "thumb_exists": thumb_exists,
+                        "status": status,
+                    }
+                )
+
+            total_media = len(media_items)
+            if total_media == 0:
+                post_status = "no_media"
+            elif missing_count == 0:
+                post_status = "ok"
+            elif ok_count == 0:
+                post_status = "all_missing"
+            else:
+                post_status = "partial"
+
+            results.append(
+                {
+                    "id": post_id,
+                    "title": title,
+                    "subreddit": subreddit,
+                    "author": author,
+                    "created_utc": created_utc.isoformat() if created_utc else None,
+                    "url": url,
+                    "status": post_status,
+                    "media_count": total_media,
+                    "media_ok": ok_count,
+                    "media_missing": missing_count,
+                    "media": media_items,
+                }
+            )
+
+        return {
+            "posts": results,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+@app.get("/api/admin/audit/post/{post_id}")
+def audit_post_detail(post_id: str):
+    """Get detailed audit information for a single post."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, title, subreddit, author, created_utc, url, raw
+            FROM posts WHERE id = %s AND archived = TRUE
+        """,
+            (post_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        post_id, title, subreddit, author, created_utc, url, raw = row
+
+        cur.execute(
+            """
+            SELECT id, url, file_path, thumb_path, status, downloaded_at, retries
+            FROM media WHERE post_id = %s
+        """,
+            (post_id,),
+        )
+
+        media_items = []
+        for m in cur.fetchall():
+            (
+                m_id,
+                m_url,
+                m_file_path,
+                m_thumb_path,
+                m_status,
+                m_downloaded_at,
+                m_retries,
+            ) = m
+
+            file_exists = (
+                m_file_path and os.path.exists(m_file_path) if m_file_path else False
+            )
+            thumb_exists = (
+                m_thumb_path and os.path.exists(m_thumb_path) if m_thumb_path else False
+            )
+
+            if m_status == "done" and file_exists:
+                status = "ok"
+            elif m_status == "done" and not file_exists:
+                status = "missing_file"
+            elif m_status == "pending":
+                status = "pending"
+            elif m_status == "failed":
+                status = "failed"
+            else:
+                status = "unknown"
+
+            media_items.append(
+                {
+                    "id": m_id,
+                    "url": m_url,
+                    "file_path": m_file_path,
+                    "file_exists": file_exists,
+                    "thumb_path": m_thumb_path,
+                    "thumb_exists": thumb_exists,
+                    "status": m_status,
+                    "resolved_status": status,
+                    "downloaded_at": m_downloaded_at.isoformat()
+                    if m_downloaded_at
+                    else None,
+                    "retries": m_retries,
+                }
+            )
+
+        # Determine overall status
+        if not media_items:
+            overall = "no_media"
+        elif all(m["resolved_status"] == "ok" for m in media_items):
+            overall = "ok"
+        elif all(m["resolved_status"] != "ok" for m in media_items):
+            overall = "all_missing"
+        else:
+            overall = "partial"
+
+        return {
+            "id": post_id,
+            "title": title,
+            "subreddit": subreddit,
+            "author": author,
+            "created_utc": created_utc.isoformat() if created_utc else None,
+            "url": url,
+            "overall_status": overall,
+            "media": media_items,
+        }
 
 
 @app.post("/api/admin/target/{target_type}")

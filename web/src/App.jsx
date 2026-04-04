@@ -1,13 +1,16 @@
 import {useEffect,useState,useRef,useCallback} from "react"
+import {NavLink, useLocation} from "react-router-dom"
 import axios from "axios"
 
 export default function App(){
+  const location = useLocation()
+  const activeTab = location.pathname === "/" ? "browse" : location.pathname.slice(1)
+
   const [posts,setPosts]=useState([])
   const [search,setSearch]=useState("")
   const [searchResults,setSearchResults]=useState(null)
   const [selectedPost,setSelectedPost]=useState(null)
   const [galleryIdx,setGalleryIdx]=useState(0)
-  const [activeTab,setActiveTab]=useState("browse")
   const [archivePosts,setArchivePosts]=useState([])
   const [archiveOffset,setArchiveOffset]=useState(0)
   const archiveOffsetRef=useRef(0)
@@ -27,6 +30,13 @@ export default function App(){
   const [logs,setLogs]=useState([])
   const [hoveredCard,setHoveredCard]=useState(null)
   const [adminLoading, setAdminLoading] = useState(false)
+  const [auditData, setAuditData] = useState(null)
+  const [auditPosts, setAuditPosts] = useState([])
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditPostDetail, setAuditPostDetail] = useState(null)
+  const [auditFilters, setAuditFilters] = useState({status: "", subreddit: ""})
+  const [auditOffset, setAuditOffset] = useState(0)
+  const auditOffsetRef = useRef(0)
   const [queueInfo, setQueueInfo] = useState(null)
   const [healthStatus, setHealthStatus] = useState(null)
   const [newPostsAvailable, setNewPostsAvailable] = useState(0)
@@ -168,6 +178,10 @@ export default function App(){
     if(activeTab === "admin"){
       if(!adminData) loadAdmin()
       loadThumbStats()
+    }
+    if(activeTab === "audit"){
+      loadAuditSummary()
+      loadAuditPosts()
     }
   },[activeTab])
 
@@ -552,6 +566,28 @@ export default function App(){
     try{ return new Date(iso).toLocaleString() }catch{ return iso }
   }
 
+  function loadAuditSummary(){
+    axios.get("/api/admin/audit/summary")
+      .then(r=>setAuditData(r.data))
+      .catch(()=>setAuditData(null))
+  }
+
+  function loadAuditPosts(offset=0, status="", subreddit=""){
+    setAuditLoading(true)
+    const params = new URLSearchParams({limit:"50", offset:String(offset)})
+    if(status) params.set("status_filter", status)
+    if(subreddit) params.set("subreddit", subreddit)
+    axios.get(`/api/admin/audit/posts?${params.toString()}`)
+      .then(r=>{ setAuditPosts(r.data.posts); setAuditLoading(false) })
+      .catch(()=>{ setAuditPosts([]); setAuditLoading(false) })
+  }
+
+  function loadAuditPostDetail(postId){
+    axios.get(`/api/admin/audit/post/${postId}`)
+      .then(r=>setAuditPostDetail(r.data))
+      .catch(()=>setAuditPostDetail(null))
+  }
+
   // Infinite scroll with cleanup
   useEffect(()=>{
     const obs = new IntersectionObserver(entries=>{
@@ -650,10 +686,15 @@ export default function App(){
             </div>
             <h1 style={{margin:0,fontSize:"22px",fontWeight:"700",background:"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Reddit Archive</h1>
             <div style={{display:"flex",gap:"4px",background:"#1a1a1a",padding:"4px",borderRadius:"10px"}}>
-              {[{id:"browse",label:"Browse",icon:"⊞"},{id:"archive",label:"Archive",icon:"🗃"},{id:"admin",label:"Admin",icon:"⚙"}].map(tab=>(
-                <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{padding:"8px 16px",background:activeTab===tab.id?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontWeight:activeTab===tab.id?"600":"400",fontSize:"14px",display:"flex",alignItems:"center",gap:"6px",transition:"all 0.2s ease"}}>
+              {[
+                {to:"/",label:"Browse",icon:"⊞"},
+                {to:"/archive",label:"Archive",icon:"🗃"},
+                {to:"/audit",label:"Audit",icon:"✓"},
+                {to:"/admin",label:"Admin",icon:"⚙"}
+              ].map(tab=>(
+                <NavLink key={tab.to} to={tab.to} end={tab.to==="/"} style={({isActive})=>({padding:"8px 16px",background:isActive?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontWeight:isActive?"600":"400",fontSize:"14px",display:"flex",alignItems:"center",gap:"6px",transition:"all 0.2s ease",textDecoration:"none"})}>
                   <span style={{fontSize:"16px"}}>{tab.icon}</span>{tab.label}
-                </button>
+                </NavLink>
               ))}
             </div>
             <LiveDot connected={liveConnected}/>
@@ -673,6 +714,142 @@ export default function App(){
           </div>
         </div>
       </header>
+
+      {/* ── AUDIT TAB ── */}
+      {activeTab === "audit" && (
+        <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#46d160,#2da64d)",borderRadius:"2px"}} />
+              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Audit Dashboard</h2>
+              <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>Archived Assets</span>
+            </div>
+            <button onClick={()=>{loadAuditSummary();loadAuditPosts()}} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
+          </div>
+
+          {auditData && (
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"16px",marginBottom:"32px"}}>
+              {[
+                {label:"Total Archived",value:auditData.total_archived_posts,color:"#fff",icon:"📦"},
+                {label:"Posts All OK",value:auditData.posts_all_ok,color:"#46d160",icon:"✓"},
+                {label:"Posts w/Issues",value:auditData.posts_with_issues,color:auditData.posts_with_issues>0?"#ff4500":"#46d160",icon:"⚠"},
+                {label:"Media OK",value:auditData.media_ok,color:"#46d160",icon:"✓"},
+                {label:"Media Missing",value:auditData.media_missing,color:auditData.media_missing>0?"#ff4500":"#46d160",icon:"✗"},
+              ].map(s=>(
+                <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                  <div style={{fontSize:"11px",color:"#666",marginBottom:"6px",textTransform:"uppercase"}}>{s.label}</div>
+                  <div style={{fontSize:"24px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {auditData && auditData.posts_with_issues===0 && (
+            <div style={{background:"#0d2818",border:"1px solid #1a4a1a",borderRadius:"12px",padding:"20px",marginBottom:"24px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{fontSize:"24px"}}>✓</div>
+                <div><div style={{fontSize:"16px",fontWeight:"600",color:"#46d160"}}>All Assets Verified</div>
+                <div style={{fontSize:"13px",color:"#888"}}>Every archived media file is present and accessible.</div></div>
+              </div>
+            </div>
+          )}
+
+          {auditData && auditData.posts_with_issues>0 && (
+            <div style={{background:"#2d1a00",border:"1px solid #4a3a00",borderRadius:"12px",padding:"20px",marginBottom:"24px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{fontSize:"24px"}}>⚠</div>
+                <div><div style={{fontSize:"16px",fontWeight:"600",color:"#ff4500"}}>{auditData.posts_with_issues} Posts Need Attention</div>
+                <div style={{fontSize:"13px",color:"#888"}}>Some media files missing - review details below.</div></div>
+              </div>
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:"12px",marginBottom:"20px"}}>
+            <select value={auditFilters.status} onChange={e=>{setAuditFilters(f=>({...f,status:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,e.target.value,auditFilters.subreddit)}}
+              style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px"}}>
+              <option value="">All</option>
+              <option value="ok">All OK</option>
+              <option value="missing">Has Missing</option>
+            </select>
+            <input type="text" placeholder="r/ filter" value={auditFilters.subreddit}
+              onChange={e=>{setAuditFilters(f=>({...f,subreddit:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,auditFilters.status,e.target.value)}}
+              style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",width:"140px"}}/>
+          </div>
+
+          <div style={{background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
+              <thead><tr style={{background:"#141414"}}>
+                {["Status","Subreddit","Title","Media","Date"].map(h=>(
+                  <th key={h} style={{padding:"12px 16px",textAlign:"left",color:"#666",fontSize:"11px",textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {auditPosts.map(p=>(
+                  <tr key={p.id} onClick={()=>loadAuditPostDetail(p.id)} style={{cursor:"pointer",borderBottom:"1px solid #222"}} onMouseEnter={e=>e.currentTarget.style.background="#1a1a1a"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <td style={{padding:"12px 16px"}}>
+                      {p.status==="ok" && <span style={{background:"#0d2818",color:"#46d160",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>✓ OK</span>}
+                      {p.status==="partial" && <span style={{background:"#2d2000",color:"#f9c300",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>⚠ Partial</span>}
+                      {p.status==="all_missing" && <span style={{background:"#2d0000",color:"#ff4500",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>✗ Missing</span>}
+                      {p.status==="no_media" && <span style={{background:"#1a1a1a",color:"#666",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>— None</span>}
+                    </td>
+                    <td style={{padding:"12px 16px",color:"#ff4500"}}>{p.subreddit}</td>
+                    <td style={{padding:"12px 16px",maxWidth:"300px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.title}</td>
+                    <td style={{padding:"12px 16px",fontVariantNumeric:"tabular-nums"}}><span style={{color:p.media_missing>0?"#ff4500":"#46d160"}}>{p.media_ok}</span>/{p.media_count}</td>
+                    <td style={{padding:"12px 16px",color:"#555"}}>{p.created_utc?new Date(p.created_utc).toLocaleDateString():"-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {auditPosts.length===0 && !auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>No archived posts.</div>}
+            {auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>Loading...</div>}
+          </div>
+
+          {auditPosts.length > 0 && (
+            <div style={{display:"flex",justifyContent:"center",gap:"8px",marginTop:"16px"}}>
+              <button onClick={()=>{const o=Math.max(0,auditOffsetRef.current-50);auditOffsetRef.current=o;setAuditOffset(o);loadAuditPosts(o,auditFilters.status,auditFilters.subreddit)}} disabled={auditOffset===0}
+                style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:auditOffset===0?"#444":"#888",cursor:auditOffset===0?"not-allowed":"pointer"}}>← Prev</button>
+              <button onClick={()=>{const o=auditOffsetRef.current+50;auditOffsetRef.current=o;setAuditOffset(o);loadAuditPosts(o,auditFilters.status,auditFilters.subreddit)}} disabled={auditPosts.length<50}
+                style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:auditPosts.length<50?"#444":"#888",cursor:auditPosts.length<50?"not-allowed":"pointer"}}>Next →</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {auditPostDetail && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"20px"}} onClick={()=>setAuditPostDetail(null)}>
+          <div style={{background:"#0d0d0d",borderRadius:"16px",maxWidth:"600px",width:"100%",maxHeight:"80vh",overflow:"auto",border:"1px solid #222"}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"20px",borderBottom:"1px solid #1a1a1a"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontSize:"11px",color:"#ff4500",marginBottom:"4px"}}>r/{auditPostDetail.subreddit}</div>
+                  <div style={{fontSize:"16px",fontWeight:"600"}}>{auditPostDetail.title}</div>
+                </div>
+                {auditPostDetail.overall_status==="ok" && <span style={{background:"#0d2818",color:"#46d160",padding:"4px 10px",borderRadius:"6px",fontSize:"11px"}}>✓ OK</span>}
+                {auditPostDetail.overall_status==="partial" && <span style={{background:"#2d2000",color:"#f9c300",padding:"4px 10px",borderRadius:"6px",fontSize:"11px"}}>⚠ Partial</span>}
+                {auditPostDetail.overall_status==="all_missing" && <span style={{background:"#2d0000",color:"#ff4500",padding:"4px 10px",borderRadius:"6px",fontSize:"11px"}}>✗ Missing</span>}
+              </div>
+            </div>
+            <div style={{padding:"20px"}}>
+              {auditPostDetail.media.length===0 && <div style={{color:"#555"}}>No media items.</div>}
+              {auditPostDetail.media.map(m=>(
+                <div key={m.id} style={{background:"#141414",borderRadius:"8px",padding:"12px",marginBottom:"8px",border:m.resolved_status==="ok"?"1px solid #1a3a1a":"1px solid #3a1a1a"}}>
+                  <div style={{marginBottom:"4px"}}>
+                    {m.resolved_status==="ok" && <span style={{color:"#46d160",fontSize:"11px"}}>✓ Available</span>}
+                    {m.resolved_status==="missing_file" && <span style={{color:"#ff4500",fontSize:"11px"}}>✗ File Missing</span>}
+                    {m.resolved_status==="pending" && <span style={{color:"#7193ff",fontSize:"11px"}}>⏳ Pending</span>}
+                    {m.resolved_status==="failed" && <span style={{color:"#ff4500",fontSize:"11px"}}>✗ Failed</span>}
+                  </div>
+                  <div style={{fontSize:"12px",color:"#888",wordBreak:"break-all"}}>{m.url}</div>
+                  {m.file_path && <div style={{fontSize:"11px",color:"#555",marginTop:"4px"}}>File: {m.file_exists?"✓":"✗"} | {m.file_path}</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{padding:"16px 20px",borderTop:"1px solid #1a1a1a",display:"flex",justifyContent:"flex-end"}}>
+              <button onClick={()=>setAuditPostDetail(null)} style={{padding:"8px 16px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888"}}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── ADMIN TAB ── */}
       {activeTab === "admin" && (
