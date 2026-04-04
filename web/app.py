@@ -1492,6 +1492,33 @@ async def event_stream():
 
         return await asyncio.to_thread(_query)
 
+    async def db_new_media(after_dt):
+        def _query():
+            conn = None
+            cur = None
+            try:
+                if not connection_pool:
+                    return []
+                conn = connection_pool.getconn()
+                cur = conn.cursor()
+                if after_dt is None:
+                    cur.execute(
+                        "SELECT id, post_id, url, file_path, downloaded_at FROM media WHERE status = 'done' ORDER BY downloaded_at DESC LIMIT 1"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id, post_id, url, file_path, downloaded_at FROM media WHERE status = 'done' AND downloaded_at > %s ORDER BY downloaded_at DESC LIMIT 20",
+                        (after_dt,),
+                    )
+                return cur.fetchall()
+            finally:
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
+
+        return await asyncio.to_thread(_query)
+
     async def check_health():
         def _check():
             issues = []
@@ -1527,6 +1554,7 @@ async def event_stream():
     async def generate():
         first_run = True
         last_post_ingested = None
+        last_media_downloaded = None
 
         while True:
             try:
@@ -1579,6 +1607,25 @@ async def event_stream():
                             for r in new_rows
                         ]
                         last_post_ingested = new_rows[0][5]
+
+                # Check for newly downloaded media
+                media_rows = await db_new_media(last_media_downloaded)
+
+                if first_run:
+                    if media_rows:
+                        last_media_downloaded = media_rows[0][4]
+                else:
+                    if media_rows:
+                        stats["new_media"] = [
+                            {
+                                "id": r[0],
+                                "post_id": r[1],
+                                "url": r[2],
+                                "file_path": r[3],
+                            }
+                            for r in media_rows
+                        ]
+                        last_media_downloaded = media_rows[0][4]
 
                 # Serialize — if targets/health contain an unexpected non-serializable
                 # value, strip those fields and still emit the core stats.

@@ -111,6 +111,13 @@ export default function App(){
               setNewPostsAvailable(n => n + data.new_posts.length)
             }
           }
+
+          // Handle newly downloaded media - refresh to show new thumbnails
+          if(data.new_media && data.new_media.length > 0){
+            if(filtersRef.current.sort === "last_added"){
+              refreshPosts()
+            }
+          }
         } catch(err){
           console.error("SSE parse error:", err)
         }

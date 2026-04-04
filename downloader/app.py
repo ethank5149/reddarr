@@ -166,8 +166,16 @@ while True:
     q_title = item.get("title", "")
 
     if not url:
-        logger.warning(f"Skipping {post_id} - no URL")
-        continue
+        db.rollback()
+        with db.cursor() as cur:
+            cur.execute("SELECT url FROM posts WHERE id = %s", (post_id,))
+            row = cur.fetchone()
+        if row and row[0]:
+            url = row[0]
+            logger.info(f"Retrieved URL from DB for {post_id}: {url[:60]}...")
+        else:
+            logger.warning(f"Skipping {post_id} - no URL in queue or DB")
+            continue
 
     logger.info(f"Dequeued: post_id={post_id}, url={url[:60]}...")
 
