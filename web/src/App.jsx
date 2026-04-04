@@ -206,7 +206,7 @@ export default function App(){
 
   function buildPostsQuery(offset, filtersOverride, archivedFlag=false){
     const f = filtersOverride || filtersRef.current
-    const params = new URLSearchParams({ limit:"50", offset:String(offset) })
+    const params = new URLSearchParams({ limit:"50", offset:String(offset), _t: Date.now().toString() })
     if(archivedFlag) params.set("archived","true")
     if(f.subreddit) params.set("subreddit", f.subreddit)
     if(f.author) params.set("author", f.author)
