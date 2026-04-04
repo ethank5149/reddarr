@@ -519,7 +519,7 @@ def run_cycle(force_backfill=False, backfill_passes=None, backfill_workers=None)
         run_backfill_parallel(targets, passes, workers)
     else:
         for ttype, name, last in targets:
-            new_found, processed = scrape_target(ttype, name, "new")
+            new_found, processed, _ = scrape_target(ttype, name, "new")
 
             try:
                 db = get_db()
