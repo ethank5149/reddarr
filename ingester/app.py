@@ -33,8 +33,12 @@ rd = redis.Redis(host=os.getenv("REDIS_HOST"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
 SCRAPE_LIMIT = os.getenv("SCRAPE_LIMIT")
 SCRAPE_LIMIT = int(SCRAPE_LIMIT) if SCRAPE_LIMIT else None
+BACKFILL_MODE = os.getenv("BACKFILL_MODE", "false").lower() == "true"
+BACKFILL_WORKERS = int(os.getenv("BACKFILL_WORKERS", "3"))
+BACKFILL_PASSES = int(os.getenv("BACKFILL_PASSES", "2"))
 
 logger.info(f"POLL_INTERVAL set to: {POLL_INTERVAL}")
+logger.info(f"BACKFILL_MODE: {BACKFILL_MODE}")
 
 reddit = praw.Reddit(
     client_id=open("/run/secrets/reddit_client_id").read().strip(),
@@ -272,8 +276,95 @@ def ingest_post(db, p):
     return True
 
 
-def run_cycle():
-    """Run a single scrape cycle for all enabled targets."""
+def scrape_target(ttype, name, sort_method="new"):
+    """Scrape a single target with the specified sort method."""
+    db = get_db()
+    new_posts_found = 0
+    posts_processed = 0
+    oldest_seen = None
+
+    try:
+        if ttype == "subreddit":
+            sr = reddit.subreddit(name)
+            if sort_method == "top_all":
+                src = sr.top(time_filter="all", limit=SCRAPE_LIMIT)
+            elif sort_method == "top_year":
+                src = sr.top(time_filter="year", limit=SCRAPE_LIMIT)
+            elif sort_method == "top_month":
+                src = sr.top(time_filter="month", limit=SCRAPE_LIMIT)
+            else:
+                src = sr.new(limit=SCRAPE_LIMIT)
+        else:
+            user = reddit.redditor(name)
+            if sort_method == "top_all":
+                src = user.submissions.top(time_filter="all", limit=SCRAPE_LIMIT)
+            elif sort_method == "top_year":
+                src = user.submissions.top(time_filter="year", limit=SCRAPE_LIMIT)
+            elif sort_method == "top_month":
+                src = user.submissions.top(time_filter="month", limit=SCRAPE_LIMIT)
+            else:
+                src = user.submissions.new(limit=SCRAPE_LIMIT)
+
+        for p in src:
+            posts_processed += 1
+            created = datetime.utcfromtimestamp(p.created_utc)
+
+            try:
+                db = get_db()
+                is_new = ingest_post(db, p)
+                if is_new:
+                    new_posts_found += 1
+            except Exception as e:
+                logger.error(f"Failed to ingest post {p.id}: {e}")
+
+            if oldest_seen is None or created < oldest_seen:
+                oldest_seen = created
+
+        logger.info(
+            f"[{sort_method}] {ttype}:{name} - {posts_processed} processed, {new_posts_found} new"
+        )
+
+    except Exception as e:
+        logger.error(f"Error scraping {ttype}:{name} ({sort_method}): {e}")
+
+    return new_posts_found, posts_processed
+
+
+def run_backfill_parallel(targets, passes=None, workers=None):
+    """Run backfill on targets in parallel using multiple workers."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    passes = passes if passes else BACKFILL_PASSES
+    workers = workers if workers else BACKFILL_WORKERS
+
+    logger.info(f"Starting parallel backfill with {workers} workers, {passes} passes")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {}
+        for ttype, name, last in targets:
+            for pass_num in range(passes):
+                sort_method = "top_all" if pass_num == 0 else "new"
+                future = executor.submit(scrape_target, ttype, name, sort_method)
+                futures[future] = (ttype, name, sort_method)
+
+        for future in as_completed(futures):
+            ttype, name, sort_method = futures[future]
+            try:
+                new_found, processed = future.result()
+            except Exception as e:
+                logger.error(f"Backfill failed for {ttype}:{name} ({sort_method}): {e}")
+
+    logger.info("Parallel backfill completed")
+
+
+def run_cycle(force_backfill=False, backfill_passes=None, backfill_workers=None):
+    """Run a single scrape cycle for all enabled targets.
+
+    Args:
+        force_backfill: If True, run in backfill mode regardless of BACKFILL_MODE env
+        backfill_passes: Number of passes for backfill (default: BACKFILL_PASSES)
+        backfill_workers: Number of parallel workers for backfill (default: BACKFILL_WORKERS)
+    """
     cycle_start = datetime.utcnow()
     logger.info("Checking targets for new posts...")
     targets_enabled.set(0)
@@ -291,41 +382,16 @@ def run_cycle():
     logger.info(f"Found {len(targets)} enabled targets")
     targets_enabled.set(len(targets))
 
-    for ttype, name, last in targets:
-        logger.info(f"Processing {ttype}: {name}")
-        try:
-            db = get_db()
+    if force_backfill or BACKFILL_MODE:
+        logger.info("Running in BACKFILL mode - parallel scraping with multiple passes")
+        # Override with provided values or use env defaults
+        passes = backfill_passes if backfill_passes else BACKFILL_PASSES
+        workers = backfill_workers if backfill_workers else BACKFILL_WORKERS
+        run_backfill_parallel(targets, passes, workers)
+    else:
+        for ttype, name, last in targets:
+            new_found, processed = scrape_target(ttype, name, "new")
 
-            if ttype == "subreddit":
-                src = reddit.subreddit(name).new(limit=SCRAPE_LIMIT)
-            else:
-                src = reddit.redditor(name).submissions.new(limit=SCRAPE_LIMIT)
-
-            oldest_seen = None
-            posts_processed = 0
-            new_posts_found = 0
-
-            for p in src:
-                posts_processed += 1
-                created = datetime.utcfromtimestamp(p.created_utc)
-
-                try:
-                    db = get_db()
-                    is_new = ingest_post(db, p)
-                    if is_new:
-                        new_posts_found += 1
-                except Exception as e:
-                    logger.error(f"Failed to ingest post {p.id}: {e}", exc_info=True)
-
-                if oldest_seen is None or created < oldest_seen:
-                    oldest_seen = created
-
-            logger.info(
-                f"Processed {posts_processed} posts for {name}, {new_posts_found} new"
-            )
-
-            # Always stamp last_created with now() so the admin panel
-            # shows an accurate "Last scraped" time after every cycle.
             try:
                 db = get_db()
                 cur = db.cursor()
@@ -335,16 +401,8 @@ def run_cycle():
                 )
                 db.commit()
                 cur.close()
-                logger.info(f"Updated last_scraped for {ttype}:{name}")
             except Exception as e:
                 logger.error(f"Failed to update last_created for {name}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error processing {name}: {e}", exc_info=True)
-            try:
-                get_db().rollback()
-            except Exception:
-                pass
 
     cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
     ingest_cycle_duration.observe(cycle_duration)
@@ -353,22 +411,60 @@ def run_cycle():
 
 def run():
     while True:
-        run_cycle()
+        # Check for manual scrape trigger
+        scrape_triggered = False
+        backfill_triggered = False
+        backfill_config = {}
+
+        try:
+            msg = rd.lpop("scrape_trigger")
+            if msg:
+                logger.info("Manual scrape triggered via UI — running cycle now")
+                scrape_triggered = True
+        except Exception:
+            pass
+
+        try:
+            msg = rd.lpop("backfill_trigger")
+            if msg:
+                logger.info("Manual backfill triggered via UI")
+                backfill_config = json.loads(msg) if msg else {}
+                backfill_triggered = True
+        except Exception:
+            pass
+
+        # Run cycle with appropriate mode
+        if backfill_triggered:
+            logger.info(f"Running backfill with config: {backfill_config}")
+            passes = backfill_config.get("passes", BACKFILL_PASSES)
+            workers = backfill_config.get("workers", BACKFILL_WORKERS)
+            run_cycle(
+                force_backfill=True, backfill_passes=passes, backfill_workers=workers
+            )
+        else:
+            run_cycle()
 
         logger.info(f"Sleeping for {POLL_INTERVAL} seconds")
         # Sleep in small increments so we can respond to scrape_trigger promptly
-        elapsed = 0
-        while elapsed < POLL_INTERVAL:
-            time.sleep(min(5, POLL_INTERVAL - elapsed))
-            elapsed += 5
-            # Check for a manual scrape trigger from the web UI
-            try:
-                msg = rd.lpop("scrape_trigger")
-                if msg:
-                    logger.info("Manual scrape triggered via UI — running cycle now")
-                    break
-            except Exception:
-                pass
+        if not scrape_triggered and not backfill_triggered:
+            elapsed = 0
+            while elapsed < POLL_INTERVAL:
+                time.sleep(min(5, POLL_INTERVAL - elapsed))
+                elapsed += 5
+                # Check for triggers during sleep
+                try:
+                    msg = rd.lpop("scrape_trigger")
+                    if msg:
+                        logger.info(
+                            "Manual scrape triggered via UI — running cycle now"
+                        )
+                        break
+                    msg = rd.lpop("backfill_trigger")
+                    if msg:
+                        logger.info("Manual backfill triggered via UI")
+                        break
+                except Exception:
+                    pass
 
 
 run()

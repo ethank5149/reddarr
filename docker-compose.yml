@@ -39,7 +39,7 @@ services:
       REDDIT_TARGET_USERS: ${REDDIT_TARGET_USERS}
       ARCHIVE_PATH: ${ARCHIVE_PATH}
       POLL_INTERVAL: ${POLL_INTERVAL:-300}
-      SCRAPE_LIMIT: ${SCRAPE_LIMIT:-}
+      SCRAPE_LIMIT: ${SCRAPE_LIMIT:-500}
     secrets:
       - reddit_client_id
       - reddit_client_secret

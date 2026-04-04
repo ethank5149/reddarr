@@ -766,6 +766,33 @@ def trigger_scrape():
     return {"status": "ok", "message": "Scrape triggered"}
 
 
+@app.post("/api/admin/backfill")
+def trigger_backfill(
+    passes: int = Query(2, ge=1, le=10, description="Number of backfill passes"),
+    workers: int = Query(3, ge=1, le=20, description="Parallel workers"),
+):
+    """Trigger a backfill scrape to get historical posts."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+    rd.lpush(
+        "backfill_trigger",
+        json.dumps(
+            {
+                "triggered_at": datetime.utcnow().isoformat(),
+                "passes": passes,
+                "workers": workers,
+            }
+        ),
+    )
+
+    return {
+        "status": "ok",
+        "message": f"Backfill triggered with {passes} passes, {workers} workers",
+    }
+
+
 @app.post("/api/admin/target/{target_type}")
 def add_target(target_type: str, name: str):
     if target_type not in ("subreddit", "user"):
@@ -783,8 +810,18 @@ def add_target(target_type: str, name: str):
 
 
 @app.delete("/api/admin/target/{target_type}/{name}")
-def delete_target(target_type: str, name: str):
-    with get_db_cursor() as cur:
+def delete_target(
+    target_type: str,
+    name: str,
+    prune: bool = Query(False, description="Also delete associated posts and media"),
+    delete_files: bool = Query(False, description="Also delete media files from disk"),
+):
+    conn = None
+    cur = None
+    try:
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+
         cur.execute(
             "DELETE FROM targets WHERE type = %s AND name = %s RETURNING id",
             (target_type, name),
@@ -792,7 +829,70 @@ def delete_target(target_type: str, name: str):
         result = cur.fetchone()
         if result is None:
             raise HTTPException(status_code=404, detail="Target not found")
-        return {"status": "ok", "deleted": name}
+
+        deleted_posts = 0
+        deleted_media = 0
+        deleted_files = 0
+
+        if prune:
+            if target_type == "subreddit":
+                cur.execute(
+                    "DELETE FROM posts WHERE LOWER(subreddit) = LOWER(%s) RETURNING id",
+                    (name,),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM posts WHERE LOWER(author) = LOWER(%s) RETURNING id",
+                    (name,),
+                )
+            deleted_posts = cur.rowcount
+
+            cur.execute(
+                "SELECT id FROM posts WHERE "
+                + (
+                    "LOWER(subreddit) = LOWER(%s)"
+                    if target_type == "subreddit"
+                    else "LOWER(author) = LOWER(%s)"
+                ),
+                (name,),
+            )
+            post_ids = [row[0] for row in cur.fetchall()]
+
+            if post_ids:
+                cur.execute("DELETE FROM media WHERE post_id = ANY(%s)", (post_ids,))
+                deleted_media = cur.rowcount
+
+                if delete_files:
+                    cur.execute(
+                        "SELECT file_path FROM media WHERE post_id = ANY(%s) AND file_path IS NOT NULL",
+                        (post_ids,),
+                    )
+                    for row in cur.fetchall():
+                        if row[0] and os.path.exists(row[0]):
+                            try:
+                                os.remove(row[0])
+                                deleted_files += 1
+                            except Exception:
+                                pass
+
+        conn.commit()
+        return {
+            "status": "ok",
+            "deleted": name,
+            "pruned": prune,
+            "deleted_posts": deleted_posts,
+            "deleted_media": deleted_media,
+            "deleted_files": deleted_files,
+        }
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cur:
+            cur.close()
+        if conn and connection_pool:
+            connection_pool.putconn(conn)
 
 
 @app.get("/api/admin/logs")

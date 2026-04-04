@@ -34,6 +34,7 @@ export default function App(){
 
   // Scrape trigger feedback
   const [scrapeTriggered, setScrapeTriggered] = useState(false)
+  const [backfillTriggered, setBackfillTriggered] = useState(false)
 
   // Filter + sort state
   const [filterSubreddit, setFilterSubreddit] = useState("")
@@ -306,9 +307,29 @@ export default function App(){
       .catch(()=>alert("Failed to trigger scrape"))
   }
 
+  function triggerBackfill(){
+    const passes = prompt("Number of backfill passes (1-10, default 2):", "2")
+    if (passes === null) return
+    const workers = prompt("Parallel workers (1-20, default 3):", "3")
+    if (workers === null) return
+    
+    axios.post(`/api/admin/backfill?passes=${passes}&workers=${workers}`)
+      .then(()=>{ setBackfillTriggered(true); setTimeout(()=>setBackfillTriggered(false), 3000) })
+      .catch(()=>alert("Failed to trigger backfill"))
+  }
+
   function deleteTarget(ttype,name){
-    if(!confirm(`Delete target ${ttype}:${name}? This removes it from the scrape list but does not delete archived posts.`)) return
-    axios.delete(`/api/admin/target/${ttype}/${name}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
+    const shouldPrune = confirm(`Delete target ${ttype}:${name}?\n\nClick OK to remove from scrape list only.\nClick Cancel to also delete all associated posts and media.`)
+    
+    if (shouldPrune) {
+      axios.delete(`/api/admin/target/${ttype}/${name}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
+    } else {
+      const alsoDeleteFiles = confirm("Also delete downloaded media files from disk? (This cannot be undone)")
+      axios.delete(`/api/admin/target/${ttype}/${name}?prune=true&delete_files=${alsoDeleteFiles}`)
+        .then(r=>alert(`Deleted: ${r.data.deleted_posts} posts, ${r.data.deleted_media} media, ${r.data.deleted_files} files`))
+        .then(()=>loadAdmin())
+        .catch(()=>alert("Failed to delete target"))
+    }
   }
 
   function addTarget(){
@@ -609,6 +630,10 @@ export default function App(){
                 <button onClick={scrapeNow}
                   style={{padding:"6px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.3s ease"}}>
                   {scrapeTriggered ? "✓ Triggered" : "⚡ Scrape Now"}
+                </button>
+                <button onClick={triggerBackfill}
+                  style={{padding:"6px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.3s ease"}}>
+                  {backfillTriggered ? "✓ Triggered" : "📜 Backfill"}
                 </button>
               </div>
               {/* Add target form */}
