@@ -8,7 +8,7 @@ import subprocess
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg2
@@ -74,6 +74,34 @@ connection_pool = None
 redis_client = None
 
 
+_MIGRATIONS = [
+    # Ensure columns added in v4 exist on databases initialised before this version
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP DEFAULT now()",
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE NOT NULL",
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP",
+    "CREATE INDEX IF NOT EXISTS idx_posts_archived ON posts(archived)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at)",
+]
+
+
+def _run_migrations(pool):
+    """Run all idempotent schema migrations at startup."""
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        for sql in _MIGRATIONS:
+            try:
+                cur.execute(sql)
+                logger.info(f"Migration OK: {sql[:80]}")
+            except Exception as e:
+                logger.warning(f"Migration skipped ({e}): {sql[:80]}")
+                conn.rollback()
+        conn.commit()
+        cur.close()
+    finally:
+        pool.putconn(conn)
+
+
 @app.on_event("startup")
 def startup():
     global connection_pool, redis_client
@@ -86,6 +114,13 @@ def startup():
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         raise
+
+    # Run schema migrations so older databases get the new columns
+    try:
+        _run_migrations(connection_pool)
+        logger.info("Schema migrations complete")
+    except Exception as e:
+        logger.error(f"Migration error (non-fatal): {e}")
 
     try:
         redis_host = os.getenv("REDIS_HOST", "localhost")
@@ -150,36 +185,36 @@ if (DIST_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=str(DIST_DIR / "static")), name="static")
 
 
-@app.get("/media/{path:path}")
-def media(path: str):
-    full_path = os.path.join(ARCHIVE_PATH, path)
+def _safe_file_response(base_dir: str, path: str) -> FileResponse:
+    """Resolve *path* relative to *base_dir* and return it, rejecting any
+    path that escapes the base directory (path traversal prevention)."""
+    base = os.path.realpath(base_dir)
+    full_path = os.path.realpath(os.path.join(base_dir, path))
+    if not full_path.startswith(base + os.sep) and full_path != base:
+        raise HTTPException(status_code=400, detail="Invalid path")
     if os.path.exists(full_path):
         return FileResponse(full_path)
     raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.get("/media/{path:path}")
+def media(path: str):
+    return _safe_file_response(ARCHIVE_PATH, path)
 
 
 @app.get("/archived-media/{path:path}")
 def archived_media(path: str):
-    full_path = os.path.join(ARCHIVE_MEDIA_PATH, path)
-    if os.path.exists(full_path):
-        return FileResponse(full_path)
-    raise HTTPException(status_code=404, detail="Not Found")
+    return _safe_file_response(ARCHIVE_MEDIA_PATH, path)
 
 
 @app.get("/thumb/{path:path}")
 def thumb(path: str):
-    full_path = os.path.join(THUMB_PATH, path)
-    if os.path.exists(full_path):
-        return FileResponse(full_path)
-    raise HTTPException(status_code=404, detail="Not Found")
+    return _safe_file_response(THUMB_PATH, path)
 
 
 @app.get("/archived-thumb/{path:path}")
 def archived_thumb(path: str):
-    full_path = os.path.join(ARCHIVE_THUMB_PATH, path)
-    if os.path.exists(full_path):
-        return FileResponse(full_path)
-    raise HTTPException(status_code=404, detail="Not Found")
+    return _safe_file_response(ARCHIVE_THUMB_PATH, path)
 
 
 @app.get("/")
@@ -355,9 +390,9 @@ def posts(
         elif has_media is False:
             query += " AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND (url IS NULL OR url = '')"
 
-        # NSFW filter - check raw JSON for over_18 field
+        # NSFW filter - use native JSONB operator for correctness and performance
         if nsfw == "exclude":
-            query += " AND (raw IS NULL OR raw::text NOT LIKE '%\"over_18\":true%')"
+            query += " AND (raw IS NULL OR NOT (raw->>'over_18')::boolean)"
         elif nsfw == "include":
             pass  # show all (default behavior)
 
@@ -940,6 +975,8 @@ def admin_stats():
 
 @app.post("/api/admin/target/{target_type}/{name}/toggle")
 def toggle_target(target_type: str, name: str):
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
     with get_db_cursor() as cur:
         cur.execute(
             "UPDATE targets SET enabled = NOT enabled WHERE type = %s AND name = %s RETURNING enabled",
@@ -953,30 +990,59 @@ def toggle_target(target_type: str, name: str):
 
 @app.post("/api/admin/target/{target_type}/{name}/rescan")
 def rescan_target(target_type: str, name: str):
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
     with get_db_cursor() as cur:
         if target_type == "user":
-            cur.execute("SELECT id FROM posts WHERE LOWER(author) = LOWER(%s)", (name,))
+            cur.execute(
+                "SELECT id, url, raw, subreddit, author, title FROM posts WHERE LOWER(author) = LOWER(%s)",
+                (name,),
+            )
         else:
             cur.execute(
-                "SELECT id FROM posts WHERE LOWER(subreddit) = LOWER(%s)", (name,)
+                "SELECT id, url, raw, subreddit, author, title FROM posts WHERE LOWER(subreddit) = LOWER(%s)",
+                (name,),
             )
-
-        post_ids = [r[0] for r in cur.fetchall()]
+        post_rows = cur.fetchall()
 
     if not redis_client:
         return {
             "status": "partial",
             "message": "Redis not available, posts listed but not queued",
-            "post_ids": post_ids,
+            "post_count": len(post_rows),
         }
 
     rd = get_redis()
     requeued = 0
-    for post_id in post_ids:
-        rd.lpush("media_queue", json.dumps({"post_id": post_id, "url": None}))
-        requeued += 1
+    for post_id, url, raw, subreddit, author, title in post_rows:
+        try:
+            data = raw if isinstance(raw, dict) else json.loads(raw) if raw else {}
+            media_urls = (
+                _extract_media_urls_from_raw(data, url)
+                if data
+                else ([url] if url else [])
+            )
+        except Exception:
+            media_urls = [url] if url else []
 
-    return {"status": "ok", "requeued": requeued}
+        for media_url in media_urls:
+            if media_url:
+                rd.lpush(
+                    "media_queue",
+                    json.dumps(
+                        {
+                            "post_id": post_id,
+                            "url": media_url,
+                            "subreddit": subreddit,
+                            "author": author,
+                            "title": title or "",
+                        }
+                    ),
+                )
+                requeued += 1
+
+    return {"status": "ok", "requeued": requeued, "posts": len(post_rows)}
 
 
 @app.post("/api/admin/scrape")
@@ -987,7 +1053,8 @@ def trigger_scrape():
 
     rd = get_redis()
     rd.lpush(
-        "scrape_trigger", json.dumps({"triggered_at": datetime.utcnow().isoformat()})
+        "scrape_trigger",
+        json.dumps({"triggered_at": datetime.now(timezone.utc).isoformat()}),
     )
 
     return {"status": "ok", "message": "Scrape triggered"}
@@ -1007,7 +1074,7 @@ def trigger_backfill(
         "backfill_trigger",
         json.dumps(
             {
-                "triggered_at": datetime.utcnow().isoformat(),
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
                 "passes": passes,
                 "workers": workers,
             }
@@ -1173,7 +1240,7 @@ def get_queue_status():
     for item in items:
         try:
             pending_items.append(json.loads(item))
-        except:
+        except Exception:
             pass
 
     return {"queue_length": queue_len, "recent_items": pending_items}
@@ -1294,7 +1361,19 @@ def _run_thumb_job(job_id: str, rows: list, force: bool):
 
     with _thumb_jobs_lock:
         _thumb_jobs[job_id]["status"] = "done"
-        _thumb_jobs[job_id]["finished_at"] = datetime.utcnow().isoformat()
+        _thumb_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+        # Evict completed jobs older than 1 hour to prevent unbounded memory growth
+        cutoff = datetime.now(timezone.utc).timestamp() - 3600
+        to_evict = [
+            jid
+            for jid, jdata in _thumb_jobs.items()
+            if jdata.get("status") == "done"
+            and jdata.get("finished_at")
+            and datetime.fromisoformat(jdata["finished_at"]).timestamp() < cutoff
+            and jid != job_id
+        ]
+        for jid in to_evict:
+            del _thumb_jobs[jid]
 
     logger.info(f"Thumb job {job_id} finished: {done} processed, {len(errors)} errors")
 
@@ -1389,7 +1468,7 @@ def thumb_backfill():
             "done": 0,
             "skipped": 0,
             "errors": [],
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "finished_at": None,
         }
 
@@ -1417,7 +1496,7 @@ def thumb_rebuild_all():
             "done": 0,
             "skipped": 0,
             "errors": [],
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "finished_at": None,
         }
 
@@ -1562,9 +1641,9 @@ def media_rescan():
                     u = data.get("url")
                     if u:
                         queued_urls.add(u)
-                except:
+                except Exception:
                     pass
-        except:
+        except Exception:
             pass
 
         all_existing = existing_urls | queued_urls

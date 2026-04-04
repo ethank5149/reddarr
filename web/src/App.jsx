@@ -405,9 +405,13 @@ export default function App(){
   }
 
   function deleteTarget(ttype,name){
-    const shouldPrune = confirm(`Delete target ${ttype}:${name}?\n\nClick OK to remove from scrape list only.\nClick Cancel to also delete all associated posts and media.`)
-    
-    if (shouldPrune) {
+    // First confirm: OK = remove target only, Cancel = abort entirely
+    const removeOnly = confirm(`Delete target ${ttype}:${name}?\n\nClick OK to remove from scrape list only (keeps posts and media).\nClick Cancel to abort.`)
+    if (!removeOnly) return
+
+    // Second confirm: offer to also prune posts/media
+    const shouldPrune = confirm(`Also delete all posts and media associated with ${name}?\n\nClick OK to delete posts and media.\nClick Cancel to keep them.`)
+    if (!shouldPrune) {
       axios.delete(`/api/admin/target/${ttype}/${name}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
     } else {
       const alsoDeleteFiles = confirm("Also delete downloaded media files from disk? (This cannot be undone)")
@@ -937,8 +941,8 @@ export default function App(){
                 onChange={e=>{
                   const v = e.target.value
                   setFilterSubreddit(v)
-                  clearTimeout(searchTimeout._filterSubredddit)
-                  searchTimeout._filterSubredddit = setTimeout(()=>{
+                  clearTimeout(searchTimeout._filterSubreddit)
+                  searchTimeout._filterSubreddit = setTimeout(()=>{
                     const f = {...filtersRef.current, subreddit: v}
                     applyFilters(f)
                   }, 400)

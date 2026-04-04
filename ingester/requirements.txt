@@ -2,5 +2,4 @@ psycopg2-binary
 requests
 redis
 praw
-ffmpeg-python
 prometheus-client

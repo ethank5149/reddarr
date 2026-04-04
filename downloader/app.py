@@ -1,6 +1,6 @@
-import os, re, json, hashlib, requests, subprocess, sys
+import os, re, json, hashlib, requests, subprocess, sys, time
 import psycopg2, redis
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 from pathlib import Path
 import logging
@@ -24,7 +24,42 @@ download_duration = Histogram("reddit_download_duration_seconds", "Download dura
 
 logger.info("Starting downloader...")
 
-db = psycopg2.connect(os.getenv("DB_URL"))
+_DB_URL = os.getenv("DB_URL")
+_db_conn = None
+
+
+def get_db():
+    """Return a live DB connection, reconnecting if the connection has been lost."""
+    global _db_conn
+    if _db_conn is not None:
+        try:
+            _db_conn.cursor().execute("SELECT 1")
+            return _db_conn
+        except Exception:
+            logger.warning("DB connection lost, reconnecting...")
+            try:
+                _db_conn.close()
+            except Exception:
+                pass
+            _db_conn = None
+    _db_conn = psycopg2.connect(_DB_URL)
+    logger.info("DB connected")
+    return _db_conn
+
+
+# Initial connection with retry
+for _attempt in range(10):
+    try:
+        _db_conn = psycopg2.connect(_DB_URL)
+        logger.info("DB initial connection established")
+        break
+    except Exception as _e:
+        logger.warning(f"DB connection attempt {_attempt + 1}/10 failed: {_e}")
+        time.sleep(3)
+else:
+    logger.error("Could not connect to DB after 10 attempts, exiting")
+    sys.exit(1)
+
 rd = redis.Redis(host=os.getenv("REDIS_HOST"))
 MEDIA_DIR = os.getenv("ARCHIVE_PATH", "/data")
 THUMB_DIR = os.getenv("THUMB_PATH", os.path.join(MEDIA_DIR, ".thumbs"))
@@ -142,8 +177,9 @@ def get_post_dir(post_id, subreddit=None, author=None):
 
     # Fallback: query the DB (post must already be committed at this point)
     try:
-        db.rollback()
-        with db.cursor() as cur:
+        conn = get_db()
+        conn.rollback()
+        with conn.cursor() as cur:
             cur.execute("SELECT subreddit, author FROM posts WHERE id = %s", (post_id,))
             row = cur.fetchone()
         if row:
@@ -166,8 +202,9 @@ while True:
     q_title = item.get("title", "")
 
     if not url:
-        db.rollback()
-        with db.cursor() as cur:
+        conn = get_db()
+        conn.rollback()
+        with conn.cursor() as cur:
             cur.execute("SELECT url FROM posts WHERE id = %s", (post_id,))
             row = cur.fetchone()
         if row and row[0]:
@@ -179,6 +216,7 @@ while True:
 
     logger.info(f"Dequeued: post_id={post_id}, url={url[:60]}...")
 
+    _t_start = time.monotonic()
     try:
         path = None
         h = None
@@ -197,7 +235,7 @@ while True:
             r = session.get(url, stream=True, timeout=60)
             if r.status_code != 200:
                 logger.warning(f"HTTP {r.status_code} for {url}")
-                db.rollback()
+                get_db().rollback()
                 continue
 
             post_dir = get_post_dir(post_id, q_subreddit, q_author)
@@ -209,13 +247,15 @@ while True:
                 for chunk in r.iter_content(8192):
                     f.write(chunk)
                     bytes_written += len(chunk)
+            media_download_bytes.inc(bytes_written)
             logger.info(f"Downloaded {bytes_written} bytes to {path}")
 
             h = sha256(path)
             logger.debug(f"SHA256: {h}")
 
-            db.rollback()
-            with db.cursor() as cur:
+            conn = get_db()
+            conn.rollback()
+            with conn.cursor() as cur:
                 cur.execute("SELECT file_path FROM media WHERE sha256=%s", (h,))
                 existing = cur.fetchone()
 
@@ -241,11 +281,11 @@ while True:
                         path,
                         thumb,
                         h,
-                        datetime.utcnow(),
+                        datetime.now(timezone.utc),
                         status,
                     ),
                 )
-                db.commit()
+                conn.commit()
                 logger.info(f"Saved to DB: post_id={post_id}, path={path}")
 
         elif "v.redd.it" in url or "youtube.com" in url or "youtu.be" in url:
@@ -274,8 +314,9 @@ while True:
                 h = sha256(path)
                 thumb = make_thumb(path)
 
-                db.rollback()
-                with db.cursor() as cur:
+                conn = get_db()
+                conn.rollback()
+                with conn.cursor() as cur:
                     cur.execute("SELECT file_path FROM media WHERE sha256=%s", (h,))
                     existing = cur.fetchone()
                     if existing:
@@ -294,9 +335,17 @@ while True:
                           downloaded_at = EXCLUDED.downloaded_at,
                           status = EXCLUDED.status
                         """,
-                        (post_id, url, path, thumb, h, datetime.utcnow(), status),
+                        (
+                            post_id,
+                            url,
+                            path,
+                            thumb,
+                            h,
+                            datetime.now(timezone.utc),
+                            status,
+                        ),
                     )
-                    db.commit()
+                    conn.commit()
                     logger.info(f"Saved video to DB: post_id={post_id}, path={path}")
             else:
                 logger.warning(
@@ -313,14 +362,18 @@ while True:
                 post_dir = get_post_dir(post_id, q_subreddit, q_author)
                 name = make_filename(q_subreddit, q_author, q_title, post_id, url)
                 path = f"{post_dir}/{name}"
+                bytes_written = 0
                 with open(path, "wb") as f:
                     for chunk in r.iter_content(8192):
                         f.write(chunk)
+                        bytes_written += len(chunk)
+                media_download_bytes.inc(bytes_written)
                 h = sha256(path)
                 thumb = make_thumb(path)
 
-                db.rollback()
-                with db.cursor() as cur:
+                conn = get_db()
+                conn.rollback()
+                with conn.cursor() as cur:
                     cur.execute(
                         """
                        INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
@@ -336,15 +389,15 @@ while True:
                             path,
                             thumb,
                             h,
-                            datetime.utcnow(),
+                            datetime.now(timezone.utc),
                             status,
                         ),
                     )
-                    db.commit()
+                    conn.commit()
                     logger.info(f"Saved preview: {path}")
             else:
                 logger.warning(f"Preview HTTP {r.status_code}")
-                db.rollback()
+                get_db().rollback()
                 continue
 
         else:
@@ -365,11 +418,13 @@ while True:
                     path = f"{post_dir}/{name}"
                     with open(path, "wb") as f:
                         f.write(r.content)
+                    media_download_bytes.inc(len(r.content))
                     h = sha256(path)
                     thumb = make_thumb(path)
 
-                    db.rollback()
-                    with db.cursor() as cur:
+                    conn = get_db()
+                    conn.rollback()
+                    with conn.cursor() as cur:
                         cur.execute(
                             """
                            INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
@@ -385,30 +440,39 @@ while True:
                                 path,
                                 thumb,
                                 h,
-                                datetime.utcnow(),
+                                datetime.now(timezone.utc),
                                 status,
                             ),
                         )
-                        db.commit()
+                        conn.commit()
                         logger.info(f"Saved extracted image: {path}")
                 else:
                     logger.info(f"Not an image, skipping: {content_type}")
                     continue
             except Exception as e:
                 logger.warning(f"Extraction failed: {e}")
-                db.rollback()
+                get_db().rollback()
                 continue
+
+        # Record download duration and increment counter for successful downloads
+        _elapsed = time.monotonic() - _t_start
+        download_duration.observe(_elapsed)
+        if path:
+            media_downloaded.labels(status="done").inc()
 
     except Exception as e:
         logger.error(f"ERROR processing {post_id}: {e}", exc_info=True)
+        media_downloaded.labels(status="failed").inc()
         try:
-            db.rollback()
-            with db.cursor() as cur:
+            conn = get_db()
+            conn.rollback()
+            with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1)",
+                    "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) "
+                    "ON CONFLICT DO NOTHING",
                     (post_id, url),
                 )
-                db.commit()
+                conn.commit()
                 logger.info(f"Marked as failed in DB: {post_id}")
         except Exception as db_err:
             logger.error(f"Failed to record error in DB: {db_err}")

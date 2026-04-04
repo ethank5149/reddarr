@@ -1,6 +1,6 @@
-import os, time, json
+import os, time, json, threading
 import praw, psycopg2, redis
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from prometheus_client import Counter, Gauge, Histogram, generate_latest
 
@@ -49,25 +49,41 @@ reddit = praw.Reddit(
 logger.info(f"Reddit client initialized (read only: {reddit.read_only})")
 
 
+_db_lock = threading.Lock()
+
+
 def get_db():
-    """Return a live DB connection, reconnecting if necessary."""
-    global _db
+    """Return a live DB connection for the current thread.
+
+    Uses a thread-local connection so that parallel backfill workers never
+    share a single psycopg2 connection (which is not thread-safe).
+    """
+    if not hasattr(_tls, "conn") or _tls.conn is None:
+        _tls.conn = psycopg2.connect(DB_URL)
+        logger.debug("Thread-local DB connection created")
+        return _tls.conn
+
     try:
-        _db.cursor().execute("SELECT 1")
-        return _db
+        _tls.conn.cursor().execute("SELECT 1")
+        return _tls.conn
     except Exception:
-        logger.warning("DB connection lost, reconnecting...")
+        logger.warning("DB connection lost in thread, reconnecting...")
         try:
-            _db.close()
+            _tls.conn.close()
         except Exception:
             pass
-        _db = psycopg2.connect(DB_URL)
-        logger.info("DB reconnected")
-        return _db
+        _tls.conn = psycopg2.connect(DB_URL)
+        logger.info("DB reconnected in thread")
+        return _tls.conn
 
 
-# Initial connection
-_db = psycopg2.connect(DB_URL)
+# Thread-local storage for per-thread DB connections
+_tls = threading.local()
+
+# Initial connection for main thread (also seeds _tls.conn)
+_tls.conn = psycopg2.connect(DB_URL)
+# Keep _db as an alias for legacy code paths in the main thread
+_db = _tls.conn
 
 subreddits = os.getenv("REDDIT_TARGET_SUBREDDITS", "").split(",")
 users = os.getenv("REDDIT_TARGET_USERS", "").split(",")
@@ -200,7 +216,9 @@ def ingest_post(db, p):
             cur.close()
             return False  # already exists
 
-        created = datetime.utcfromtimestamp(p.created_utc)
+        created = datetime.fromtimestamp(p.created_utc, tz=timezone.utc).replace(
+            tzinfo=None
+        )
         cur.execute(
             """INSERT INTO posts(id,subreddit,author,created_utc,title,selftext,url,media_url,raw)
                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
@@ -261,7 +279,9 @@ def ingest_post(db, p):
                     p.id,
                     c["author"],
                     c["body"],
-                    datetime.utcfromtimestamp(c["created_utc"]),
+                    datetime.fromtimestamp(c["created_utc"], tz=timezone.utc).replace(
+                        tzinfo=None
+                    ),
                     json.dumps(c, default=str),
                 ),
             )
@@ -307,7 +327,9 @@ def scrape_target(ttype, name, sort_method="new"):
 
         for p in src:
             posts_processed += 1
-            created = datetime.utcfromtimestamp(p.created_utc)
+            created = datetime.fromtimestamp(p.created_utc, tz=timezone.utc).replace(
+                tzinfo=None
+            )
 
             try:
                 db = get_db()
@@ -347,12 +369,31 @@ def run_backfill_parallel(targets, passes=None, workers=None):
                 future = executor.submit(scrape_target, ttype, name, sort_method)
                 futures[future] = (ttype, name, sort_method)
 
+        completed_targets: set = set()
         for future in as_completed(futures):
             ttype, name, sort_method = futures[future]
             try:
                 new_found, processed = future.result()
+                completed_targets.add((ttype, name))
             except Exception as e:
                 logger.error(f"Backfill failed for {ttype}:{name} ({sort_method}): {e}")
+
+    # Update last_created for all targets that completed at least one pass
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for ttype, name in completed_targets:
+        try:
+            db = get_db()
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE targets SET last_created=%s WHERE type=%s AND name=%s",
+                (now, ttype, name),
+            )
+            db.commit()
+            cur.close()
+        except Exception as e:
+            logger.error(
+                f"Failed to update last_created after backfill for {name}: {e}"
+            )
 
     logger.info("Parallel backfill completed")
 
@@ -365,7 +406,7 @@ def run_cycle(force_backfill=False, backfill_passes=None, backfill_workers=None)
         backfill_passes: Number of passes for backfill (default: BACKFILL_PASSES)
         backfill_workers: Number of parallel workers for backfill (default: BACKFILL_WORKERS)
     """
-    cycle_start = datetime.utcnow()
+    cycle_start = datetime.now(timezone.utc).replace(tzinfo=None)
     logger.info("Checking targets for new posts...")
     targets_enabled.set(0)
 
@@ -397,14 +438,16 @@ def run_cycle(force_backfill=False, backfill_passes=None, backfill_workers=None)
                 cur = db.cursor()
                 cur.execute(
                     "UPDATE targets SET last_created=%s WHERE type=%s AND name=%s",
-                    (datetime.utcnow(), ttype, name),
+                    (datetime.now(timezone.utc).replace(tzinfo=None), ttype, name),
                 )
                 db.commit()
                 cur.close()
             except Exception as e:
                 logger.error(f"Failed to update last_created for {name}: {e}")
 
-    cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
+    cycle_duration = (
+        datetime.now(timezone.utc).replace(tzinfo=None) - cycle_start
+    ).total_seconds()
     ingest_cycle_duration.observe(cycle_duration)
     logger.info(f"Ingest cycle completed in {cycle_duration:.2f}s")
 
