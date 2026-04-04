@@ -32,6 +32,9 @@ export default function App(){
   const [thumbJobResult, setThumbJobResult] = useState(null)  // last finished job
   const thumbPollRef = useRef(null)
 
+  // Scrape trigger feedback
+  const [scrapeTriggered, setScrapeTriggered] = useState(false)
+
   // Filter + sort state
   const [filterSubreddit, setFilterSubreddit] = useState("")
   const [filterAuthor, setFilterAuthor] = useState("")
@@ -295,6 +298,12 @@ export default function App(){
 
   function rescanTarget(ttype,name){
     axios.post(`/api/admin/target/${ttype}/${name}/rescan`).then(()=>loadAdmin()).catch(()=>alert("Failed to rescan target"))
+  }
+
+  function scrapeNow(){
+    axios.post("/api/admin/scrape")
+      .then(()=>{ setScrapeTriggered(true); setTimeout(()=>setScrapeTriggered(false), 3000) })
+      .catch(()=>alert("Failed to trigger scrape"))
   }
 
   function deleteTarget(ttype,name){
@@ -597,6 +606,10 @@ export default function App(){
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                 <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
                 <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Scrape Targets</h2>
+                <button onClick={scrapeNow}
+                  style={{padding:"6px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.3s ease"}}>
+                  {scrapeTriggered ? "✓ Triggered" : "⚡ Scrape Now"}
+                </button>
               </div>
               {/* Add target form */}
               <div style={{display:"flex",gap:"8px",alignItems:"center"}}>

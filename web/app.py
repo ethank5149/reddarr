@@ -624,8 +624,8 @@ def admin_stats():
                 COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
                 COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
             FROM targets t
-            LEFT JOIN posts p ON (t.type = 'subreddit' AND p.subreddit = t.name)
-                              OR (t.type = 'user'      AND p.author    = t.name)
+            LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
+                              OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
             LEFT JOIN media m ON m.post_id = p.id
             GROUP BY t.type, t.name, t.enabled, t.last_created
             ORDER BY t.type, t.name
@@ -728,9 +728,11 @@ def toggle_target(target_type: str, name: str):
 def rescan_target(target_type: str, name: str):
     with get_db_cursor() as cur:
         if target_type == "user":
-            cur.execute("SELECT id FROM posts WHERE author = %s", (name,))
+            cur.execute("SELECT id FROM posts WHERE LOWER(author) = LOWER(%s)", (name,))
         else:
-            cur.execute("SELECT id FROM posts WHERE subreddit = %s", (name,))
+            cur.execute(
+                "SELECT id FROM posts WHERE LOWER(subreddit) = LOWER(%s)", (name,)
+            )
 
         post_ids = [r[0] for r in cur.fetchall()]
 
@@ -748,6 +750,20 @@ def rescan_target(target_type: str, name: str):
         requeued += 1
 
     return {"status": "ok", "requeued": requeued}
+
+
+@app.post("/api/admin/scrape")
+def trigger_scrape():
+    """Trigger immediate scrape of all enabled targets."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+    rd.lpush(
+        "scrape_trigger", json.dumps({"triggered_at": datetime.utcnow().isoformat()})
+    )
+
+    return {"status": "ok", "message": "Scrape triggered"}
 
 
 @app.post("/api/admin/target/{target_type}")
@@ -1401,8 +1417,8 @@ async def event_stream():
                         COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
                         COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
                     FROM targets t
-                    LEFT JOIN posts p ON (t.type = 'subreddit' AND p.subreddit = t.name)
-                                      OR (t.type = 'user'      AND p.author    = t.name)
+                    LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
+                                      OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
                     LEFT JOIN media m ON m.post_id = p.id
                     GROUP BY t.type, t.name, t.enabled, t.last_created
                     ORDER BY t.type, t.name
@@ -1552,9 +1568,13 @@ async def event_stream():
         return await asyncio.to_thread(_check)
 
     async def generate():
-        first_run = True
-        last_post_ingested = None
-        last_media_downloaded = None
+        # Seed watermarks from the current most-recent rows so we only emit
+        # events for things that arrive *after* the SSE connection is opened.
+        seed_posts = await db_new_posts(None)
+        last_post_ingested = seed_posts[0][5] if seed_posts else None
+
+        seed_media = await db_new_media(None)
+        last_media_downloaded = seed_media[0][4] if seed_media else None
 
         while True:
             try:
@@ -1589,43 +1609,32 @@ async def event_stream():
                     logger.error(f"SSE health check error: {e}")
 
                 new_rows = await db_new_posts(last_post_ingested)
-
-                if first_run:
-                    first_run = False
-                    if new_rows:
-                        last_post_ingested = new_rows[0][5]
-                else:
-                    if new_rows:
-                        stats["new_posts"] = [
-                            {
-                                "id": r[0],
-                                "title": r[1],
-                                "subreddit": r[2],
-                                "author": r[3],
-                                "created_utc": r[4].isoformat() if r[4] else None,
-                            }
-                            for r in new_rows
-                        ]
-                        last_post_ingested = new_rows[0][5]
+                if new_rows:
+                    stats["new_posts"] = [
+                        {
+                            "id": r[0],
+                            "title": r[1],
+                            "subreddit": r[2],
+                            "author": r[3],
+                            "created_utc": r[4].isoformat() if r[4] else None,
+                        }
+                        for r in new_rows
+                    ]
+                    last_post_ingested = new_rows[0][5]
 
                 # Check for newly downloaded media
                 media_rows = await db_new_media(last_media_downloaded)
-
-                if first_run:
-                    if media_rows:
-                        last_media_downloaded = media_rows[0][4]
-                else:
-                    if media_rows:
-                        stats["new_media"] = [
-                            {
-                                "id": r[0],
-                                "post_id": r[1],
-                                "url": r[2],
-                                "file_path": r[3],
-                            }
-                            for r in media_rows
-                        ]
-                        last_media_downloaded = media_rows[0][4]
+                if media_rows:
+                    stats["new_media"] = [
+                        {
+                            "id": r[0],
+                            "post_id": r[1],
+                            "url": r[2],
+                            "file_path": r[3],
+                        }
+                        for r in media_rows
+                    ]
+                    last_media_downloaded = media_rows[0][4]
 
                 # Serialize — if targets/health contain an unexpected non-serializable
                 # value, strip those fields and still emit the core stats.

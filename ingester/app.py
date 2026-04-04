@@ -202,8 +202,8 @@ def ingest_post(db, p):
                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (
                 p.id,
-                str(p.subreddit),
-                str(p.author),
+                str(p.subreddit).lower(),
+                str(p.author).lower(),
                 created,
                 p.title,
                 p.selftext,
@@ -272,88 +272,103 @@ def ingest_post(db, p):
     return True
 
 
-def run():
-    while True:
-        cycle_start = datetime.utcnow()
-        logger.info("Checking targets for new posts...")
-        targets_enabled.set(0)
+def run_cycle():
+    """Run a single scrape cycle for all enabled targets."""
+    cycle_start = datetime.utcnow()
+    logger.info("Checking targets for new posts...")
+    targets_enabled.set(0)
 
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("SELECT type,name,last_created FROM targets WHERE enabled=true")
+        targets = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        logger.error(f"Failed to fetch targets: {e}", exc_info=True)
+        return
+
+    logger.info(f"Found {len(targets)} enabled targets")
+    targets_enabled.set(len(targets))
+
+    for ttype, name, last in targets:
+        logger.info(f"Processing {ttype}: {name}")
         try:
             db = get_db()
-            cur = db.cursor()
-            cur.execute("SELECT type,name,last_created FROM targets WHERE enabled=true")
-            targets = cur.fetchall()
-            cur.close()
-        except Exception as e:
-            logger.error(f"Failed to fetch targets: {e}", exc_info=True)
-            time.sleep(10)
-            continue
 
-        logger.info(f"Found {len(targets)} enabled targets")
-        targets_enabled.set(len(targets))
+            if ttype == "subreddit":
+                src = reddit.subreddit(name).new(limit=SCRAPE_LIMIT)
+            else:
+                src = reddit.redditor(name).submissions.new(limit=SCRAPE_LIMIT)
 
-        for ttype, name, last in targets:
-            logger.info(f"Processing {ttype}: {name}")
-            try:
-                db = get_db()
+            oldest_seen = None
+            posts_processed = 0
+            new_posts_found = 0
 
-                if ttype == "subreddit":
-                    src = reddit.subreddit(name).new(limit=SCRAPE_LIMIT)
-                else:
-                    src = reddit.redditor(name).submissions.new(limit=SCRAPE_LIMIT)
+            for p in src:
+                posts_processed += 1
+                created = datetime.utcfromtimestamp(p.created_utc)
 
-                oldest_seen = None
-                posts_processed = 0
-                new_posts_found = 0
-
-                for p in src:
-                    posts_processed += 1
-                    created = datetime.utcfromtimestamp(p.created_utc)
-
-                    try:
-                        db = get_db()
-                        is_new = ingest_post(db, p)
-                        if is_new:
-                            new_posts_found += 1
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to ingest post {p.id}: {e}", exc_info=True
-                        )
-
-                    if oldest_seen is None or created < oldest_seen:
-                        oldest_seen = created
-
-                logger.info(
-                    f"Processed {posts_processed} posts for {name}, {new_posts_found} new"
-                )
-
-                # Always stamp last_created with now() so the admin panel
-                # shows an accurate "Last scraped" time after every cycle.
                 try:
                     db = get_db()
-                    cur = db.cursor()
-                    cur.execute(
-                        "UPDATE targets SET last_created=%s WHERE type=%s AND name=%s",
-                        (datetime.utcnow(), ttype, name),
-                    )
-                    db.commit()
-                    cur.close()
-                    logger.info(f"Updated last_scraped for {ttype}:{name}")
+                    is_new = ingest_post(db, p)
+                    if is_new:
+                        new_posts_found += 1
                 except Exception as e:
-                    logger.error(f"Failed to update last_created for {name}: {e}")
+                    logger.error(f"Failed to ingest post {p.id}: {e}", exc_info=True)
 
+                if oldest_seen is None or created < oldest_seen:
+                    oldest_seen = created
+
+            logger.info(
+                f"Processed {posts_processed} posts for {name}, {new_posts_found} new"
+            )
+
+            # Always stamp last_created with now() so the admin panel
+            # shows an accurate "Last scraped" time after every cycle.
+            try:
+                db = get_db()
+                cur = db.cursor()
+                cur.execute(
+                    "UPDATE targets SET last_created=%s WHERE type=%s AND name=%s",
+                    (datetime.utcnow(), ttype, name),
+                )
+                db.commit()
+                cur.close()
+                logger.info(f"Updated last_scraped for {ttype}:{name}")
             except Exception as e:
-                logger.error(f"Error processing {name}: {e}", exc_info=True)
-                try:
-                    get_db().rollback()
-                except Exception:
-                    pass
+                logger.error(f"Failed to update last_created for {name}: {e}")
 
-        cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
-        ingest_cycle_duration.observe(cycle_duration)
-        logger.info(f"Ingest cycle completed in {cycle_duration:.2f}s")
+        except Exception as e:
+            logger.error(f"Error processing {name}: {e}", exc_info=True)
+            try:
+                get_db().rollback()
+            except Exception:
+                pass
+
+    cycle_duration = (datetime.utcnow() - cycle_start).total_seconds()
+    ingest_cycle_duration.observe(cycle_duration)
+    logger.info(f"Ingest cycle completed in {cycle_duration:.2f}s")
+
+
+def run():
+    while True:
+        run_cycle()
+
         logger.info(f"Sleeping for {POLL_INTERVAL} seconds")
-        time.sleep(POLL_INTERVAL)
+        # Sleep in small increments so we can respond to scrape_trigger promptly
+        elapsed = 0
+        while elapsed < POLL_INTERVAL:
+            time.sleep(min(5, POLL_INTERVAL - elapsed))
+            elapsed += 5
+            # Check for a manual scrape trigger from the web UI
+            try:
+                msg = rd.lpop("scrape_trigger")
+                if msg:
+                    logger.info("Manual scrape triggered via UI — running cycle now")
+                    break
+            except Exception:
+                pass
 
 
 run()
