@@ -6,6 +6,8 @@ from pathlib import Path
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image
+from PIL import features
 from prometheus_client import (
     Counter,
     Gauge,
@@ -164,6 +166,18 @@ def sha256(p):
     return h.hexdigest()
 
 
+def detect_image_corruption(path):
+    try:
+        with Image.open(path) as img:
+            img.verify()
+        with Image.open(path) as img:
+            img.load()
+        return False
+    except Exception as e:
+        logger.warning(f"Image corruption detected for {path}: {e}")
+        return True
+
+
 def make_thumb(path):
     try:
         rel = os.path.relpath(path, MEDIA_DIR)
@@ -292,6 +306,7 @@ def process_item(item):
         thumb = None
         status = "done"
         retries = 0
+        is_corrupted = False
 
         while retries < MAX_RETRIES:
             if "i.redd.it" in url:
@@ -333,8 +348,22 @@ def process_item(item):
                 media_download_bytes.inc(bytes_written)
                 logger.info(f"Downloaded {bytes_written} bytes to {path}")
 
+                is_corrupted = detect_image_corruption(path)
+                if is_corrupted:
+                    logger.warning(f"Corrupt image detected for {post_id}, retrying...")
+                    retries += 1
+                    if retries < MAX_RETRIES:
+                        time.sleep(1)
+                        continue
+                    logger.warning(
+                        f"Giving up on corrupt image after {MAX_RETRIES} retries, keeping anyway"
+                    )
+
                 h = sha256(path)
                 logger.debug(f"SHA256: {h}")
+
+                if is_corrupted:
+                    status = "corrupted"
 
                 conn = get_db()
                 conn.rollback()
@@ -469,6 +498,19 @@ def process_item(item):
                             f.write(chunk)
                             bytes_written += len(chunk)
                     media_download_bytes.inc(bytes_written)
+
+                    is_corrupted = detect_image_corruption(path)
+                    if is_corrupted:
+                        logger.warning(
+                            f"Corrupt preview detected for {post_id}, retrying..."
+                        )
+                        retries += 1
+                        if retries < MAX_RETRIES:
+                            time.sleep(1)
+                            continue
+                        logger.warning(f"Giving up on corrupt preview, keeping anyway")
+                        status = "corrupted"
+
                     h = sha256(path)
                     thumb = make_thumb(path)
 
@@ -526,6 +568,14 @@ def process_item(item):
                         with open(path, "wb") as f:
                             f.write(r.content)
                         media_download_bytes.inc(len(r.content))
+
+                        is_corrupted = detect_image_corruption(path)
+                        if is_corrupted:
+                            logger.warning(
+                                f"Corrupt extracted image for {post_id}, keeping anyway"
+                            )
+                            status = "corrupted"
+
                         h = sha256(path)
                         thumb = make_thumb(path)
 
