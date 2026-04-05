@@ -12,6 +12,8 @@ from prometheus_client import (
 
 import sys
 
+from targets import load_targets
+
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -101,8 +103,7 @@ _tls.conn = psycopg2.connect(DB_URL)
 # Keep _db as an alias for legacy code paths in the main thread
 _db = _tls.conn
 
-subreddits = os.getenv("REDDIT_TARGET_SUBREDDITS", "").split(",")
-users = os.getenv("REDDIT_TARGET_USERS", "").split(",")
+subreddits, users = load_targets()
 logger.info(f"Target subreddits: {subreddits}")
 logger.info(f"Target users: {users}")
 

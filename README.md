@@ -61,9 +61,19 @@ Once running, access the following services:
 | `REDIS_HOST` | Redis hostname |
 | `REDDIT_CLIENT_ID` | Reddit API client ID |
 | `REDDIT_CLIENT_SECRET` | Reddit API client secret |
-| `REDDIT_TARGET_SUBREDDITS` | Comma-separated list of subreddits to archive |
-| `REDDIT_TARGET_USERS` | Comma-separated list of Reddit users to archive |
+| `TARGETS_FILE` | Path to targets file (required) |
 | `ARCHIVE_PATH` | Directory for downloaded media |
+
+### Targets File Format
+
+Targets are loaded from the file specified by `TARGETS_FILE`. Format is one target per line:
+
+```
+# Lines starting with # are comments
+subreddit:python
+subreddit:learnprogramming
+user:spez
+```
 
 ## API Endpoints
 
