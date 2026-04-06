@@ -2,19 +2,302 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Reddit Archive" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="msapplication-TileColor" content="#0d0d0d" />
+    <meta name="msapplication-tap-highlight" content="no" />
     <title>Reddit Archive</title>
     <link rel="icon" type="image/png" href="/icon.png" />
     <link rel="apple-touch-icon" href="/icon.png" />
+    <link rel="manifest" href="/manifest.json" />
     <style>
-      * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { background: #0d0d0d; }
-      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      :root {
+        --color-bg: #0d0d0d;
+        --color-surface: #1a1a1a;
+        --color-surface-elevated: #1e1e1e;
+        --color-border: #2a2a2a;
+        --color-border-subtle: #222;
+        --color-primary: #ff4500;
+        --color-primary-hover: #ff6a33;
+        --color-accent: #46d160;
+        --color-text: #ffffff;
+        --color-text-secondary: #cccccc;
+        --color-text-muted: #666666;
+        --color-text-dim: #444444;
+        --shadow-sm: 0 2px 8px rgba(0,0,0,0.2);
+        --shadow-md: 0 4px 20px rgba(0,0,0,0.3);
+        --shadow-lg: 0 12px 40px rgba(0,0,0,0.4);
+        --radius-sm: 6px;
+        --radius-md: 10px;
+        --radius-lg: 16px;
+        --radius-xl: 20px;
+        --transition-fast: 150ms ease;
+        --transition-normal: 250ms ease;
+        --transition-slow: 400ms ease;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+      html, body { 
+        background: var(--color-bg); 
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+      }
+      body { 
+        padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+        padding-bottom: env(safe-area-inset-bottom, 0);
+      }
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
       ::-webkit-scrollbar-track { background: #141414; }
-      ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
       ::-webkit-scrollbar-thumb:hover { background: #444; }
       @keyframes spin { to { transform: rotate(360deg); } }
-      input:focus { border-color: #ff4500 !important; box-shadow: 0 0 0 3px rgba(255,69,0,0.15) !important; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+      @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+      @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+      input:focus, select:focus, button:focus { outline: none; }
+      input:focus { border-color: var(--color-primary) !important; box-shadow: 0 0 0 3px rgba(255,69,0,0.15) !important; }
+      button:focus-visible { box-shadow: 0 0 0 2px var(--color-primary), 0 0 0 4px rgba(255,69,0,0.2) !important; }
+      ::selection { background: rgba(255,69,0,0.3); }
+      
+      .skeleton {
+        background: linear-gradient(90deg, #1a1a1a 25%, #252525 50%, #1a1a1a 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: var(--radius-md);
+      }
+      
+      .hide-on-mobile {
+        display: inline;
+      }
+      
+      .mobile-nav-btn {
+        display: inline;
+      }
+      
+      @media (max-width: 768px) {
+        :root {
+          --radius-lg: 12px;
+          --radius-xl: 16px;
+        }
+        
+        .hide-on-mobile {
+          display: none;
+        }
+        
+        .mobile-full-width {
+          width: 100% !important;
+          min-width: unset !important;
+        }
+        
+        .mobile-stack {
+          flex-direction: column !important;
+        }
+        
+        .mobile-gap-sm {
+          gap: 8px !important;
+        }
+        
+        .mobile-pad {
+          padding: 12px !important;
+        }
+        
+        .mobile-grid-2 {
+          grid-template-columns: repeat(2, 1fr) !important;
+        }
+        
+        .mobile-text-sm {
+          font-size: 12px !important;
+        }
+        
+        .touch-target {
+          min-height: 44px;
+          min-width: 44px;
+        }
+        
+        .gallery-nav-btn {
+          width: 48px !important;
+          height: 48px !important;
+          font-size: 24px !important;
+        }
+        
+        .filter-bar-mobile {
+          flex-direction: column;
+          align-items: stretch !important;
+        }
+        
+        .filter-bar-mobile > * {
+          width: 100%;
+        }
+      }
+      
+      @media (min-width: 769px) {
+        .desktop-only {
+          display: block;
+        }
+      }
+      
+      /* PWA install prompt */
+      .install-prompt {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: linear-gradient(135deg, #ff4500, #ff6a33);
+        color: white;
+        padding: 16px 24px;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(255,69,0,0.4);
+        z-index: 1000;
+        cursor: pointer;
+        animation: slideUp 0.3s ease;
+      }
+      
+      @media (display-mode: standalone) {
+        .install-prompt {
+          display: none;
+        }
+      }
+      
+      /* Card hover animations */
+      .post-card {
+        transition: transform 0.25s ease, box-shadow 0.25s ease, opacity 0.25s ease;
+        will-change: transform;
+        transform: translateZ(0);
+      }
+      
+      .post-card:hover, .post-card:focus-within {
+        transform: translateY(-4px);
+        box-shadow: 0 12px 40px rgba(255,69,0,0.15);
+      }
+      
+      .post-card:active {
+        transform: translateY(-2px);
+      }
+      
+      /* Button press effect */
+      .btn-press {
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+      }
+      
+      .btn-press:active {
+        transform: scale(0.97);
+      }
+      
+      /* Improved modal animation */
+      .modal-enter {
+        animation: modalFadeIn 0.2s ease forwards;
+      }
+      
+      @keyframes modalFadeIn {
+        from {
+          opacity: 0;
+          transform: scale(0.95) translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+        }
+      }
+      
+      /* Skeleton loading */
+      .skeleton-text {
+        background: linear-gradient(90deg, #1a1a1a 25%, #252525 50%, #1a1a1a 75%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s infinite;
+        border-radius: 4px;
+      }
+      
+      .skeleton-avatar {
+        border-radius: 50%;
+      }
+      
+      /* Pull to refresh indicator */
+      .ptr-indicator {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(180deg, rgba(255,69,0,0.2) 0%, transparent 100%);
+        z-index: 99;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      
+      .ptr-indicator.visible {
+        opacity: 1;
+      }
+      
+      .ptr-indicator .spinner {
+        width: 24px;
+        height: 24px;
+        border: 2px solid #333;
+        border-top-color: #ff4500;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      
+      /* Toast notifications */
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1e1e1e;
+        color: #fff;
+        padding: 12px 24px;
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        z-index: 1001;
+        animation: slideUp 0.3s ease;
+        border: 1px solid #333;
+      }
+      
+      .toast.success {
+        border-color: #46d160;
+        background: linear-gradient(135deg, #0d2818, #1e1e1e);
+      }
+      
+      .toast.error {
+        border-color: #ff4500;
+        background: linear-gradient(135deg, #2d0a00, #1e1e1e);
+      }
+      
+      /* Improved scrollbar for modern browsers */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: #333 transparent;
+      }
+      
+      /* Touch scroll momentum */
+      .smooth-scroll {
+        -webkit-overflow-scrolling: touch;
+        scroll-behavior: smooth;
+      }
+      
+      /* Focus ring for accessibility */
+      .focus-ring:focus {
+        outline: none;
+        box-shadow: 0 0 0 2px #ff4500, 0 0 0 4px rgba(255,69,0,0.2);
+      }
+      
+      /* Reduced motion preference */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
     </style>
   </head>
   <body>

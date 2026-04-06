@@ -1,0 +1,20 @@
+{
+  "name": "Reddit Archive",
+  "short_name": "RedditArchive",
+  "description": "Archive and browse Reddit posts with media",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0d0d",
+  "theme_color": "#ff4500",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["social", "news", "utilities"],
+  "prefer_related_applications": false
+}

@@ -2,6 +2,19 @@ import {useEffect,useState,useRef,useCallback} from "react"
 import {NavLink, useLocation} from "react-router-dom"
 import axios from "axios"
 
+// PWA Service Worker Registration
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}
+
+// Touch device detection
+const isTouchDevice = () => 'ontouchstart' in window || navigator.maxTouchPoints > 0
+
+// Prevent default touch behaviors for gallery
+const preventDefault = (e) => { if (e.touches.length > 1) e.preventDefault() }
+
 export default function App(){
   const location = useLocation()
   const activeTab = location.pathname === "/" ? "browse" : location.pathname.slice(1)
@@ -51,6 +64,82 @@ export default function App(){
   const [highlightedRows, setHighlightedRows] = useState(new Set())
   const [addTargetType, setAddTargetType] = useState("subreddit")
   const [addTargetName, setAddTargetName] = useState("")
+  const [isTouch, setIsTouch] = useState(false)
+  const [swipeStart, setSwipeStart] = useState(null)
+  const [headerHeight, setHeaderHeight] = useState(73)
+  const [toasts, setToasts] = useState([])
+  const [filterBarOpen, setFilterBarOpen] = useState(false)
+  const [archiveFilterBarOpen, setArchiveFilterBarOpen] = useState(false)
+  const [installPrompt, setInstallPrompt] = useState(null)
+  const [showInstallBanner, setShowInstallBanner] = useState(false)
+
+  // Detect touch device and handle safe areas
+  useEffect(() => {
+    const checkTouch = () => setIsTouch(isTouchDevice())
+    checkTouch()
+    
+    // Handle safe area insets
+    const updateHeaderHeight = () => {
+      const viewportHeight = window.visualViewport?.height || window.innerHeight
+      const diff = window.innerHeight - viewportHeight
+      setHeaderHeight(73 + diff)
+    }
+    
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateHeaderHeight)
+    }
+    window.addEventListener('resize', updateHeaderHeight)
+    
+    return () => {
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', updateHeaderHeight)
+      }
+      window.removeEventListener('resize', updateHeaderHeight)
+    }
+  }, [])
+
+  // PWA install prompt
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault()
+      setInstallPrompt(e)
+      setShowInstallBanner(true)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+
+  // Escape key closes modals + keeps keyboard nav working
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') {
+        if (selectedPost) { setSelectedPost(null); return }
+        if (auditPostDetail) { setAuditPostDetail(null); return }
+        if (deleteModal) { setDeleteModal(false); return }
+        if (resetModal && !resetLoading) { setResetModal(false); return }
+      }
+      if (e.key === 'ArrowLeft' && selectedPost?.image_urls?.length > 1) {
+        setGalleryIdx(i => Math.max(0, i - 1))
+      }
+      if (e.key === 'ArrowRight' && selectedPost?.image_urls?.length > 1) {
+        setGalleryIdx(i => Math.min(selectedPost.image_urls.length - 1, i + 1))
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [selectedPost, auditPostDetail, deleteModal, resetModal, resetLoading])
+
+  // Toast helper
+  function showToast(message, type = 'info', duration = 3000) {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, message, type }])
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration)
+  }
+
+  // Wrap native alert/confirm usages
+  function toast(msg) { showToast(msg, 'info') }
+  function toastSuccess(msg) { showToast(msg, 'success') }
+  function toastError(msg) { showToast(msg, 'error') }
 
   // Thumbnail utility state
   const [thumbStats, setThumbStats] = useState(null)
@@ -361,8 +450,9 @@ export default function App(){
         setArchivePosts([])
         archiveOffsetRef.current=0
         if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,archived:true}))
+        toastSuccess("Post hidden")
       })
-      .catch(()=>alert("Failed to archive post"))
+      .catch(()=>toastError("Failed to hide post"))
   }
 
   function unarchivePost(postId){
@@ -372,8 +462,9 @@ export default function App(){
         setPosts([])
         offsetRef.current=0
         if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,archived:false}))
+        toastSuccess("Post unhidden")
       })
-      .catch(()=>alert("Failed to unarchive post"))
+      .catch(()=>toastError("Failed to unhide post"))
   }
 
   function deletePost(postId){
@@ -388,8 +479,9 @@ export default function App(){
         setPosts(prev=>prev.filter(p=>p.id!==deleteTargetId))
         setArchivePosts(prev=>prev.filter(p=>p.id!==deleteTargetId))
         if(selectedPost?.id===deleteTargetId) setSelectedPost(null)
+        toastSuccess("Post deleted")
       })
-      .catch(()=>alert("Failed to delete post"))
+      .catch(()=>toastError("Failed to delete post"))
       .finally(()=>{
         setDeleteModal(false)
         setDeleteTargetId(null)
@@ -423,21 +515,21 @@ export default function App(){
   }
 
   function toggleTarget(ttype,name){
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`).then(()=>loadAdmin()).catch(()=>alert("Failed to toggle target"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`).then(()=>loadAdmin()).catch(()=>toastError("Failed to toggle target"))
   }
 
   function setTargetStatus(ttype,name,status){
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`).then(()=>loadAdmin()).catch(()=>alert("Failed to set status"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`).then(()=>loadAdmin()).catch(()=>toastError("Failed to set status"))
   }
 
   function rescanTarget(ttype,name){
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`).then(()=>loadAdmin()).catch(()=>alert("Failed to rescan target"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`).then(()=>{ toastSuccess("Rescan queued"); loadAdmin() }).catch(()=>toastError("Failed to rescan target"))
   }
 
   function scrapeNow(){
     axios.post("/api/admin/scrape")
       .then(()=>{ setScrapeTriggered(true); setTimeout(()=>setScrapeTriggered(false), 3000) })
-      .catch(()=>alert("Failed to trigger scrape"))
+      .catch(()=>toastError("Failed to trigger scrape"))
   }
 
   function triggerBackfill(){
@@ -447,7 +539,7 @@ export default function App(){
         startBackfillPoll();
         setTimeout(()=>setBackfillTriggered(false), 3000) 
       })
-      .catch(()=>alert("Failed to trigger backfill"))
+      .catch(()=>toastError("Failed to trigger backfill"))
   }
 
   function startBackfillPoll(){
@@ -474,20 +566,17 @@ export default function App(){
   }, [])
 
   function deleteTarget(ttype,name){
-    // First confirm: OK = remove target only, Cancel = abort entirely
-    const removeOnly = confirm(`Delete target ${ttype}:${name}?\n\nClick OK to remove from scrape list only (keeps posts and media).\nClick Cancel to abort.`)
+    const removeOnly = window.confirm(`Delete target ${ttype}:${name}?\n\nClick OK to remove from scrape list only (keeps posts and media).\nClick Cancel to abort.`)
     if (!removeOnly) return
 
-    // Second confirm: offer to also prune posts/media
-    const shouldPrune = confirm(`Also delete all posts and media associated with ${name}?\n\nClick OK to delete posts and media.\nClick Cancel to keep them.`)
+    const shouldPrune = window.confirm(`Also delete all posts and media associated with ${name}?\n\nClick OK to delete posts and media.\nClick Cancel to keep them.`)
     if (!shouldPrune) {
-      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`).then(()=>loadAdmin()).catch(()=>alert("Failed to delete target"))
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`).then(()=>{ toastSuccess("Target removed"); loadAdmin() }).catch(()=>toastError("Failed to delete target"))
     } else {
-      const alsoDeleteFiles = confirm("Also delete downloaded media files from disk? (This cannot be undone)")
+      const alsoDeleteFiles = window.confirm("Also delete downloaded media files from disk? (This cannot be undone)")
       axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}?prune=true&delete_files=${alsoDeleteFiles}`)
-        .then(r=>alert(`Deleted: ${r.data.deleted_posts} posts, ${r.data.deleted_media} media, ${r.data.deleted_files} files`))
-        .then(()=>loadAdmin())
-        .catch(()=>alert("Failed to delete target"))
+        .then(r=>{ toastSuccess(`Deleted: ${r.data.deleted_posts} posts, ${r.data.deleted_media} media, ${r.data.deleted_files} files`); loadAdmin() })
+        .catch(()=>toastError("Failed to delete target"))
     }
   }
 
@@ -495,13 +584,13 @@ export default function App(){
     const name = addTargetName.trim()
     if(!name) return
     axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`)
-      .then(()=>{ setAddTargetName(""); loadAdmin() })
-      .catch(()=>alert("Failed to add target"))
+      .then(()=>{ setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin() })
+      .catch(()=>toastError("Failed to add target"))
   }
 
   function clearQueue(){
-    if(!confirm("Clear the entire download queue?")) return
-    axios.delete("/api/admin/queue").then(()=>loadAdmin()).catch(()=>alert("Failed to clear queue"))
+    if(!window.confirm("Clear the entire download queue?")) return
+    axios.delete("/api/admin/queue").then(()=>{ toastSuccess("Queue cleared"); loadAdmin() }).catch(()=>toastError("Failed to clear queue"))
   }
 
   function doReset(){
@@ -552,22 +641,22 @@ export default function App(){
     setThumbJobResult(null)
     axios.post("/api/admin/thumbnails/backfill")
       .then(r=>{ setThumbJob({status:"pending", total:r.data.total, done:0, skipped:0, errors:[]}); startThumbPoll(r.data.job_id) })
-      .catch(err=>alert("Backfill failed: " + (err.response?.data?.detail||err.message)))
+      .catch(err=>toastError("Backfill failed: " + (err.response?.data?.detail||err.message)))
   }
 
   function runThumbRebuildAll(){
-    if(!confirm("Regenerate ALL thumbnails? This will overwrite every existing thumbnail and may take a while.")) return
+    if(!window.confirm("Regenerate ALL thumbnails? This will overwrite every existing thumbnail and may take a while.")) return
     setThumbJobResult(null)
     axios.post("/api/admin/thumbnails/rebuild-all")
       .then(r=>{ setThumbJob({status:"pending", total:r.data.total, done:0, skipped:0, errors:[]}); startThumbPoll(r.data.job_id) })
-      .catch(err=>alert("Rebuild failed: " + (err.response?.data?.detail||err.message)))
+      .catch(err=>toastError("Rebuild failed: " + (err.response?.data?.detail||err.message)))
   }
 
   function runThumbPurgeOrphans(){
-    if(!confirm("Delete all orphan thumbnail files (on disk but not in DB)?")) return
+    if(!window.confirm("Delete all orphan thumbnail files (on disk but not in DB)?")) return
     axios.post("/api/admin/thumbnails/purge-orphans")
-      .then(r=>{ alert(`Deleted ${r.data.deleted} orphan file(s), freed ${r.data.freed_mb} MB`); loadThumbStats() })
-      .catch(err=>alert("Purge failed: " + (err.response?.data?.detail||err.message)))
+      .then(r=>{ toastSuccess(`Deleted ${r.data.deleted} orphan file(s), freed ${r.data.freed_mb} MB`); loadThumbStats() })
+      .catch(err=>toastError("Purge failed: " + (err.response?.data?.detail||err.message)))
   }
 
   function formatEta(seconds){
@@ -683,6 +772,28 @@ export default function App(){
     </div>
   )
 
+  // Mobile touch handlers for gallery swipe
+  const handleTouchStart = (e) => {
+    if (e.touches.length === 1) {
+      setSwipeStart(e.touches[0].clientX)
+    }
+  }
+  
+  const handleTouchMove = (e) => {
+    if (!swipeStart || !selectedPost?.image_urls?.length) return
+    const delta = e.touches[0].clientX - swipeStart
+    if (Math.abs(delta) > 50) {
+      if (delta > 0 && galleryIdx > 0) {
+        setGalleryIdx(i => i - 1)
+      } else if (delta < 0 && galleryIdx < selectedPost.image_urls.length - 1) {
+        setGalleryIdx(i => i + 1)
+      }
+      setSwipeStart(null)
+    }
+  }
+  
+  const handleTouchEnd = () => setSwipeStart(null)
+
   // Mini bar chart for posts_per_day
   function PostsChart({data}){
     if(!data || data.length === 0) return null
@@ -709,15 +820,26 @@ export default function App(){
   }
 
   return (
-    <div style={{minHeight:"100vh",background:"#0d0d0d",color:"#fff",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif"}}>
-      <header style={{padding:"16px 24px",background:"linear-gradient(180deg,#1a1a1a 0%,#141414 100%)",borderBottom:"1px solid #222",position:"sticky",top:0,zIndex:100,backdropFilter:"blur(10px)"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"1400px",margin:"0 auto"}}>
-          <div style={{display:"flex",alignItems:"center",gap:"24px"}}>
+    <div style={{minHeight:"100vh",background:"#0d0d0d",color:"#fff",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif",paddingBottom:"env(safe-area-inset-bottom, 0)"}}>
+      <header style={{
+        padding:"16px 24px",
+        paddingTop:"max(16px, env(safe-area-inset-top, 16px))",
+        background:"linear-gradient(180deg,#1a1a1a 0%,#141414 100%)",
+        borderBottom:"1px solid #222",
+        position:"sticky",
+        top:0,
+        zIndex:100,
+        backdropFilter:"blur(20px)",
+        WebkitBackdropFilter:"blur(20px)",
+        backgroundColor:"rgba(20,20,20,0.95)"
+      }}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"1400px",margin:"0 auto",gap:"12px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"16px",flexShrink:0}}>
             <div style={{position:"relative"}}>
               <img src="/icon.png" alt="Logo" style={{width:"40px",height:"40px",borderRadius:"12px",boxShadow:"0 4px 12px rgba(255,69,0,0.3)"}} />
               <div style={{position:"absolute",bottom:"-2px",right:"-2px",width:"10px",height:"10px",background:"#46d160",borderRadius:"50%",border:"2px solid #141414"}} />
             </div>
-            <h1 style={{margin:0,fontSize:"22px",fontWeight:"700",background:"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text"}}>Reddit Archive</h1>
+            <h1 style={{margin:0,fontSize:"20px",fontWeight:"700",background:"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text",whiteSpace:"nowrap"}}>Reddit Archive</h1>
             <div style={{display:"flex",gap:"4px",background:"#1a1a1a",padding:"4px",borderRadius:"10px"}}>
               {[
                 {to:"/",label:"Browse",icon:"⊞"},
@@ -725,14 +847,29 @@ export default function App(){
                 {to:"/audit",label:"Audit",icon:"✓"},
                 {to:"/admin",label:"Admin",icon:"⚙"}
               ].map(tab=>(
-                <NavLink key={tab.to} to={tab.to} end={tab.to==="/"} style={({isActive})=>({padding:"8px 16px",background:isActive?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontWeight:isActive?"600":"400",fontSize:"14px",display:"flex",alignItems:"center",gap:"6px",transition:"all 0.2s ease",textDecoration:"none"})}>
-                  <span style={{fontSize:"16px"}}>{tab.icon}</span>{tab.label}
+                <NavLink key={tab.to} to={tab.to} end={tab.to==="/"} style={({isActive})=>({
+                  padding:"8px 14px",
+                  background:isActive?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",
+                  border:"none",
+                  borderRadius:"8px",
+                  color:"#fff",
+                  cursor:"pointer",
+                  fontWeight:isActive?"600":"400",
+                  fontSize:"13px",
+                  display:"flex",
+                  alignItems:"center",
+                  gap:"6px",
+                  transition:"all 0.2s ease",
+                  textDecoration:"none",
+                  whiteSpace:"nowrap"
+                })}>
+                  <span style={{fontSize:"14px"}}>{tab.icon}</span><span className="hide-on-mobile">{tab.label}</span>
                 </NavLink>
               ))}
             </div>
             <LiveDot connected={liveConnected}/>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:"16px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"12px",flexWrap:"wrap",justifyContent:"flex-end"}}>
             {queueInfo && (
               <div style={{fontSize:"12px",color:"#555",display:"flex",alignItems:"center",gap:"6px"}}>
                 <span style={{color:"#333"}}>queue:</span>
@@ -741,8 +878,8 @@ export default function App(){
             )}
             <div style={{position:"relative"}}>
               <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
-              <input type="text" placeholder="Search all posts..." value={search} onChange={handleSearch}
-                style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"320px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"all 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
+              <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search..." value={search} onChange={handleSearch}
+                style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"200px",minWidth:"140px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"all 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
             </div>
           </div>
         </div>
@@ -1170,11 +1307,11 @@ export default function App(){
               </p>
               <button
                 onClick={()=>{
-                  if(!confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
+                  if(!window.confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
                   axios.post("/api/admin/media/rescan").then(r=>{
-                    alert(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
+                    toastSuccess(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
                     loadAdmin()
-                  }).catch(err=>alert("Rescan failed: " + (err.response?.data?.detail||err.message)))
+                  }).catch(err=>toastError("Rescan failed: " + (err.response?.data?.detail||err.message)))
                 }}
                 style={{padding:"10px 20px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:"#fff",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
                 Re-scan All Posts
@@ -1224,113 +1361,104 @@ export default function App(){
 
         {/* ── FILTER / SORT BAR ── */}
         {!searchResults && (
-          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111",padding:"12px 24px"}}>
-            <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
-              <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap"}}>Filter</span>
-
-              {/* Subreddit filter */}
-              <input
-                type="text"
-                placeholder="r/ subreddit"
-                value={filterSubreddit}
-                onChange={e=>{
-                  const v = e.target.value
-                  setFilterSubreddit(v)
-                  clearTimeout(searchTimeout._filterSubreddit)
-                  searchTimeout._filterSubreddit = setTimeout(()=>{
-                    const f = {...filtersRef.current, subreddit: v}
-                    applyFilters(f)
-                  }, 400)
-                }}
-                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
-              />
-
-              {/* Author filter */}
-              <input
-                type="text"
-                placeholder="u/ author"
-                value={filterAuthor}
-                onChange={e=>{
-                  const v = e.target.value
-                  setFilterAuthor(v)
-                  clearTimeout(searchTimeout._filterAuthor)
-                  searchTimeout._filterAuthor = setTimeout(()=>{
-                    const f = {...filtersRef.current, author: v}
-                    applyFilters(f)
-                  }, 400)
-                }}
-                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
-              />
-
-              {/* Media type filter - multiselect checkboxes */}
-              <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
-                {[
-                  {value:"image", label:"🖼 Images"},
-                  {value:"video", label:"🎬 Videos"},
-                  {value:"text", label:"📝 Text"},
-                ].map(mt => (
-                  <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"4px",cursor:"pointer",padding:"4px 8px",background:filterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"6px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s"}}>
-                    <input type="checkbox" checked={filterMediaTypes.includes(mt.value)} onChange={e=>{
-                      const checked = e.target.checked
-                      const newTypes = checked 
-                        ? [...filterMediaTypes, mt.value]
-                        : filterMediaTypes.filter(t => t !== mt.value)
-                      setFilterMediaTypes(newTypes)
-                      const f = {...filtersRef.current, mediaTypes: newTypes}
-                      applyFilters(f)
-                    }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
-                    <span style={{fontSize:"12px",color:filterMediaTypes.includes(mt.value)?"#ff6a33":"#666",fontWeight:filterMediaTypes.includes(mt.value)?"500":"400"}}>{mt.label}</span>
-                  </label>
-                ))}
-              </div>
-
-              {/* NSFW toggle */}
-              <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",whiteSpace:"nowrap"}}>
-                <input
-                  type="checkbox"
-                  checked={showNsfw}
+          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111"}}>
+            {/* Mobile filter toggle bar */}
+            <div style={{padding:"8px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"1400px",margin:"0 auto"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                <button
+                  onClick={()=>setFilterBarOpen(o=>!o)}
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:filterBarOpen||hasActiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${filterBarOpen||hasActiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"all 0.2s"}}>
+                  <span style={{fontSize:"14px"}}>⚙</span>
+                  Filters
+                  {hasActiveFilters() && <span style={{background:"#ff4500",color:"#fff",borderRadius:"10px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
+                  <span style={{fontSize:"10px",opacity:0.6,marginLeft:"2px"}}>{filterBarOpen?"▲":"▼"}</span>
+                </button>
+                <select
+                  value={sortBy}
                   onChange={e=>{
-                    const v = e.target.checked
-                    setShowNsfw(v)
-                    localStorage.setItem("showNsfw", String(v))
-                    const f = {...filtersRef.current, nsfw: v}
+                    const v = e.target.value
+                    setSortBy(v)
+                    const f = {...filtersRef.current, sort: v}
                     applyFilters(f)
                   }}
-                  style={{width:"16px",height:"16px",accentColor:"#ff4500"}}
-                />
-                <span style={{fontSize:"12px",color:showNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
-              </label>
-
-              <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap",marginLeft:"8px"}}>Sort</span>
-
-              {/* Sort selector */}
-              <select
-                value={sortBy}
-                onChange={e=>{
-                  const v = e.target.value
-                  setSortBy(v)
-                  const f = {...filtersRef.current, sort: v}
-                  applyFilters(f)
-                }}
-                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:sortBy!=="newest"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
-              >
-                <option value="last_added">Last added</option>
-                <option value="newest">Reddit date ↓</option>
-                <option value="oldest">Reddit date ↑</option>
-                <option value="title_asc">Title A → Z</option>
-                <option value="title_desc">Title Z → A</option>
-              </select>
-
-              {/* Clear filters */}
-              {hasActiveFilters() && (
-                <button
-                  onClick={clearFilters}
-                  style={{marginLeft:"auto",padding:"8px 14px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}
+                  style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:sortBy!=="last_added"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
                 >
-                  ✕ Clear filters
-                </button>
+                  <option value="last_added">Last added</option>
+                  <option value="newest">Reddit date ↓</option>
+                  <option value="oldest">Reddit date ↑</option>
+                  <option value="title_asc">Title A → Z</option>
+                  <option value="title_desc">Title Z → A</option>
+                </select>
+              </div>
+              {hasActiveFilters() && (
+                <button onClick={clearFilters} style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear</button>
               )}
             </div>
+
+            {/* Expandable filter panel */}
+            {filterBarOpen && (
+              <div style={{padding:"12px 16px 16px",borderTop:"1px solid #1a1a1a"}}>
+                <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+                  <input
+                    type="text" inputMode="text" placeholder="r/ subreddit"
+                    value={filterSubreddit}
+                    onChange={e=>{
+                      const v = e.target.value
+                      setFilterSubreddit(v)
+                      clearTimeout(searchTimeout._filterSubreddit)
+                      searchTimeout._filterSubreddit = setTimeout(()=>{
+                        applyFilters({...filtersRef.current, subreddit: v})
+                      }, 400)
+                    }}
+                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
+                  />
+                  <input
+                    type="text" inputMode="text" placeholder="u/ author"
+                    value={filterAuthor}
+                    onChange={e=>{
+                      const v = e.target.value
+                      setFilterAuthor(v)
+                      clearTimeout(searchTimeout._filterAuthor)
+                      searchTimeout._filterAuthor = setTimeout(()=>{
+                        applyFilters({...filtersRef.current, author: v})
+                      }, 400)
+                    }}
+                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
+                  />
+                  <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
+                    {[
+                      {value:"image", label:"🖼 Images"},
+                      {value:"video", label:"🎬 Videos"},
+                      {value:"text", label:"📝 Text"},
+                    ].map(mt => (
+                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:filterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s",minHeight:"36px"}}>
+                        <input type="checkbox" checked={filterMediaTypes.includes(mt.value)} onChange={e=>{
+                          const newTypes = e.target.checked
+                            ? [...filterMediaTypes, mt.value]
+                            : filterMediaTypes.filter(t => t !== mt.value)
+                          setFilterMediaTypes(newTypes)
+                          applyFilters({...filtersRef.current, mediaTypes: newTypes})
+                        }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
+                        <span style={{fontSize:"12px",color:filterMediaTypes.includes(mt.value)?"#ff6a33":"#666"}}>{mt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",minHeight:"36px",padding:"4px 0"}}>
+                    <input
+                      type="checkbox" checked={showNsfw}
+                      onChange={e=>{
+                        const v = e.target.checked
+                        setShowNsfw(v)
+                        localStorage.setItem("showNsfw", String(v))
+                        applyFilters({...filtersRef.current, nsfw: v})
+                      }}
+                      style={{width:"16px",height:"16px",accentColor:"#ff4500"}}
+                    />
+                    <span style={{fontSize:"12px",color:showNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1343,13 +1471,13 @@ export default function App(){
               </div>
               <button onClick={()=>{setSearchResults(null);setSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
               {searchResults.map(p=>(
-                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
+                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
                   {p.is_video || p.video_url ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
                       {(p.thumb_url || p.video_url) && (
-                        <img src={p.thumb_url || p.video_url} style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>
+                        <img src={p.thumb_url || p.video_url} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>
                       )}
                       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
                         <div style={{width:"48px",height:"48px",borderRadius:"50%",background:"rgba(0,0,0,0.6)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -1360,7 +1488,7 @@ export default function App(){
                     </div>
                   ) : p.image_url ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
-                      <img src={p.image_url} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                      <img src={p.image_url} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
                     </div>
                   ) : null}
                   <div style={{padding:"16px"}}>
@@ -1376,10 +1504,11 @@ export default function App(){
 
         {!searchResults && (
           <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"16px"}} className="mobile-grid-2">
               {posts.map(p=>(
                 <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
                   onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
+                  className="post-card"
                   style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(255,69,0,0.15)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #2a2a2a"}}>
                   {p.is_video ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
@@ -1394,11 +1523,12 @@ export default function App(){
                         <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
                           {/* Static thumbnail behind play button */}
                           {(p.thumb_url || p.preview_url) && (
-                            <img
-                              src={p.thumb_url || p.preview_url}
-                              style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}}
-                              onError={e=>e.target.style.display="none"}
-                            />
+                             <img
+                               src={p.thumb_url || p.preview_url}
+                               loading="lazy" decoding="async"
+                               style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}}
+                               onError={e=>e.target.style.display="none"}
+                             />
                           )}
                           <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)",backdropFilter:"blur(2px)"}}>
                             <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #ff4500",marginLeft:"4px"}}/>
@@ -1416,7 +1546,7 @@ export default function App(){
                     </div>
                   ) : (p.url || p.image_urls?.[0]) ? (
                     <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
-                      <img src={p.url || p.image_urls?.[0]} style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
+                      <img src={p.url || p.image_urls?.[0]} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
                       {/* Gallery indicator */}
                       {p.image_urls?.length > 1 && (
                         <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>
@@ -1434,18 +1564,18 @@ export default function App(){
                       {p.selftext && <div style={{fontSize:"13px",color:"#777",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
                     </div>
                   )}
-                  <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{minWidth:0}}>
-                        <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
+                  <div style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px"}}>
+                      <div style={{minWidth:0,flex:1}}>
+                        <div style={{fontSize:"10px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
                       </div>
-                      <div style={{display:"flex",gap:"6px"}}>
-                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete this post"
-                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                      <div style={{display:"flex",gap:"4px",flexShrink:0}}>
+                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete"
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
                           🗑
                         </button>
-                        <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Hide this post"
-                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                        <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Hide"
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
                           👁
                         </button>
                       </div>
@@ -1481,63 +1611,77 @@ export default function App(){
       {activeTab === "archive" && (<>
         {/* Hidden filter/sort bar */}
         {!archiveSearchResults && (
-          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111",padding:"12px 24px"}}>
-            <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
-              <span style={{fontSize:"12px",color:"#888",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap"}}>👁 Hidden</span>
-              <input type="text" placeholder="r/ subreddit" value={archiveFilterSubreddit}
-                onChange={e=>{
-                  const v=e.target.value; setArchiveFilterSubreddit(v)
-                  clearTimeout(archiveSearchTimeout._sub)
-                  archiveSearchTimeout._sub=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)
-                }}
-                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
-              <input type="text" placeholder="u/ author" value={archiveFilterAuthor}
-                onChange={e=>{
-                  const v=e.target.value; setArchiveFilterAuthor(v)
-                  clearTimeout(archiveSearchTimeout._auth)
-                  archiveSearchTimeout._auth=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,author:v}),400)
-                }}
-                style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111"}}>
+            <div style={{padding:"8px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"8px",flexWrap:"wrap",maxWidth:"1400px",margin:"0 auto"}}>
               <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
-                {[{value:"image",label:"🖼 Images"},{value:"video",label:"🎬 Videos"},{value:"text",label:"📝 Text"}].map(mt=>(
-                  <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"4px",cursor:"pointer",padding:"4px 8px",background:archiveFilterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"6px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s"}}>
-                    <input type="checkbox" checked={archiveFilterMediaTypes.includes(mt.value)} onChange={e=>{
-                      const newTypes=e.target.checked?[...archiveFilterMediaTypes,mt.value]:archiveFilterMediaTypes.filter(t=>t!==mt.value)
-                      setArchiveFilterMediaTypes(newTypes)
-                      applyArchiveFilters({...archiveFiltersRef.current,mediaTypes:newTypes})
-                    }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
-                    <span style={{fontSize:"12px",color:archiveFilterMediaTypes.includes(mt.value)?"#ff6a33":"#666"}}>{mt.label}</span>
-                  </label>
-                ))}
+                <button
+                  onClick={()=>setArchiveFilterBarOpen(o=>!o)}
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveArchiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"all 0.2s"}}>
+                  <span>👁</span> Filters
+                  {hasActiveArchiveFilters() && <span style={{background:"#ff4500",color:"#fff",borderRadius:"10px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
+                  <span style={{fontSize:"10px",opacity:0.6}}>{archiveFilterBarOpen?"▲":"▼"}</span>
+                </button>
+                <select value={archiveSortBy} onChange={e=>{
+                  const v=e.target.value; setArchiveSortBy(v)
+                  applyArchiveFilters({...archiveFiltersRef.current,sort:v})
+                }} style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                  <option value="last_added">Last added</option>
+                  <option value="newest">Reddit date ↓</option>
+                  <option value="oldest">Reddit date ↑</option>
+                  <option value="title_asc">Title A → Z</option>
+                  <option value="title_desc">Title Z → A</option>
+                </select>
               </div>
-              <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",whiteSpace:"nowrap"}}>
-                <input type="checkbox" checked={archiveShowNsfw} onChange={e=>{
-                  const v=e.target.checked; setArchiveShowNsfw(v)
-                  applyArchiveFilters({...archiveFiltersRef.current,nsfw:v})
-                }} style={{width:"16px",height:"16px",accentColor:"#ff4500"}}/>
-                <span style={{fontSize:"12px",color:archiveShowNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
-              </label>
-              <span style={{fontSize:"12px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",whiteSpace:"nowrap",marginLeft:"8px"}}>Sort</span>
-              <select value={archiveSortBy} onChange={e=>{
-                const v=e.target.value; setArchiveSortBy(v)
-                applyArchiveFilters({...archiveFiltersRef.current,sort:v})
-              }} style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}>
-                <option value="last_added">Last added</option>
-                <option value="newest">Reddit date ↓</option>
-                <option value="oldest">Reddit date ↑</option>
-                <option value="title_asc">Title A → Z</option>
-                <option value="title_desc">Title Z → A</option>
-              </select>
-              {hasActiveArchiveFilters() && (
-                <button onClick={clearArchiveFilters} style={{marginLeft:"auto",padding:"8px 14px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear filters</button>
-              )}
-              {/* Archive search */}
-              <div style={{position:"relative",marginLeft:"auto"}}>
-                <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
-                <input type="text" placeholder="Search hidden posts..." value={archiveSearch} onChange={handleArchiveSearch}
-                  style={{padding:"10px 16px 10px 40px",borderRadius:"20px",border:"1px solid #333",width:"280px",background:"#1a1a1a",color:"#fff",fontSize:"13px",outline:"none"}}/>
+              <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                {hasActiveArchiveFilters() && (
+                  <button onClick={clearArchiveFilters} style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear</button>
+                )}
+                <div style={{position:"relative"}}>
+                  <span style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"15px"}}>⌕</span>
+                  <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search hidden..." value={archiveSearch} onChange={handleArchiveSearch}
+                    style={{padding:"8px 12px 8px 36px",borderRadius:"20px",border:"1px solid #333",width:"200px",background:"#1a1a1a",color:"#fff",fontSize:"13px",outline:"none"}}/>
+                </div>
               </div>
             </div>
+            {archiveFilterBarOpen && (
+              <div style={{padding:"12px 16px 16px",borderTop:"1px solid #1a1a1a"}}>
+                <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
+                  <input type="text" inputMode="text" placeholder="r/ subreddit" value={archiveFilterSubreddit}
+                    onChange={e=>{
+                      const v=e.target.value; setArchiveFilterSubreddit(v)
+                      clearTimeout(archiveSearchTimeout._sub)
+                      archiveSearchTimeout._sub=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)
+                    }}
+                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+                  <input type="text" inputMode="text" placeholder="u/ author" value={archiveFilterAuthor}
+                    onChange={e=>{
+                      const v=e.target.value; setArchiveFilterAuthor(v)
+                      clearTimeout(archiveSearchTimeout._auth)
+                      archiveSearchTimeout._auth=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,author:v}),400)
+                    }}
+                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+                  <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
+                    {[{value:"image",label:"🖼 Images"},{value:"video",label:"🎬 Videos"},{value:"text",label:"📝 Text"}].map(mt=>(
+                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:archiveFilterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s",minHeight:"36px"}}>
+                        <input type="checkbox" checked={archiveFilterMediaTypes.includes(mt.value)} onChange={e=>{
+                          const newTypes=e.target.checked?[...archiveFilterMediaTypes,mt.value]:archiveFilterMediaTypes.filter(t=>t!==mt.value)
+                          setArchiveFilterMediaTypes(newTypes)
+                          applyArchiveFilters({...archiveFiltersRef.current,mediaTypes:newTypes})
+                        }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
+                        <span style={{fontSize:"12px",color:archiveFilterMediaTypes.includes(mt.value)?"#ff6a33":"#666"}}>{mt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <label style={{display:"flex",alignItems:"center",gap:"6px",cursor:"pointer",minHeight:"36px"}}>
+                    <input type="checkbox" checked={archiveShowNsfw} onChange={e=>{
+                      const v=e.target.checked; setArchiveShowNsfw(v)
+                      applyArchiveFilters({...archiveFiltersRef.current,nsfw:v})
+                    }} style={{width:"16px",height:"16px",accentColor:"#ff4500"}}/>
+                    <span style={{fontSize:"12px",color:archiveShowNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1551,9 +1695,9 @@ export default function App(){
                 </div>
                 <button onClick={()=>{setArchiveSearchResults(null);setArchiveSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archiveSearchResults.map(p=>(
-                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
+                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
                     <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit?`r/${p.subreddit}`:""}</div>
                     <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
                     {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
@@ -1568,18 +1712,19 @@ export default function App(){
               {archivePosts.length===0 && !archiveIsLoading && (
                 <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>No hidden posts yet.</div>
               )}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"20px"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archivePosts.map(p=>(
                   <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
                     onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
-                    style={{background:"linear-gradient(145deg,#1a1a1a,#141414)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(0,0,0,0.3)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #222",opacity:0.9}}>
+                    className="post-card"
+                    style={{background:"linear-gradient(145deg,#1a1a1a,#141414)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",border:"1px solid #222",opacity:0.9}}>
                     {p.is_video ? (
                       <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
                         {hoveredCard===p.id && p.video_url && (p.video_url.includes("v.redd.it")||p.video_url.endsWith(".mp4")) ? (
                           <video src={p.video_url} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                         ) : (
                           <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
-                            {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>}
+                            {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} loading="lazy" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>}
                             <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(100,100,100,0.6)",display:"flex",alignItems:"center",justifyContent:"center"}}>
                               <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #888",marginLeft:"4px"}}/>
                             </div>
@@ -1595,7 +1740,7 @@ export default function App(){
                       </div>
                     ) : (p.url||p.image_urls?.[0]) ? (
                       <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
-                        <img src={p.url||p.image_urls?.[0]} style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.85}} onError={e=>e.target.style.display="none"}/>
+                        <img src={p.url||p.image_urls?.[0]} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.85}} onError={e=>e.target.style.display="none"}/>
                         {p.image_urls?.length>1 && (
                           <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>1/{p.image_urls.length}</div>
                         )}
@@ -1611,18 +1756,18 @@ export default function App(){
                         {p.selftext && <div style={{fontSize:"13px",color:"#555",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
                       </div>
                     )}
-                    <div style={{padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{minWidth:0}}>
-                        <div style={{fontSize:"11px",color:"#555",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
+                    <div style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px"}}>
+                      <div style={{minWidth:0,flex:1}}>
+                        <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#888"}}>{p.title}</div>
                       </div>
-                      <div style={{display:"flex",gap:"6px"}}>
-                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete this post"
-                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                      <div style={{display:"flex",gap:"4px",flexShrink:0}}>
+                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete"
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           🗑
                         </button>
-                        <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unhide this post"
-                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                        <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unhide"
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center"}}>
                           👁
                         </button>
                       </div>
@@ -1711,17 +1856,44 @@ export default function App(){
         </div>
       )}
 
-      {/* ── POST DETAIL MODAL ── */}
+        {/* ── POST DETAIL MODAL ── */}
       {selectedPost && (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>setSelectedPost(null)}>
-          <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"720px",width:"100%",maxHeight:"90vh",overflow:"auto",border:"1px solid #222",boxShadow:"0 24px 80px rgba(0,0,0,0.5)"}} onClick={e=>e.stopPropagation()}>
+        <div 
+          role="dialog" aria-modal="true" aria-label={selectedPost.title}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:200,backdropFilter:"blur(12px)",WebkitBackdropFilter:"blur(12px)"}} 
+          onClick={()=>setSelectedPost(null)}
+        >
+          <div 
+            className="modal-enter"
+            style={{
+              background:"#0d0d0d",
+              borderRadius:"20px 20px 0 0",
+              width:"100%",
+              maxWidth:"760px",
+              maxHeight:"93vh",
+              overflow:"auto",
+              border:"1px solid #222",
+              borderBottom:"none",
+              boxShadow:"0 -8px 60px rgba(0,0,0,0.7)",
+              paddingBottom:"env(safe-area-inset-bottom, 0)"
+            }}
+            onClick={e=>e.stopPropagation()}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          >
+            {/* Drag handle */}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"12px 0 4px"}}>
+              <div style={{width:"40px",height:"4px",background:"#333",borderRadius:"2px"}}/>
+            </div>
+
             {(selectedPost.is_video || selectedPost.video_url) ? (
-              <div style={{background:"#000",position:"relative",borderRadius:"20px 20px 0 0",overflow:"hidden"}}>
+              <div style={{background:"#000",position:"relative",overflow:"hidden"}}>
                 {selectedPost.video_url && (selectedPost.video_url.includes("v.redd.it")||selectedPost.video_url.endsWith(".mp4")) ? (
                   <video
                     src={selectedPost.video_url}
                     controls autoPlay muted loop playsInline
-                    style={{width:"100%",maxHeight:"500px",display:"block",background:"#000"}}
+                    style={{width:"100%",maxHeight:"480px",display:"block",background:"#000"}}
                   />
                 ) : selectedPost.video_url && (selectedPost.video_url.includes("youtube.com")||selectedPost.video_url.includes("youtu.be")) ? (
                   <div style={{position:"relative",paddingTop:"56.25%"}}>
@@ -1737,88 +1909,115 @@ export default function App(){
                     <div style={{width:"80px",height:"80px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center"}}>
                       <div style={{width:0,height:0,borderTop:"16px solid transparent",borderBottom:"16px solid transparent",borderLeft:"26px solid #ff4500",marginLeft:"6px"}}/>
                     </div>
-                    {(selectedPost.video_urls?.[0] || selectedPost.url) && <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener" style={{color:"#ff4500",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
+                    {(selectedPost.video_urls?.[0] || selectedPost.url) && <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{color:"#ff4500",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
                   </div>
                 )}
-                <div style={{position:"absolute",top:"16px",left:"16px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",fontWeight:"700",color:"#fff",border:"1px solid rgba(255,255,255,0.1)"}}>
+                <div style={{position:"absolute",top:"12px",left:"12px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",fontWeight:"700",color:"#fff",border:"1px solid rgba(255,255,255,0.1)"}}>
                   <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #ff4500"}}/>
                   VIDEO
                 </div>
                 {(selectedPost.video_urls?.[0] || selectedPost.url) && (
-                  <div style={{position:"absolute",top:"16px",right:"16px"}}>
-                    <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
+                  <div style={{position:"absolute",top:"12px",right:"12px"}}>
+                    <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px",border:"1px solid rgba(255,255,255,0.1)"}}>↗ Open</a>
                   </div>
                 )}
               </div>
             ) : (selectedPost.url || selectedPost.image_urls?.[0]) ? (
-              <div style={{background:"#000",position:"relative"}}>
-                <img src={selectedPost.image_urls?.[galleryIdx] || selectedPost.url || selectedPost.image_urls?.[0]} style={{width:"100%",maxHeight:"450px",objectFit:"contain",borderRadius:"20px 20px 0 0"}} onError={e=>e.target.style.display="none"}/>
-                {/* Gallery navigation */}
+              <div style={{background:"#000",position:"relative",userSelect:"none"}}>
+                <img 
+                  src={selectedPost.image_urls?.[galleryIdx] || selectedPost.url || selectedPost.image_urls?.[0]} 
+                  style={{width:"100%",maxHeight:"460px",objectFit:"contain",display:"block"}} 
+                  onError={e=>e.target.style.display="none"}
+                  draggable={false}
+                />
+                {/* Gallery navigation - large touch targets */}
                 {selectedPost.image_urls?.length > 1 && (
                   <>
-                    <div style={{position:"absolute",top:"50%",left:"10px",transform:"translateY(-50%)",zIndex:10}}>
-                      <button onClick={()=>setGalleryIdx(i=>Math.max(0,i-1))} disabled={galleryIdx===0} style={{background:"rgba(0,0,0,0.8)",border:"none",borderRadius:"50%",width:"40px",height:"40px",cursor:"pointer",fontSize:"20px",color:"#fff",opacity:galleryIdx===0?0.3:1}}>‹</button>
+                    <button 
+                      onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.max(0,i-1))}} 
+                      disabled={galleryIdx===0}
+                      style={{position:"absolute",top:"50%",left:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===0?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s",WebkitTapHighlightColor:"transparent"}}>
+                      ‹
+                    </button>
+                    <button 
+                      onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.min(selectedPost.image_urls.length-1,i+1))}} 
+                      disabled={galleryIdx===selectedPost.image_urls.length-1}
+                      style={{position:"absolute",top:"50%",right:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===selectedPost.image_urls.length-1?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s",WebkitTapHighlightColor:"transparent"}}>
+                      ›
+                    </button>
+                    {/* Dot indicators */}
+                    <div style={{position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",display:"flex",gap:"5px",zIndex:10}}>
+                      {selectedPost.image_urls.slice(0, Math.min(selectedPost.image_urls.length, 10)).map((_,i)=>(
+                        <button key={i} onClick={e=>{e.stopPropagation();setGalleryIdx(i)}}
+                          style={{width:i===galleryIdx?"20px":"7px",height:"7px",borderRadius:"4px",border:"none",background:i===galleryIdx?"#ff4500":"rgba(255,255,255,0.4)",cursor:"pointer",padding:0,transition:"all 0.25s ease",WebkitTapHighlightColor:"transparent"}}/>
+                      ))}
+                      {selectedPost.image_urls.length > 10 && <span style={{color:"rgba(255,255,255,0.5)",fontSize:"10px",lineHeight:"7px"}}>+{selectedPost.image_urls.length-10}</span>}
                     </div>
-                    <div style={{position:"absolute",top:"50%",right:"10px",transform:"translateY(-50%)",zIndex:10}}>
-                      <button onClick={()=>setGalleryIdx(i=>Math.min(selectedPost.image_urls.length-1,i+1))} disabled={galleryIdx===selectedPost.image_urls.length-1} style={{background:"rgba(0,0,0,0.8)",border:"none",borderRadius:"50%",width:"40px",height:"40px",cursor:"pointer",fontSize:"20px",color:"#fff",opacity:galleryIdx===selectedPost.image_urls.length-1?0.3:1}}>›</button>
-                    </div>
-                    <div style={{position:"absolute",top:"16px",left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.8)",borderRadius:"8px",padding:"6px 12px",fontSize:"12px",color:"#fff"}}>
+                    {/* Counter badge */}
+                    <div style={{position:"absolute",top:"12px",left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.8)",backdropFilter:"blur(4px)",borderRadius:"10px",padding:"4px 12px",fontSize:"12px",color:"#fff",fontVariantNumeric:"tabular-nums",border:"1px solid rgba(255,255,255,0.1)"}}>
                       {galleryIdx + 1} / {selectedPost.image_urls.length}
                     </div>
                   </>
                 )}
-                <div style={{position:"absolute",top:"16px",right:"16px"}}>
-                  <a href={selectedPost.image_urls?.[galleryIdx] || selectedPost.url} target="_blank" rel="noopener" style={{background:"rgba(0,0,0,0.7)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px"}}>↗ Open</a>
+                <div style={{position:"absolute",top:"12px",right:"12px"}}>
+                  <a href={selectedPost.image_urls?.[galleryIdx] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px",border:"1px solid rgba(255,255,255,0.1)"}}>↗ Open</a>
                 </div>
               </div>
             ) : null}
-            <div style={{padding:"28px"}}>
-              <div style={{display:"flex",gap:"16px",fontSize:"13px",color:"#666",marginBottom:"20px",flexWrap:"wrap"}}>
-                <span style={{color:"#ff4500",fontWeight:"600"}}>r/{selectedPost.subreddit||"reddit"}</span>
-                <span>•</span>
-                <span style={{color:"#888"}}>u/{selectedPost.author||"unknown"}</span>
-                {selectedPost.created_utc && <><span>•</span><span style={{color:"#555"}}>{formatTime(selectedPost.created_utc)}</span></>}
-                <span>•</span>
-                <span style={{color:"#555"}}>ID: {selectedPost.id}</span>
+
+            <div style={{padding:"20px 24px"}}>
+              <div style={{display:"flex",gap:"12px",fontSize:"13px",color:"#666",marginBottom:"16px",flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{color:"#ff4500",fontWeight:"600",background:"rgba(255,69,0,0.12)",padding:"4px 10px",borderRadius:"6px",fontSize:"12px"}}>r/{selectedPost.subreddit||"reddit"}</span>
+                <span style={{color:"#888",fontSize:"12px"}}>u/{selectedPost.author||"unknown"}</span>
+                {selectedPost.created_utc && <span style={{color:"#444",fontSize:"11px"}}>{formatTime(selectedPost.created_utc)}</span>}
               </div>
-              <h2 style={{margin:"0 0 24px",fontSize:"24px",lineHeight:"1.4",fontWeight:"600",color:"#fff"}}>{selectedPost.title}</h2>
+              <h2 style={{margin:"0 0 20px",fontSize:"20px",lineHeight:"1.4",fontWeight:"600",color:"#fff"}}>{selectedPost.title}</h2>
 
               {selectedPost.selftext && (
-                <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"24px",borderRadius:"14px",marginBottom:"24px",fontSize:"15px",lineHeight:"1.8",color:"#bbb",whiteSpace:"pre-wrap",border:"1px solid #222",maxHeight:"300px",overflow:"auto"}}>
+                <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"20px",borderRadius:"12px",marginBottom:"20px",fontSize:"14px",lineHeight:"1.8",color:"#bbb",whiteSpace:"pre-wrap",border:"1px solid #222",maxHeight:"240px",overflow:"auto",WebkitOverflowScrolling:"touch"}}>
                   {selectedPost.selftext}
                 </div>
               )}
 
-              {/* Hide / Unhide / Delete */}
-              <div style={{marginBottom:"20px",display:"flex",gap:"10px"}}>
+              {/* Actions row */}
+              <div style={{marginBottom:"20px",display:"flex",gap:"8px",flexWrap:"wrap"}}>
                 <button onClick={()=>deletePost(selectedPost.id)}
-                  style={{padding:"10px 20px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"10px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
+                  style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"10px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
                   🗑 Delete
                 </button>
                 {selectedPost.archived ? (
                   <button onClick={()=>unarchivePost(selectedPost.id)}
-                    style={{padding:"10px 20px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
-                    ↩ Unhide Post
+                    style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                    ↩ Unhide
                   </button>
                 ) : (
                   <button onClick={()=>archivePost(selectedPost.id)}
-                    style={{padding:"10px 20px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
-                    👁 Hide Post
+                    style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                    👁 Hide
                   </button>
                 )}
+                <button onClick={()=>setSelectedPost(null)}
+                  style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"10px",color:"#555",cursor:"pointer",fontSize:"13px",marginLeft:"auto",minHeight:"44px"}}>
+                  ✕ Close
+                </button>
               </div>
 
               {/* Comments */}
               {selectedPost.comments === undefined && (
-                <div style={{color:"#444",fontSize:"13px",padding:"8px 0"}}>Loading comments…</div>
+                <div style={{color:"#444",fontSize:"13px",padding:"8px 0",display:"flex",alignItems:"center",gap:"8px"}}>
+                  <span style={{width:"14px",height:"14px",border:"2px solid #333",borderTopColor:"#555",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+                  Loading comments…
+                </div>
               )}
               {selectedPost.comments && selectedPost.comments.length > 0 && (
                 <div>
-                  <div style={{fontSize:"13px",color:"#555",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"12px"}}>Comments ({selectedPost.comments.length})</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:"10px",maxHeight:"320px",overflow:"auto",paddingRight:"4px"}}>
+                  <div style={{fontSize:"12px",color:"#555",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"12px"}}>
+                    Comments ({selectedPost.comments.length})
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:"8px",maxHeight:"300px",overflow:"auto",WebkitOverflowScrolling:"touch",paddingRight:"2px"}}>
                     {selectedPost.comments.map(c=>(
-                      <div key={c.id} style={{background:"#141414",borderRadius:"10px",padding:"14px",border:"1px solid #1e1e1e"}}>
-                        <div style={{display:"flex",gap:"10px",alignItems:"center",marginBottom:"8px"}}>
+                      <div key={c.id} style={{background:"#141414",borderRadius:"10px",padding:"12px",border:"1px solid #1e1e1e"}}>
+                        <div style={{display:"flex",gap:"8px",alignItems:"center",marginBottom:"6px"}}>
                           <span style={{color:"#ff4500",fontSize:"12px",fontWeight:"600"}}>u/{c.author||"[deleted]"}</span>
                           {c.created_utc && <span style={{color:"#444",fontSize:"11px"}}>{formatTime(c.created_utc)}</span>}
                         </div>
@@ -1832,9 +2031,73 @@ export default function App(){
                 <div style={{color:"#444",fontSize:"13px",padding:"8px 0"}}>No comments archived.</div>
               )}
             </div>
-            <div style={{padding:"16px 28px",borderTop:"1px solid #1a1a1a",display:"flex",justifyContent:"flex-end"}}>
-              <button onClick={()=>setSelectedPost(null)} style={{padding:"10px 20px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>Close</button>
-            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── TOAST NOTIFICATIONS ── */}
+      <div style={{position:"fixed",bottom:"max(24px, env(safe-area-inset-bottom, 24px))",left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",gap:"8px",zIndex:1000,pointerEvents:"none",width:"min(400px, calc(100vw - 32px))"}}>
+        {toasts.map(t=>(
+          <div key={t.id} style={{
+            background:t.type==="success"?"linear-gradient(135deg,#0d2818,#1a1a1a)":t.type==="error"?"linear-gradient(135deg,#2d0a00,#1a1a1a)":"#1e1e1e",
+            border:`1px solid ${t.type==="success"?"#46d16066":t.type==="error"?"#ff450066":"#333"}`,
+            color:t.type==="success"?"#46d160":t.type==="error"?"#ff6a33":"#ccc",
+            padding:"12px 20px",
+            borderRadius:"12px",
+            fontSize:"14px",
+            boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
+            backdropFilter:"blur(8px)",
+            animation:"slideUp 0.25s ease",
+            display:"flex",
+            alignItems:"center",
+            gap:"10px",
+            pointerEvents:"auto"
+          }}>
+            <span style={{fontSize:"16px"}}>{t.type==="success"?"✓":t.type==="error"?"✗":"ⓘ"}</span>
+            {t.message}
+          </div>
+        ))}
+      </div>
+
+      {/* ── PWA INSTALL BANNER ── */}
+      {showInstallBanner && installPrompt && (
+        <div style={{
+          position:"fixed",
+          bottom:"max(80px, calc(env(safe-area-inset-bottom, 0px) + 80px))",
+          right:"16px",
+          background:"linear-gradient(135deg,#1e1e1e,#141414)",
+          border:"1px solid #ff450044",
+          borderRadius:"14px",
+          padding:"14px 16px",
+          display:"flex",
+          alignItems:"center",
+          gap:"12px",
+          zIndex:900,
+          boxShadow:"0 8px 32px rgba(0,0,0,0.4)",
+          maxWidth:"280px",
+          animation:"slideUp 0.3s ease"
+        }}>
+          <img src="/icon.png" style={{width:"36px",height:"36px",borderRadius:"8px"}} alt=""/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:"13px",fontWeight:"600",color:"#fff",marginBottom:"2px"}}>Install App</div>
+            <div style={{fontSize:"11px",color:"#666"}}>Add to home screen</div>
+          </div>
+          <div style={{display:"flex",gap:"6px"}}>
+            <button
+              onClick={async()=>{
+                installPrompt.prompt()
+                const result = await installPrompt.userChoice
+                setShowInstallBanner(false)
+                setInstallPrompt(null)
+              }}
+              style={{padding:"7px 14px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
+              Install
+            </button>
+            <button
+              onClick={()=>setShowInstallBanner(false)}
+              style={{padding:"7px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#555",cursor:"pointer",fontSize:"12px"}}>
+              ✕
+            </button>
           </div>
         </div>
       )}

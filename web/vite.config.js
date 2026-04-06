@@ -6,10 +6,18 @@ export default defineConfig({
   base: '/',
   build: {
     outDir: 'dist',
-    assetsDir: 'static'
+    assetsDir: 'static',
+    target: 'es2020',
+    minify: 'esbuild'
   },
   server: {
     host: '0.0.0.0',
-    port: 5173
+    port: 5173,
+    hmr: {
+      clientPort: 5173
+    }
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-router-dom', 'axios']
   }
 })
