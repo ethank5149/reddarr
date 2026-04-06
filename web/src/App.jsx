@@ -257,10 +257,13 @@ export default function App(){
   function load(){
     if(filteringRef.current) return
     const currentOffset = offsetRef.current
+    console.log("Loading posts from offset:", currentOffset)
     axios.get(buildPostsQuery(currentOffset))
     .then(r=>{
+      console.log("API response:", r.status, typeof r.data, JSON.stringify(r.data).slice(0,200))
       if(filteringRef.current) return
-      const newPosts = r.data.map(mapPost)
+      const newPosts = r.data.posts?.map(mapPost) || []
+      console.log("Mapped posts:", newPosts.length)
       setPosts(prev=>[...prev,...newPosts])
       offsetRef.current = currentOffset + 50
     }).catch(err=>{
@@ -272,7 +275,7 @@ export default function App(){
     offsetRef.current = 0
     axios.get(buildPostsQuery(0))
     .then(r=>{
-      const newPosts = r.data.map(mapPost)
+      const newPosts = r.data.posts?.map(mapPost) || []
       setPosts(newPosts)
       offsetRef.current = 50
       setNewPostsAvailable(0)
@@ -289,7 +292,7 @@ export default function App(){
     setPosts([])
     axios.get(buildPostsQuery(0))
     .then(r=>{
-      setPosts(r.data.map(mapPost))
+      setPosts(r.data.posts?.map(mapPost) || [])
       offsetRef.current = 50
     }).catch(err=>{
       console.error("Failed to load posts:", err.response?.data || err.message || err)

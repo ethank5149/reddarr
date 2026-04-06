@@ -7,5 +7,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'static'
+  },
+  server: {
+    host: '0.0.0.0',
+    port: 5173
   }
 })
