@@ -861,6 +861,116 @@ def unarchive_post(post_id: str):
     }
 
 
+def _delete_post_media(post_id: str):
+    """Delete all media files for a post from disk.
+    Returns (files_deleted, errors)."""
+    files_deleted = 0
+    errors = []
+
+    conn = None
+    cur = None
+    try:
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
+            (post_id,),
+        )
+        media_rows = cur.fetchall()
+
+        for media_id, file_path, thumb_path in media_rows:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    files_deleted += 1
+                except Exception as e:
+                    errors.append(f"delete {file_path}: {e}")
+                    logger.error(f"Delete media error: {e}")
+
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                except Exception as e:
+                    errors.append(f"delete thumb {thumb_path}: {e}")
+                    logger.error(f"Delete thumb error: {e}")
+
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        errors.append(str(e))
+    finally:
+        if cur:
+            cur.close()
+        if conn and connection_pool:
+            connection_pool.putconn(conn)
+
+    return files_deleted, errors
+
+
+@app.delete("/api/post/{post_id}")
+def delete_post(post_id: str):
+    """Delete a post and all its media from the database and disk.
+    Does NOT blacklist the post - it can be re-archived on next scrape."""
+    conn = None
+    cur = None
+    try:
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+
+        cur.execute("SELECT id FROM posts WHERE id = %s", (post_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        files_deleted = 0
+        errors = []
+
+        cur.execute(
+            "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
+            (post_id,),
+        )
+        media_rows = cur.fetchall()
+
+        for media_id, file_path, thumb_path in media_rows:
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    files_deleted += 1
+                except Exception as e:
+                    errors.append(f"delete {file_path}: {e}")
+                    logger.error(f"Delete media error: {e}")
+
+            if thumb_path and os.path.exists(thumb_path):
+                try:
+                    os.remove(thumb_path)
+                except Exception as e:
+                    errors.append(f"delete thumb {thumb_path}: {e}")
+                    logger.error(f"Delete thumb error: {e}")
+
+        cur.execute("DELETE FROM comments WHERE post_id = %s", (post_id,))
+        cur.execute("DELETE FROM media WHERE post_id = %s", (post_id,))
+        cur.execute("DELETE FROM posts WHERE id = %s", (post_id,))
+
+        conn.commit()
+        return {
+            "status": "ok",
+            "post_id": post_id,
+            "files_deleted": files_deleted,
+            "errors": errors,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cur:
+            cur.close()
+        if conn and connection_pool:
+            connection_pool.putconn(conn)
+
+
 @app.get("/api/search")
 def search(
     q: str,
@@ -871,7 +981,7 @@ def search(
     with get_db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, subreddit, author, created_utc 
+            SELECT id, title, subreddit, author, created_utc, url, media_url, raw
             FROM posts
             WHERE tsv @@ plainto_tsquery(%s)
               AND archived = %s
@@ -881,16 +991,91 @@ def search(
             (q, archived, limit, offset),
         )
 
-        return [
-            {
-                "id": r[0],
-                "title": r[1],
-                "subreddit": r[2],
-                "author": r[3],
-                "created_utc": r[4].isoformat() if r[4] else None,
-            }
-            for r in cur.fetchall()
-        ]
+        results = []
+        for row in cur.fetchall():
+            post_id, title, subreddit, author, created_utc, url, media_url, raw = row
+
+            is_video = _is_video_url(url)
+            if raw:
+                try:
+                    data = raw if isinstance(raw, dict) else json.loads(raw)
+                    if data.get("media") and data["media"].get("reddit_video"):
+                        is_video = True
+                except Exception:
+                    pass
+
+            cur.execute(
+                "SELECT file_path, thumb_path FROM media WHERE post_id = %s",
+                (post_id,),
+            )
+            media_rows = cur.fetchall()
+
+            image_url = None
+            video_url = None
+            thumb_url = None
+
+            for m_file_path, m_thumb_path in media_rows:
+                if m_file_path and os.path.exists(m_file_path):
+                    local_url = _build_media_url(m_file_path)
+                    if local_url:
+                        if m_file_path.lower().endswith(
+                            (".mp4", ".webm", ".mkv", ".mov", ".avi")
+                        ):
+                            video_url = local_url
+                        else:
+                            image_url = local_url
+                if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
+                    thumb_url = _build_thumb_url(m_thumb_path)
+
+            if raw and not image_url and not video_url:
+                try:
+                    data = raw if isinstance(raw, dict) else json.loads(raw)
+                    if is_video:
+                        if not video_url:
+                            extracted = _extract_video_url(url, data)
+                            video_url = extracted if extracted else url
+                    else:
+                        if not image_url:
+                            remote_imgs = []
+                            if "media_metadata" in data:
+                                for img_id, img_data in data.get(
+                                    "media_metadata", {}
+                                ).items():
+                                    if "s" in img_data:
+                                        u = img_data["s"].get("u")
+                                        if u:
+                                            remote_imgs.append(u)
+                                    elif img_data.get("p"):
+                                        u = img_data["p"][-1].get("u")
+                                        if u:
+                                            remote_imgs.append(u)
+                            if not remote_imgs and "preview" in data:
+                                for img in data.get("preview", {}).get("images", []):
+                                    u = img.get("source", {}).get("url") or img.get(
+                                        "resolutions", [{}]
+                                    )[-1].get("url")
+                                    if u:
+                                        remote_imgs.append(u)
+                            if remote_imgs:
+                                image_url = remote_imgs[0]
+                except Exception:
+                    pass
+
+            results.append(
+                {
+                    "id": post_id,
+                    "title": title,
+                    "subreddit": subreddit,
+                    "author": author,
+                    "created_utc": created_utc.isoformat() if created_utc else None,
+                    "image_url": image_url,
+                    "video_url": video_url,
+                    "thumb_url": thumb_url,
+                    "is_video": is_video,
+                }
+            )
+
+        return results
 
 
 @app.get("/api/subreddits")
@@ -933,6 +1118,7 @@ def admin_stats():
                 t.type,
                 t.name,
                 t.enabled,
+                t.status,
                 t.last_created,
                 COUNT(DISTINCT p.id) AS post_count,
                 COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
@@ -943,7 +1129,7 @@ def admin_stats():
             LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
                               OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
             LEFT JOIN media m ON m.post_id = p.id
-            GROUP BY t.type, t.name, t.enabled, t.last_created
+            GROUP BY t.type, t.name, t.enabled, t.status, t.last_created
             ORDER BY t.type, t.name
         """)
         targets = []
@@ -953,6 +1139,7 @@ def admin_stats():
                 ttype,
                 name,
                 enabled,
+                status,
                 last_created,
                 post_count,
                 posts_7d,
@@ -979,6 +1166,7 @@ def admin_stats():
                     "type": ttype,
                     "name": name,
                     "enabled": enabled,
+                    "status": status or "active",
                     "last_created": last_created.isoformat() if last_created else None,
                     "post_count": post_count,
                     "total_media": total_media,
@@ -1045,6 +1233,23 @@ def toggle_target(target_type: str, name: str):
         if result is None:
             raise HTTPException(status_code=404, detail="Target not found")
         return {"enabled": result[0], "status": "ok"}
+
+
+@app.post("/api/admin/target/{target_type}/{name}/status")
+def set_target_status(target_type: str, name: str, new_status: str = "active"):
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+    if new_status not in ("active", "taken_down", "deleted"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    with get_db_cursor() as cur:
+        cur.execute(
+            "UPDATE targets SET status = %s, enabled = false WHERE type = %s AND name = %s RETURNING status",
+            (new_status, target_type, name),
+        )
+        result = cur.fetchone()
+        if result is None:
+            raise HTTPException(status_code=404, detail="Target not found")
+        return {"status": result[0], "new_status": new_status}
 
 
 @app.post("/api/admin/target/{target_type}/{name}/rescan")

@@ -15,8 +15,12 @@ CREATE TABLE IF NOT EXISTS targets (
     type TEXT,
     name TEXT UNIQUE,
     enabled BOOLEAN DEFAULT true,
+    status TEXT DEFAULT 'active', -- active | taken_down | deleted
     last_created TIMESTAMP
 );
+
+-- Add status column to existing installations
+ALTER TABLE targets ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
 
 -- POSTS table
 CREATE TABLE IF NOT EXISTS posts (

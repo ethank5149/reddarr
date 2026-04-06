@@ -46,6 +46,8 @@ export default function App(){
   const [resetInput, setResetInput] = useState("")
   const [resetLoading, setResetLoading] = useState(false)
   const [resetResult, setResetResult] = useState(null)
+  const [deleteModal, setDeleteModal] = useState(false)
+  const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [highlightedRows, setHighlightedRows] = useState(new Set())
   const [addTargetType, setAddTargetType] = useState("subreddit")
   const [addTargetName, setAddTargetName] = useState("")
@@ -371,6 +373,26 @@ export default function App(){
       .catch(()=>alert("Failed to unarchive post"))
   }
 
+  function deletePost(postId){
+    setDeleteTargetId(postId)
+    setDeleteModal(true)
+  }
+
+  function confirmDeletePost(){
+    if(!deleteTargetId) return
+    axios.delete(`/api/post/${deleteTargetId}`)
+      .then(()=>{
+        setPosts(prev=>prev.filter(p=>p.id!==deleteTargetId))
+        setArchivePosts(prev=>prev.filter(p=>p.id!==deleteTargetId))
+        if(selectedPost?.id===deleteTargetId) setSelectedPost(null)
+      })
+      .catch(()=>alert("Failed to delete post"))
+      .finally(()=>{
+        setDeleteModal(false)
+        setDeleteTargetId(null)
+      })
+  }
+
   function handleArchiveSearch(e){
     setArchiveSearch(e.target.value)
     clearTimeout(archiveSearchTimeout.current)
@@ -399,6 +421,10 @@ export default function App(){
 
   function toggleTarget(ttype,name){
     axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`).then(()=>loadAdmin()).catch(()=>alert("Failed to toggle target"))
+  }
+
+  function setTargetStatus(ttype,name,status){
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`).then(()=>loadAdmin()).catch(()=>alert("Failed to set status"))
   }
 
   function rescanTarget(ttype,name){
@@ -632,6 +658,10 @@ export default function App(){
             subreddit: p.subreddit,
             author: p.author,
             created_utc: p.created_utc,
+            image_url: p.image_url,
+            video_url: p.video_url,
+            thumb_url: p.thumb_url,
+            is_video: p.is_video,
           })))
         })
     },300)
@@ -969,41 +999,77 @@ export default function App(){
                 </button>
               </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,360px)",gap:"16px",marginBottom:"40px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"8px",marginBottom:"40px"}}>
               {adminData.targets && adminData.targets.map(t=>(
-                <div key={`${t.type}-${t.name}`} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:t.enabled?"1px solid #ff450044":"1px solid #2a2a2a",opacity:t.enabled?1:0.7,boxShadow:"0 4px 20px rgba(0,0,0,0.3)",transition:"all 0.2s ease"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"16px"}}>
-                    <div>
-                      <span style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",display:"block",marginBottom:"4px"}}>{t.type}</span>
-                      <div style={{fontSize:"20px",fontWeight:"700",color:"#fff"}}>{t.type==="subreddit"?"r/":"u/"}{t.name}</div>
+                <div key={`${t.type}-${t.name}`} style={{
+                  background:"linear-gradient(145deg,#1e1e1e,#171717)",
+                  padding:"12px",borderRadius:"10px",
+                  border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":"1px solid #2a2a2a",
+                  opacity:t.enabled?1:0.7,
+                  transition:"all 0.2s ease",
+                  display:"flex",
+                  flexDirection:"column",
+                  gap:"8px"
+                }}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{minWidth:0,flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                        <span style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>{t.type}</span>
+                        {t.status!=="active" && (
+                          <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#222",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#888"}}>
+                            {t.status==="taken_down"?"⛔":t.status==="deleted"?"👤":""}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{fontSize:"14px",fontWeight:"600",color:t.status==="active"?"#fff":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {t.type==="subreddit"?"r/":"u/"}{t.name}
+                      </div>
                     </div>
-                    <div style={{display:"flex",gap:"6px",flexWrap:"wrap",justifyContent:"flex-end"}}>
-                      <button onClick={()=>toggleTarget(t.type,t.name)} style={{padding:"6px 12px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"8px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.2s ease"}}>
-                        {t.enabled?"Active":"Paused"}
-                      </button>
-                      <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"6px 12px",background:"#ff4500",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"500",transition:"all 0.2s ease"}}>
-                        ↻ Rescan
-                      </button>
-                      <button onClick={()=>deleteTarget(t.type,t.name)} title="Remove target" style={{padding:"6px 10px",background:"#2a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"12px",transition:"all 0.2s ease"}}>
-                        ✕
-                      </button>
+                    <div style={{display:"flex",gap:"4px",flexShrink:0}}>
+                      {t.status==="active" && (
+                        <button onClick={()=>toggleTarget(t.type,t.name)} style={{padding:"3px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"6px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
+                          {t.enabled?"●":"○"}
+                        </button>
+                      )}
+                      {t.status==="taken_down" && (
+                        <button onClick={()=>setTargetStatus(t.type,t.name,"active")} title="Reactivate" style={{padding:"3px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
+                      )}
+                      {t.status==="deleted" && (
+                        <button onClick={()=>setTargetStatus(t.type,t.name,"active")} title="Reactivate" style={{padding:"3px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
+                      )}
+                      {t.status==="active" && (
+                        <>
+                          <button onClick={()=>rescanTarget(t.type,t.name)} title="Rescan" style={{padding:"3px 6px",background:"#2a2a2a",border:"none",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"10px"}}>↻</button>
+                          {t.type==="subreddit" && (
+                            <button onClick={()=>setTargetStatus(t.type,t.name,"taken_down")} title="Mark taken down" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
+                          )}
+                          {t.type==="user" && (
+                            <button onClick={()=>setTargetStatus(t.type,t.name,"deleted")} title="Mark deleted" style={{padding:"3px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"6px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
+                          )}
+                          <button onClick={()=>deleteTarget(t.type,t.name)} title="Remove" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:"12px",fontSize:"13px",marginBottom:"16px"}}>
-                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Posts</span><span style={{fontWeight:"600",color:"#fff"}}>{t.post_count?.toLocaleString()}</span></div>
-                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Activity</span><span style={{fontWeight:"600",color:"#46d160"}}>{formatRate(t.rate_per_second)}</span></div>
-                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>Media</span><span style={{fontWeight:"600",color:"#fff"}}>{t.downloaded_media}/{t.total_media}</span></div>
-                    <div style={{background:"#141414",padding:"10px",borderRadius:"8px"}}><span style={{color:"#666",display:"block",fontSize:"11px",marginBottom:"2px"}}>ETA</span><span style={{fontWeight:"600",color:"#f9c300"}}>{formatEta(t.eta_seconds)}</span></div>
-                  </div>
-                  <div style={{background:"#141414",height:"8px",borderRadius:"4px",overflow:"hidden"}}>
-                    <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"4px",transition:"width 0.5s ease"}}/>
-                  </div>
-                  <div style={{fontSize:"11px",color:"#555",marginTop:"8px",textAlign:"right"}}>{t.progress_percent}% of 1k posts</div>
-                  {t.last_created && (
-                    <div style={{fontSize:"11px",color:"#444",marginTop:"8px",display:"flex",alignItems:"center",gap:"4px"}}>
-                      <span style={{width:"6px",height:"6px",background:"#46d160",borderRadius:"50%"}} />
-                      Last scraped: {new Date(t.last_created).toLocaleString()}
+                  {(t.status==="active" || t.status==="taken_down") && (
+                    <div style={{display:"flex",gap:"8px",fontSize:"11px"}}>
+                      <div style={{color:"#666"}}>Posts:</div>
+                      <div style={{color:t.status==="taken_down"?"#888":"#fff",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</div>
+                      <div style={{color:"#666"}}>Media:</div>
+                      <div style={{color:"-webkit-linear-gradient(180deg,#46d160,#2da64d)",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</div>
                     </div>
+                  )}
+                  {t.status==="active" && (
+                    <>
+                      <div style={{background:"#141414",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
+                        <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:t.progress_percent>=100?"#46d160":"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"2px"}}/>
+                      </div>
+                      {t.last_created && (
+                        <div style={{fontSize:"10px",color:"#444",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                          {new Date(t.last_created).toLocaleDateString()} · {formatRate(t.rate_per_second)}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
@@ -1276,10 +1342,29 @@ export default function App(){
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,300px)",gap:"16px"}}>
               {searchResults.map(p=>(
-                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease",boxShadow:"0 4px 12px rgba(0,0,0,0.2)"}}>
-                  <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit ? `r/${p.subreddit}` : ""}</div>
-                  <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
-                  {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
+                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
+                  {p.is_video || p.video_url ? (
+                    <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
+                      {(p.thumb_url || p.video_url) && (
+                        <img src={p.thumb_url || p.video_url} style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>
+                      )}
+                      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                        <div style={{width:"48px",height:"48px",borderRadius:"50%",background:"rgba(0,0,0,0.6)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          <div style={{width:0,height:0,borderTop:"10px solid transparent",borderBottom:"10px solid transparent",borderLeft:"16px solid #ff4500",marginLeft:"4px"}}/>
+                        </div>
+                      </div>
+                      <div style={{position:"absolute",top:"8px",left:"8px",background:"rgba(0,0,0,0.75)",borderRadius:"4px",padding:"3px 6px",fontSize:"9px",fontWeight:"700",color:"#fff",letterSpacing:"0.5px"}}>VIDEO</div>
+                    </div>
+                  ) : p.image_url ? (
+                    <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
+                      <img src={p.image_url} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                    </div>
+                  ) : null}
+                  <div style={{padding:"16px"}}>
+                    <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit ? `r/${p.subreddit}` : ""}</div>
+                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
+                    {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1351,10 +1436,16 @@ export default function App(){
                         <div style={{fontSize:"11px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
                       </div>
-                      <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Hide this post"
-                        style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
-                        👁
-                      </button>
+                      <div style={{display:"flex",gap:"6px"}}>
+                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete this post"
+                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                          🗑
+                        </button>
+                        <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Hide this post"
+                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                          👁
+                        </button>
+                      </div>
                     </div>
                 </div>
               ))}
@@ -1522,10 +1613,16 @@ export default function App(){
                         <div style={{fontSize:"11px",color:"#555",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"4px"}}>{p.subreddit||"reddit"}</div>
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#888"}}>{p.title}</div>
                       </div>
-                      <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unhide this post"
-                        style={{marginLeft:"10px",flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
-                        👁
-                      </button>
+                      <div style={{display:"flex",gap:"6px"}}>
+                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete this post"
+                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                          🗑
+                        </button>
+                        <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unhide this post"
+                          style={{flexShrink:0,padding:"5px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"11px",whiteSpace:"nowrap"}}>
+                          👁
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1582,6 +1679,30 @@ export default function App(){
                   {resetLoading?"Resetting...":"Confirm Reset"}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── DELETE POST MODAL ── */}
+      {deleteModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>setDeleteModal(false)}>
+          <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"420px",width:"100%",border:"1px solid #550000",boxShadow:"0 24px 80px rgba(200,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"28px 28px 0"}}>
+              <div style={{fontSize:"28px",marginBottom:"12px"}}>🗑️</div>
+              <h2 style={{margin:"0 0 12px",fontSize:"22px",color:"#ff4444"}}>Delete Post</h2>
+              <p style={{margin:"0 0 20px",color:"#aaa",fontSize:"14px",lineHeight:"1.6"}}>This will permanently delete this post and all its downloaded media from the database and disk.</p>
+              <p style={{margin:"0 0 20px",color:"#666",fontSize:"13px"}}>The post may be re-archived on the next scrape.</p>
+            </div>
+            <div style={{padding:"0 28px 28px",display:"flex",gap:"10px",justifyContent:"flex-end"}}>
+              <button onClick={()=>setDeleteModal(false)}
+                style={{padding:"12px 24px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"14px"}}>
+                Cancel
+              </button>
+              <button onClick={confirmDeletePost}
+                style={{padding:"12px 24px",background:"#cc0000",border:"1px solid #550000",borderRadius:"10px",color:"#fff",cursor:"pointer",fontSize:"14px",fontWeight:"600"}}>
+                Delete
+              </button>
             </div>
           </div>
         </div>
@@ -1665,8 +1786,12 @@ export default function App(){
                 </div>
               )}
 
-              {/* Hide / Unhide */}
-              <div style={{marginBottom:"20px"}}>
+              {/* Hide / Unhide / Delete */}
+              <div style={{marginBottom:"20px",display:"flex",gap:"10px"}}>
+                <button onClick={()=>deletePost(selectedPost.id)}
+                  style={{padding:"10px 20px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"10px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
+                  🗑 Delete
+                </button>
                 {selectedPost.archived ? (
                   <button onClick={()=>unarchivePost(selectedPost.id)}
                     style={{padding:"10px 20px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
