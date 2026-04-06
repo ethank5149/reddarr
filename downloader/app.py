@@ -633,26 +633,38 @@ def process_item(item):
         media_downloaded.labels(status="failed").inc()
         downloader_errors_total.labels(error_type="processing").inc()
         rate_limiter.release(domain, success=False)
-        try:
-            conn = get_db()
-            conn.rollback()
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) "
-                    "ON CONFLICT DO NOTHING",
-                    (post_id, url),
-                )
-                conn.commit()
-                logger.info(f"Marked as failed in DB: {post_id}")
-        except Exception as db_err:
-            logger.error(f"Failed to record error in DB: {db_err}")
+
+        retries = item.get("_retries", 0)
+        if retries < MAX_RETRIES:
+            item["_retries"] = retries + 1
+            rd.lpush("media_queue_retry", json.dumps(item))
+            logger.info(f"Re-queued {post_id} for retry (attempt {retries + 1})")
+        else:
+            try:
+                conn = get_db()
+                conn.rollback()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) "
+                        "ON CONFLICT DO NOTHING",
+                        (post_id, url),
+                    )
+                    conn.commit()
+                    logger.info(f"Marked as failed in DB: {post_id}")
+            except Exception as db_err:
+                logger.error(f"Failed to record error in DB: {db_err}")
 
 
 def worker():
     while True:
         logger.info("Waiting for media in queue...")
         _dequeue_start = time.monotonic()
-        _, data = rd.brpop("media_queue")
+        result = rd.blpop("media_queue", timeout=5)
+        if result is None:
+            result = rd.blpop("media_queue_retry", timeout=5)
+        if result is None:
+            continue
+        _, data = result
         queue_wait_seconds.observe(time.monotonic() - _dequeue_start)
         item = json.loads(data)
         process_item(item)

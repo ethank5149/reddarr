@@ -1,4 +1,4 @@
-import os, time, json, threading
+import os, time, json, threading, hashlib
 import praw, psycopg2, redis
 from datetime import datetime, timezone
 import logging
@@ -67,9 +67,6 @@ reddit = praw.Reddit(
 logger.info(f"Reddit client initialized (read only: {reddit.read_only})")
 
 
-_db_lock = threading.Lock()
-
-
 def get_db():
     """Return a live DB connection for the current thread.
 
@@ -133,10 +130,13 @@ def fetch_comments(post):
     comments = []
 
     def extract(comment):
+        author = str(comment.author) if comment.author else None
+        if author and author.lower() == "[deleted]":
+            author = None
         comments.append(
             {
                 "id": comment.id,
-                "author": str(comment.author),
+                "author": author,
                 "body": comment.body,
                 "created_utc": comment.created_utc,
                 "parent_id": comment.parent_id,
@@ -225,56 +225,122 @@ def extract_media_urls(post):
 
 
 def ingest_post(db, p):
-    """Insert a single post + its comments. Returns True if it was new."""
-    cur = db.cursor()
-    try:
-        cur.execute("SELECT id FROM posts WHERE id=%s", (p.id,))
-        if cur.fetchone() is not None:
-            cur.close()
-            posts_skipped_total.labels(subreddit=str(p.subreddit)).inc()
-            return False  # already exists
+    """Insert a single post + its comments, preserving all versions.
 
-        created = datetime.fromtimestamp(p.created_utc, tz=timezone.utc).replace(
-            tzinfo=None
-        )
+    This function now ALWAYS saves to history to track changes over time.
+    If a user edits/deletes their post, we save it as a new version.
+    """
+    cur = db.cursor()
+    created = datetime.fromtimestamp(p.created_utc, tz=timezone.utc).replace(
+        tzinfo=None
+    )
+
+    subreddit = str(p.subreddit).lower()
+    author = str(p.author).lower() if p.author else None
+
+    if author and author.lower() == "[deleted]":
+        author = None
+
+    title = p.title
+    selftext = p.selftext
+    url = p.url
+
+    is_deleted = (
+        title in ("[deleted]", "[removed]")
+        or selftext in ("[deleted]", "[removed]")
+        or (title is None and selftext is None)
+    )
+
+    content_hash = hashlib.sha256(
+        f"{title or ''}|{selftext or ''}|{url or ''}".encode()
+    ).hexdigest()
+
+    try:
         cur.execute(
-            """INSERT INTO posts(id,subreddit,author,created_utc,title,selftext,url,media_url,raw)
-               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            "SELECT version, version_hash FROM posts_history WHERE post_id=%s ORDER BY version DESC LIMIT 1",
+            (p.id,),
+        )
+        row = cur.fetchone()
+        current_version = row[0] if row else 0
+        current_hash = row[1] if row else None
+
+        if current_hash == content_hash:
+            cur.close()
+            posts_skipped_total.labels(subreddit=subreddit).inc()
+            return False
+
+        new_version = current_version + 1
+
+        cur.execute(
+            """INSERT INTO posts_history(post_id, version, subreddit, author, created_utc, title, selftext, url, media_url, raw, is_deleted, version_hash)
+               VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
                 p.id,
-                str(p.subreddit).lower(),
-                str(p.author).lower(),
+                new_version,
+                subreddit,
+                author,
                 created,
-                p.title,
-                p.selftext,
-                p.url,
-                p.url,
+                title,
+                selftext,
+                url,
+                url,
+                json.dumps(p.__dict__, default=str),
+                is_deleted,
+                content_hash,
+            ),
+        )
+
+        cur.execute(
+            """INSERT INTO posts(id, subreddit, author, created_utc, title, selftext, url, media_url, raw)
+               VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (id) DO UPDATE SET
+                 title = EXCLUDED.title,
+                 selftext = EXCLUDED.selftext,
+                 url = EXCLUDED.url,
+                 raw = EXCLUDED.raw""",
+            (
+                p.id,
+                subreddit,
+                author,
+                created,
+                title,
+                selftext,
+                url,
+                url,
                 json.dumps(p.__dict__, default=str),
             ),
         )
         db.commit()
+
+        if new_version > 1:
+            logger.info(
+                f"Post {p.id} updated to version {new_version} (was {current_version})"
+            )
+        else:
+            logger.info(f"New post: {p.id} - {p.title[:50] if title else 'No title'}")
+
+        posts_ingested.labels(subreddit=subreddit).inc()
         cur.close()
-        logger.info(f"New post: {p.id} - {p.title[:50]}")
-        posts_ingested.labels(subreddit=str(p.subreddit)).inc()
-    except Exception:
+
+    except Exception as e:
         db.rollback()
+        logger.error(f"Post ingest error for {p.id}: {e}", exc_info=True)
         cur.close()
         raise
 
-    # Queue media
     media_urls = extract_media_urls(p)
     urls_queued = 0
-    for url in media_urls:
-        if url:
+    for med_url in media_urls:
+        if med_url:
             rd.lpush(
                 "media_queue",
                 json.dumps(
                     {
                         "post_id": p.id,
-                        "url": url,
-                        "subreddit": str(p.subreddit),
+                        "url": med_url,
+                        "subreddit": subreddit,
                         "author": str(p.author),
-                        "title": p.title,
+                        "title": title,
                     }
                 ),
             )
@@ -283,27 +349,68 @@ def ingest_post(db, p):
     if urls_queued > 0:
         logger.info(f"Queued {urls_queued} media URLs for post {p.id}")
 
-    # Insert comments
     try:
         comments = fetch_comments(p)
-        cur = db.cursor()
         for c in comments:
-            cur.execute(
-                """INSERT INTO comments(id,post_id,author,body,created_utc,raw)
-                   VALUES(%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (id) DO NOTHING""",
-                (
-                    c["id"],
-                    p.id,
-                    c["author"],
-                    c["body"],
-                    datetime.fromtimestamp(c["created_utc"], tz=timezone.utc).replace(
-                        tzinfo=None
-                    ),
-                    json.dumps(c, default=str),
-                ),
+            c_author = c.get("author")
+            if c_author and c_author.lower() == "[deleted]":
+                c_author = None
+            c_body = c.get("body")
+            c_is_deleted = c_body in ("[deleted]", "[removed]") if c_body else False
+            c_hash = (
+                hashlib.sha256(f"{c_body or ''}".encode()).hexdigest()
+                if c_body
+                else None
             )
-            comments_ingested.labels(subreddit=str(p.subreddit)).inc()
+
+            cur = db.cursor()
+            cur.execute(
+                "SELECT version, version_hash FROM comments_history WHERE comment_id=%s ORDER BY version DESC LIMIT 1",
+                (c["id"],),
+            )
+            row = cur.fetchone()
+            c_version = (row[0] + 1) if row else 1
+            c_current_hash = row[1] if row else None
+
+            if c_current_hash != c_hash:
+                cur.execute(
+                    """INSERT INTO comments_history(comment_id, version, post_id, author, body, created_utc, raw, is_deleted, version_hash)
+                       VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        c["id"],
+                        c_version,
+                        p.id,
+                        c_author,
+                        c_body,
+                        datetime.fromtimestamp(
+                            c["created_utc"], tz=timezone.utc
+                        ).replace(tzinfo=None),
+                        json.dumps(c, default=str),
+                        c_is_deleted,
+                        c_hash,
+                    ),
+                )
+
+                cur.execute(
+                    """INSERT INTO comments(id, post_id, author, body, created_utc, raw)
+                       VALUES(%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (id) DO UPDATE SET
+                         author = EXCLUDED.author,
+                         body = EXCLUDED.body,
+                         raw = EXCLUDED.raw""",
+                    (
+                        c["id"],
+                        p.id,
+                        c_author,
+                        c_body,
+                        datetime.fromtimestamp(
+                            c["created_utc"], tz=timezone.utc
+                        ).replace(tzinfo=None),
+                        json.dumps(c, default=str),
+                    ),
+                )
+                comments_ingested.labels(subreddit=subreddit).inc()
+
         db.commit()
         cur.close()
         logger.info(f"Archived {len(comments)} comments for {p.id}")

@@ -102,3 +102,95 @@ DROP TRIGGER IF EXISTS comments_tsv_update ON comments;
 CREATE TRIGGER comments_tsv_update
 BEFORE INSERT OR UPDATE ON comments
 FOR EACH ROW EXECUTE FUNCTION comments_tsv_trigger();
+
+-- POSTS_HISTORY: stores ALL versions of posts for audit trail
+-- This ensures we never lose data when Reddit users edit/delete their posts in protest
+CREATE TABLE IF NOT EXISTS posts_history (
+    id SERIAL PRIMARY KEY,
+    post_id TEXT NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    subreddit TEXT,
+    author TEXT,
+    created_utc TIMESTAMP,
+    title TEXT,
+    selftext TEXT,
+    url TEXT,
+    media_url TEXT,
+    raw JSONB,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+    version_hash TEXT,
+    captured_at TIMESTAMP DEFAULT now(),
+    UNIQUE(post_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_posts_history_post_id ON posts_history(post_id);
+CREATE INDEX IF NOT EXISTS idx_posts_history_version ON posts_history(post_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_history_captured_at ON posts_history(captured_at);
+
+-- COMMENTS_HISTORY: stores ALL versions of comments for audit trail
+CREATE TABLE IF NOT EXISTS comments_history (
+    id SERIAL PRIMARY KEY,
+    comment_id TEXT NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    post_id TEXT,
+    author TEXT,
+    body TEXT,
+    created_utc TIMESTAMP,
+    raw JSONB,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+    version_hash TEXT,
+    captured_at TIMESTAMP DEFAULT now(),
+    UNIQUE(comment_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comments_history_comment_id ON comments_history(comment_id);
+CREATE INDEX IF NOT EXISTS idx_comments_history_version ON comments_history(comment_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_comments_history_captured_at ON comments_history(captured_at);
+
+-- Function to compute hash for change detection
+CREATE OR REPLACE FUNCTION compute_content_hash(title TEXT, selftext TEXT, url TEXT, body TEXT)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN encode(sha256(concat(coalesce(title,''), '|', coalesce(selftext,''), '|', coalesce(url,''), '|', coalesce(body,''))::bytea), 'hex');
+END $$ LANGUAGE plpgsql IMMUTABLE;
+
+-- View for latest post version (current behavior)
+CREATE OR REPLACE VIEW posts_latest AS
+SELECT 
+    ph.post_id,
+    ph.subreddit,
+    ph.author,
+    ph.created_utc,
+    ph.title,
+    ph.selftext,
+    ph.url,
+    ph.media_url,
+    ph.raw,
+    ph.is_deleted,
+    ph.version as latest_version,
+    ph.captured_at
+FROM posts_history ph
+JOIN (
+    SELECT post_id, MAX(version) as max_version
+    FROM posts_history
+    GROUP BY post_id
+) mv ON ph.post_id = mv.post_id AND ph.version = mv.max_version;
+
+-- View for latest comment version
+CREATE OR REPLACE VIEW comments_latest AS
+SELECT 
+    ch.comment_id,
+    ch.post_id,
+    ch.author,
+    ch.body,
+    ch.created_utc,
+    ch.raw,
+    ch.is_deleted,
+    ch.version as latest_version,
+    ch.captured_at
+FROM comments_history ch
+JOIN (
+    SELECT comment_id, MAX(version) as max_version
+    FROM comments_history
+    GROUP BY comment_id
+) mv ON ch.comment_id = mv.comment_id AND ch.version = mv.max_version;

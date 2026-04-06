@@ -31,6 +31,8 @@ services:
   ingester:
     container_name: reddit_archive_ingester
     build: ./ingester
+    env_file:
+      - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       REDIS_HOST: redis
@@ -54,6 +56,8 @@ services:
   downloader:
     container_name: reddit_archive_downloader
     build: ./downloader
+    env_file:
+      - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       REDIS_HOST: redis
@@ -74,12 +78,12 @@ services:
   api:
     container_name: reddit_archive_api
     build: ./web
+    env_file:
+      - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
-      REDIS_HOST: redis
-      ARCHIVE_PATH: ${ARCHIVE_PATH}
-      THUMB_PATH: ${THUMB_PATH}
-      ARCHIVE_MEDIA_PATH: ${ARCHIVE_MEDIA_PATH}
+    secrets:
+      - api_key
     depends_on:
       db:
         condition: service_healthy
@@ -163,3 +167,5 @@ secrets:
     file: ./secrets/reddit_client_id
   reddit_client_secret:
     file: ./secrets/reddit_client_secret
+  api_key:
+    file: ./secrets/api_key

@@ -15,7 +15,9 @@ from pathlib import Path
 import psycopg2
 from psycopg2 import pool as pg_pool
 from fastapi import FastAPI, Query, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import APIKeyQuery
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -70,6 +72,40 @@ http_request_duration_seconds = Histogram(
 
 app = FastAPI(title="Reddit Archive API", version="4.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_API_KEY: str | None = None
+_API_KEY_PATH = os.getenv("API_KEY_PATH", "/run/secrets/api_key")
+
+
+def get_api_key() -> str | None:
+    global _API_KEY
+    if _API_KEY is not None:
+        return _API_KEY
+    try:
+        with open(_API_KEY_PATH, "r") as f:
+            _API_KEY = f.read().strip()
+    except FileNotFoundError:
+        logger.warning(
+            f"API key file not found at {_API_KEY_PATH}, admin endpoints will require no key"
+        )
+    return _API_KEY
+
+
+def require_admin(
+    x_api_key: str | None = Depends(APIKeyQuery(name="x-api-key", auto_error=False)),
+):
+    key = get_api_key()
+    if key and key != "" and x_api_key != key:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+    return x_api_key
+
 
 @app.middleware("http")
 async def metrics_middleware(request, call_next):
@@ -117,6 +153,42 @@ _MIGRATIONS = [
     "ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP",
     "CREATE INDEX IF NOT EXISTS idx_posts_archived ON posts(archived)",
     "CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at)",
+    # v5: History tables for preserving all post/comment versions
+    """CREATE TABLE IF NOT EXISTS posts_history (
+        id SERIAL PRIMARY KEY,
+        post_id TEXT NOT NULL,
+        version INT NOT NULL DEFAULT 1,
+        subreddit TEXT,
+        author TEXT,
+        created_utc TIMESTAMP,
+        title TEXT,
+        selftext TEXT,
+        url TEXT,
+        media_url TEXT,
+        raw JSONB,
+        is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+        version_hash TEXT,
+        captured_at TIMESTAMP DEFAULT now(),
+        UNIQUE(post_id, version)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_posts_history_post_id ON posts_history(post_id)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_history_version ON posts_history(post_id, version DESC)",
+    """CREATE TABLE IF NOT EXISTS comments_history (
+        id SERIAL PRIMARY KEY,
+        comment_id TEXT NOT NULL,
+        version INT NOT NULL DEFAULT 1,
+        post_id TEXT,
+        author TEXT,
+        body TEXT,
+        created_utc TIMESTAMP,
+        raw JSONB,
+        is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+        version_hash TEXT,
+        captured_at TIMESTAMP DEFAULT now(),
+        UNIQUE(comment_id, version)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_comments_history_comment_id ON comments_history(comment_id)",
+    "CREATE INDEX IF NOT EXISTS idx_comments_history_version ON comments_history(comment_id, version DESC)",
 ]
 
 
@@ -445,9 +517,26 @@ def posts(
         params.extend([limit, offset])
 
         cur.execute(query, params)
+        post_rows = cur.fetchall()
+
+        if not post_rows:
+            return {"posts": [], "total": 0, "limit": limit, "offset": offset}
+
+        post_ids = [row[0] for row in post_rows]
+
         results = []
 
-        for row in cur.fetchall():
+        media_by_post: dict[str, list[tuple]] = {pid: [] for pid in post_ids}
+        if post_ids:
+            cur.execute(
+                "SELECT post_id, id, file_path, thumb_path FROM media WHERE post_id = ANY(%s)",
+                (post_ids,),
+            )
+            for m_pid, m_id, m_file_path, m_thumb_path in cur.fetchall():
+                if m_pid in media_by_post:
+                    media_by_post[m_pid].append((m_id, m_file_path, m_thumb_path))
+
+        for row in post_rows:
             (
                 post_id,
                 title,
@@ -473,12 +562,8 @@ def posts(
                 except Exception:
                     pass
 
-            # Get all media rows for this post
-            cur.execute(
-                "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
-                (post_id,),
-            )
-            media_rows = cur.fetchall()
+            # Use pre-fetched media from the batch query
+            media_rows = media_by_post.get(post_id, [])
 
             # Build local URLs from downloaded files
             image_urls = []
@@ -577,7 +662,18 @@ def posts(
                     "archived": is_archived,
                 }
             )
-        return results
+
+        total_query = query.replace(
+            f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s",
+            " ORDER BY 1",
+        ).replace(
+            "SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.archived",
+            "SELECT COUNT(*)",
+        )
+        cur.execute(total_query, params[:-2])
+        total = cur.fetchone()[0] or 0
+
+        return {"posts": results, "total": total, "limit": limit, "offset": offset}
 
 
 @app.get("/api/post/{post_id}")
@@ -716,6 +812,84 @@ def get_post(post_id: str):
             "created_utc": created_utc.isoformat() if created_utc else None,
             "archived": is_archived,
             "comments": comments,
+        }
+
+
+@app.get("/api/post/{post_id}/history")
+def get_post_history(post_id: str):
+    """Get all versions of a post (for audit trail)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT version, title, selftext, url, author, subreddit, is_deleted, version_hash, captured_at
+            FROM posts_history
+            WHERE post_id = %s
+            ORDER BY version DESC
+            """,
+            (post_id,),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Post history not found")
+
+        versions = []
+        for row in rows:
+            versions.append(
+                {
+                    "version": row[0],
+                    "title": row[1],
+                    "selftext": row[2],
+                    "url": row[3],
+                    "author": row[4],
+                    "subreddit": row[5],
+                    "is_deleted": row[6],
+                    "version_hash": row[7],
+                    "captured_at": row[8].isoformat() if row[8] else None,
+                }
+            )
+
+        return {
+            "post_id": post_id,
+            "versions": versions,
+            "total_versions": len(versions),
+        }
+
+
+@app.get("/api/comment/{comment_id}/history")
+def get_comment_history(comment_id: str):
+    """Get all versions of a comment (for audit trail)."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT version, body, author, post_id, is_deleted, version_hash, captured_at
+            FROM comments_history
+            WHERE comment_id = %s
+            ORDER BY version DESC
+            """,
+            (comment_id,),
+        )
+        rows = cur.fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Comment history not found")
+
+        versions = []
+        for row in rows:
+            versions.append(
+                {
+                    "version": row[0],
+                    "body": row[1],
+                    "author": row[2],
+                    "post_id": row[3],
+                    "is_deleted": row[4],
+                    "version_hash": row[5],
+                    "captured_at": row[6].isoformat() if row[6] else None,
+                }
+            )
+
+        return {
+            "comment_id": comment_id,
+            "versions": versions,
+            "total_versions": len(versions),
         }
 
 
@@ -1310,7 +1484,7 @@ def rescan_target(target_type: str, name: str):
 
 
 @app.post("/api/admin/scrape")
-def trigger_scrape():
+def trigger_scrape(x_api_key: str | None = Depends(require_admin)):
     """Trigger immediate scrape of all enabled targets."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
@@ -1328,6 +1502,7 @@ def trigger_scrape():
 def trigger_backfill(
     passes: int = Query(2, ge=1, le=10, description="Number of backfill passes"),
     workers: int = Query(3, ge=1, le=20, description="Parallel workers"),
+    x_api_key: str | None = Depends(require_admin),
 ):
     """Trigger a backfill scrape to get historical posts."""
     if not redis_client:
@@ -2786,7 +2961,9 @@ def get_media(
 
 
 @app.delete("/api/admin/reset")
-def reset_all(confirm: str = Query(...)):
+def reset_all(
+    confirm: str = Query(...), x_api_key: str | None = Depends(require_admin)
+):
     """Wipe all archived data: files on disk, every DB table, and the Redis queue."""
     if confirm != "RESET":
         raise HTTPException(status_code=400, detail="Pass confirm=RESET to proceed")
