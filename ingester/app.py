@@ -594,13 +594,21 @@ def run_backfill_parallel(targets, passes=None, workers=None):
     logger.info("Parallel backfill completed")
 
 
-def run_cycle(force_backfill=False, backfill_passes=None, backfill_workers=None):
-    """Run a single scrape cycle for all enabled targets.
+def run_cycle(
+    force_backfill=False,
+    backfill_passes=None,
+    backfill_workers=None,
+    only_target_type=None,
+    only_target_name=None,
+):
+    """Run a single scrape cycle for all enabled targets (or a single target).
 
     Args:
         force_backfill: If True, run in backfill mode regardless of BACKFILL_MODE env
         backfill_passes: Number of passes for backfill (default: BACKFILL_PASSES)
         backfill_workers: Number of parallel workers for backfill (default: BACKFILL_WORKERS)
+        only_target_type: If set, scrape only this target type ('subreddit'|'user')
+        only_target_name: If set, scrape only this target name (used with only_target_type)
     """
     cycle_start = datetime.now(timezone.utc).replace(tzinfo=None)
     logger.info("Checking targets for new posts...")
@@ -609,7 +617,13 @@ def run_cycle(force_backfill=False, backfill_passes=None, backfill_workers=None)
     try:
         db = get_db()
         cur = db.cursor()
-        cur.execute("SELECT type,name,last_created FROM targets WHERE enabled=true")
+        if only_target_type and only_target_name:
+            cur.execute(
+                "SELECT type,name,last_created FROM targets WHERE enabled=true AND type=%s AND LOWER(name)=LOWER(%s)",
+                (only_target_type, only_target_name),
+            )
+        else:
+            cur.execute("SELECT type,name,last_created FROM targets WHERE enabled=true")
         targets = cur.fetchall()
         cur.close()
     except Exception as e:
@@ -653,12 +667,19 @@ def run():
         # Check for manual scrape trigger
         scrape_triggered = False
         backfill_triggered = False
+        scrape_config = {}
         backfill_config = {}
 
         try:
             msg = rd.lpop("scrape_trigger")
             if msg:
-                logger.info("Manual scrape triggered via UI — running cycle now")
+                scrape_config = json.loads(msg) if msg else {}
+                target_info = ""
+                if scrape_config.get("target_name"):
+                    target_info = f" for {scrape_config['target_type']}:{scrape_config['target_name']}"
+                logger.info(
+                    f"Manual scrape triggered via UI{target_info} — running cycle now"
+                )
                 scrape_triggered = True
         except Exception:
             pass
@@ -677,9 +698,19 @@ def run():
             logger.info(f"Running backfill with config: {backfill_config}")
             passes = backfill_config.get("passes", BACKFILL_PASSES)
             workers = backfill_config.get("workers", BACKFILL_WORKERS)
+            only_type = backfill_config.get("target_type")
+            only_name = backfill_config.get("target_name")
             run_cycle(
-                force_backfill=True, backfill_passes=passes, backfill_workers=workers
+                force_backfill=True,
+                backfill_passes=passes,
+                backfill_workers=workers,
+                only_target_type=only_type,
+                only_target_name=only_name,
             )
+        elif scrape_triggered:
+            only_type = scrape_config.get("target_type")
+            only_name = scrape_config.get("target_name")
+            run_cycle(only_target_type=only_type, only_target_name=only_name)
         else:
             run_cycle()
 

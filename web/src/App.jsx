@@ -155,6 +155,13 @@ export default function App(){
   const [scrapeTriggered, setScrapeTriggered] = useState(false)
   const [backfillTriggered, setBackfillTriggered] = useState(false)
 
+  // Per-target card state: expanded panel, audit data, in-flight actions
+  const [expandedCard, setExpandedCard] = useState(null)           // "type:name"
+  const [cardAudit, setCardAudit] = useState({})                   // { "type:name": auditObj }
+  const [cardAuditLoading, setCardAuditLoading] = useState({})     // { "type:name": bool }
+  const [cardScraping, setCardScraping] = useState({})             // { "type:name": bool }
+  const [cardBackfilling, setCardBackfilling] = useState({})       // { "type:name": bool }
+
   // Filter + sort state
   const [filterSubreddit, setFilterSubreddit] = useState("")
   const [filterAuthor, setFilterAuthor] = useState("")
@@ -586,6 +593,62 @@ export default function App(){
     axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`)
       .then(()=>{ setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin() })
       .catch(()=>toastError("Failed to add target"))
+  }
+
+  function toggleCardExpand(ttype, name){
+    const key = `${ttype}:${name}`
+    if(expandedCard === key){
+      setExpandedCard(null)
+    } else {
+      setExpandedCard(key)
+      // Auto-load audit if not already loaded
+      if(!cardAudit[key] && !cardAuditLoading[key]){
+        fetchCardAudit(ttype, name)
+      }
+    }
+  }
+
+  function fetchCardAudit(ttype, name){
+    const key = `${ttype}:${name}`
+    setCardAuditLoading(prev => ({...prev, [key]: true}))
+    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/audit`)
+      .then(r => {
+        setCardAudit(prev => ({...prev, [key]: r.data}))
+        setCardAuditLoading(prev => ({...prev, [key]: false}))
+      })
+      .catch(() => {
+        setCardAuditLoading(prev => ({...prev, [key]: false}))
+        toastError(`Audit failed for ${ttype}:${name}`)
+      })
+  }
+
+  function scrapeTargetNow(ttype, name){
+    const key = `${ttype}:${name}`
+    setCardScraping(prev => ({...prev, [key]: true}))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/scrape`)
+      .then(() => {
+        toastSuccess(`Scrape triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
+        setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
+      })
+      .catch(() => {
+        toastError(`Failed to trigger scrape for ${name}`)
+        setCardScraping(prev => ({...prev, [key]: false}))
+      })
+  }
+
+  function backfillTargetNow(ttype, name){
+    const key = `${ttype}:${name}`
+    setCardBackfilling(prev => ({...prev, [key]: true}))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/backfill?passes=2&workers=3`)
+      .then(() => {
+        toastSuccess(`Backfill triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
+        startBackfillPoll()
+        setTimeout(() => setCardBackfilling(prev => ({...prev, [key]: false})), 3000)
+      })
+      .catch(() => {
+        toastError(`Failed to trigger backfill for ${name}`)
+        setCardBackfilling(prev => ({...prev, [key]: false}))
+      })
   }
 
   function clearQueue(){
@@ -1139,80 +1202,182 @@ export default function App(){
                 </button>
               </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:"8px",marginBottom:"40px"}}>
-              {adminData.targets && adminData.targets.map(t=>(
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"8px",marginBottom:"40px"}}>
+              {adminData.targets && adminData.targets.map(t=>{
+                const cardKey = `${t.type}:${t.name}`
+                const isExpanded = expandedCard === cardKey
+                const audit = cardAudit[cardKey]
+                const auditLoading = cardAuditLoading[cardKey]
+                const isScraping = cardScraping[cardKey]
+                const isBackfilling = cardBackfilling[cardKey]
+                return (
                 <div key={`${t.type}-${t.name}`} style={{
                   background:"linear-gradient(145deg,#1e1e1e,#171717)",
-                  padding:"12px",borderRadius:"10px",
-                  border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":"1px solid #2a2a2a",
+                  borderRadius:"10px",
+                  border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":isExpanded?"1px solid #ff450055":"1px solid #2a2a2a",
                   opacity:t.enabled?1:0.7,
                   transition:"all 0.2s ease",
                   display:"flex",
                   flexDirection:"column",
-                  gap:"8px"
+                  overflow:"hidden",
                 }}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div style={{minWidth:0,flex:1}}>
-                      <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
-                        <span style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>{t.type}</span>
-                        {t.status!=="active" && (
-                          <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#222",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#888"}}>
-                            {t.status==="taken_down"?"⛔":t.status==="deleted"?"👤":""}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{fontSize:"14px",fontWeight:"600",color:t.status==="active"?"#fff":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {t.type==="subreddit"?"r/":"u/"}{t.name}
-                      </div>
-                    </div>
-                    <div style={{display:"flex",gap:"4px",flexShrink:0}}>
-                      {t.status==="active" && (
-                        <button onClick={()=>toggleTarget(t.type,t.name)} style={{padding:"3px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"6px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
-                          {t.enabled?"●":"○"}
-                        </button>
-                      )}
-                      {t.status==="taken_down" && (
-                        <button onClick={()=>setTargetStatus(t.type,t.name,"active")} title="Reactivate" style={{padding:"3px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
-                      )}
-                      {t.status==="deleted" && (
-                        <button onClick={()=>setTargetStatus(t.type,t.name,"active")} title="Reactivate" style={{padding:"3px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
-                      )}
-                      {t.status==="active" && (
-                        <>
-                          <button onClick={()=>rescanTarget(t.type,t.name)} title="Rescan" style={{padding:"3px 6px",background:"#2a2a2a",border:"none",borderRadius:"6px",color:"#888",cursor:"pointer",fontSize:"10px"}}>↻</button>
-                          {t.type==="subreddit" && (
-                            <button onClick={()=>setTargetStatus(t.type,t.name,"taken_down")} title="Mark taken down" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
+                  {/* Card header — click to expand */}
+                  <div style={{padding:"12px",display:"flex",flexDirection:"column",gap:"8px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{minWidth:0,flex:1,cursor:"pointer"}} onClick={()=>toggleCardExpand(t.type,t.name)}>
+                        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
+                          <span style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>{t.type}</span>
+                          {t.status!=="active" && (
+                            <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#222",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#888"}}>
+                              {t.status==="taken_down"?"⛔":t.status==="deleted"?"👤":""}
+                            </span>
                           )}
-                          {t.type==="user" && (
-                            <button onClick={()=>setTargetStatus(t.type,t.name,"deleted")} title="Mark deleted" style={{padding:"3px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"6px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
-                          )}
-                          <button onClick={()=>deleteTarget(t.type,t.name)} title="Remove" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {(t.status==="active" || t.status==="taken_down") && (
-                    <div style={{display:"flex",gap:"8px",fontSize:"11px"}}>
-                      <div style={{color:"#666"}}>Posts:</div>
-                      <div style={{color:t.status==="taken_down"?"#888":"#fff",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</div>
-                      <div style={{color:"#666"}}>Media:</div>
-                      <div style={{color:"-webkit-linear-gradient(180deg,#46d160,#2da64d)",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</div>
-                    </div>
-                  )}
-                  {t.status==="active" && (
-                    <>
-                      <div style={{background:"#141414",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
-                        <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:t.progress_percent>=100?"#46d160":"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"2px"}}/>
-                      </div>
-                      {t.last_created && (
-                        <div style={{fontSize:"10px",color:"#444",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                          {new Date(t.last_created).toLocaleDateString()} · {formatRate(t.rate_per_second)}
                         </div>
+                        <div style={{fontSize:"14px",fontWeight:"600",color:t.status==="active"?"#fff":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {t.type==="subreddit"?"r/":"u/"}{t.name}
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:"4px",flexShrink:0,alignItems:"center"}}>
+                        {t.status==="active" && (
+                          <button onClick={()=>toggleTarget(t.type,t.name)} title={t.enabled?"Disable scraping":"Enable scraping"} style={{padding:"3px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"6px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
+                            {t.enabled?"●":"○"}
+                          </button>
+                        )}
+                        {(t.status==="taken_down"||t.status==="deleted") && (
+                          <button onClick={()=>setTargetStatus(t.type,t.name,"active")} title="Reactivate" style={{padding:"3px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
+                        )}
+                        {t.status==="active" && (
+                          <>
+                            {t.type==="subreddit" && (
+                              <button onClick={()=>setTargetStatus(t.type,t.name,"taken_down")} title="Mark taken down" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
+                            )}
+                            {t.type==="user" && (
+                              <button onClick={()=>setTargetStatus(t.type,t.name,"deleted")} title="Mark deleted" style={{padding:"3px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"6px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
+                            )}
+                            <button onClick={()=>deleteTarget(t.type,t.name)} title="Remove target" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
+                          </>
+                        )}
+                        {/* Expand/collapse chevron */}
+                        <button onClick={()=>toggleCardExpand(t.type,t.name)} title={isExpanded?"Collapse":"Expand actions"} style={{padding:"3px 6px",background:"transparent",border:"1px solid #333",borderRadius:"6px",color:isExpanded?"#ff4500":"#555",cursor:"pointer",fontSize:"12px",lineHeight:1,transition:"color 0.2s"}}>
+                          {isExpanded?"▲":"▼"}
+                        </button>
+                      </div>
+                    </div>
+                    {(t.status==="active" || t.status==="taken_down") && (
+                      <div style={{display:"flex",gap:"8px",fontSize:"11px"}}>
+                        <div style={{color:"#666"}}>Posts:</div>
+                        <div style={{color:t.status==="taken_down"?"#888":"#fff",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</div>
+                        <div style={{color:"#666"}}>Media:</div>
+                        <div style={{color:"#46d160",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</div>
+                      </div>
+                    )}
+                    {t.status==="active" && (
+                      <>
+                        <div style={{background:"#141414",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
+                          <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:t.progress_percent>=100?"#46d160":"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"2px"}}/>
+                        </div>
+                        {t.last_created && (
+                          <div style={{fontSize:"10px",color:"#444",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                            {new Date(t.last_created).toLocaleDateString()} · {formatRate(t.rate_per_second)}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Expanded panel */}
+                  {isExpanded && (
+                    <div style={{borderTop:"1px solid #2a2a2a",padding:"10px 12px",background:"#161616",display:"flex",flexDirection:"column",gap:"10px"}}>
+
+                      {/* Action buttons row */}
+                      <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                        {t.status==="active" && t.enabled && (
+                          <button
+                            onClick={()=>scrapeTargetNow(t.type,t.name)}
+                            disabled={isScraping}
+                            title="Trigger an immediate scrape for this target only"
+                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isScraping?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:isScraping?"#555":"#fff",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"all 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                            {isScraping ? "✓ Sent" : "⚡ Scrape"}
+                          </button>
+                        )}
+                        {t.status==="active" && t.enabled && (
+                          <button
+                            onClick={()=>backfillTargetNow(t.type,t.name)}
+                            disabled={isBackfilling}
+                            title="Trigger a historical backfill for this target only"
+                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isBackfilling?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"6px",color:isBackfilling?"#555":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"all 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                            {isBackfilling ? "✓ Sent" : "📜 Backfill"}
+                          </button>
+                        )}
+                        <button
+                          onClick={()=>rescanTarget(t.type,t.name)}
+                          title="Re-queue all media for this target for re-download"
+                          style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"6px",color:"#46d160",cursor:"pointer",fontSize:"11px",fontWeight:"600",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                          ↻ Rescan
+                        </button>
+                        <button
+                          onClick={()=>fetchCardAudit(t.type,t.name)}
+                          disabled={auditLoading}
+                          title="Check media integrity for this target"
+                          style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:"#1e1e2a",border:"1px solid #2a2a4a",borderRadius:"6px",color:auditLoading?"#555":"#7193ff",cursor:auditLoading?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                          {auditLoading ? "..." : "🔍 Audit"}
+                        </button>
+                      </div>
+
+                      {/* Audit results */}
+                      {auditLoading && (
+                        <div style={{fontSize:"11px",color:"#555",textAlign:"center",padding:"8px 0"}}>Running integrity check...</div>
                       )}
-                    </>
+                      {audit && !auditLoading && (()=>{
+                        const missingPct = audit.total_media > 0 ? Math.round((audit.media_missing / audit.total_media) * 100) : 0
+                        const okPct = audit.total_media > 0 ? Math.round((audit.media_ok / audit.total_media) * 100) : 100
+                        const hasIssues = audit.media_missing > 0 || audit.posts_all_missing > 0
+                        return (
+                          <div style={{background:"#111",borderRadius:"8px",padding:"10px",border:`1px solid ${hasIssues?"#ff450033":"#46d16033"}`}}>
+                            <div style={{fontSize:"10px",fontWeight:"600",color:hasIssues?"#ff6b3d":"#46d160",marginBottom:"8px",textTransform:"uppercase",letterSpacing:"0.5px"}}>
+                              {hasIssues ? "⚠ Issues Found" : "✓ Integrity OK"}
+                            </div>
+                            {/* Media bar */}
+                            <div style={{marginBottom:"8px"}}>
+                              <div style={{display:"flex",justifyContent:"space-between",fontSize:"10px",color:"#666",marginBottom:"3px"}}>
+                                <span>Media integrity</span>
+                                <span style={{color:hasIssues?"#f9c300":"#46d160"}}>{okPct}% OK</span>
+                              </div>
+                              <div style={{background:"#222",height:"5px",borderRadius:"3px",overflow:"hidden"}}>
+                                <div style={{display:"flex",height:"100%"}}>
+                                  <div style={{width:`${okPct}%`,background:"#46d160",transition:"width 0.4s"}}/>
+                                  {missingPct>0 && <div style={{width:`${missingPct}%`,background:"#ff4500",transition:"width 0.4s"}}/>}
+                                </div>
+                              </div>
+                            </div>
+                            {/* Stats grid */}
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px",fontSize:"10px"}}>
+                              <div style={{color:"#666"}}>Posts total</div><div style={{color:"#fff",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.total_posts.toLocaleString()}</div>
+                              <div style={{color:"#46d160"}}>Posts OK</div><div style={{color:"#46d160",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_ok.toLocaleString()}</div>
+                              {audit.posts_partial>0 && <><div style={{color:"#f9c300"}}>Posts partial</div><div style={{color:"#f9c300",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_partial.toLocaleString()}</div></>}
+                              {audit.posts_all_missing>0 && <><div style={{color:"#ff6b6b"}}>Posts all missing</div><div style={{color:"#ff6b6b",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_all_missing.toLocaleString()}</div></>}
+                              {audit.posts_no_media>0 && <><div style={{color:"#888"}}>Posts (no media)</div><div style={{color:"#888",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_no_media.toLocaleString()}</div></>}
+                              <div style={{color:"#666",marginTop:"4px",borderTop:"1px solid #222",paddingTop:"4px"}}>Media total</div><div style={{color:"#fff",textAlign:"right",fontVariantNumeric:"tabular-nums",marginTop:"4px",borderTop:"1px solid #222",paddingTop:"4px"}}>{audit.total_media.toLocaleString()}</div>
+                              <div style={{color:"#46d160"}}>Downloaded</div><div style={{color:"#46d160",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_ok.toLocaleString()}</div>
+                              {audit.media_missing>0 && <><div style={{color:"#ff6b6b"}}>Missing</div><div style={{color:"#ff6b6b",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_missing.toLocaleString()}</div></>}
+                              {audit.media_error>0 && <><div style={{color:"#ff4500"}}>Errors</div><div style={{color:"#ff4500",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_error.toLocaleString()}</div></>}
+                              {audit.media_pending>0 && <><div style={{color:"#f9c300"}}>Pending</div><div style={{color:"#f9c300",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_pending.toLocaleString()}</div></>}
+                            </div>
+                            {/* Quick fix: if missing media, offer rescan */}
+                            {audit.media_missing>0 && (
+                              <button
+                                onClick={()=>rescanTarget(t.type,t.name)}
+                                style={{marginTop:"8px",width:"100%",padding:"5px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:"#fff",cursor:"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                Re-queue {audit.media_missing.toLocaleString()} missing →
+                              </button>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </div>
                   )}
                 </div>
-              ))}
+              )})}
             </div>
 
             {/* ── Thumbnail Utilities ── */}

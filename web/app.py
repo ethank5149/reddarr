@@ -1483,6 +1483,130 @@ def rescan_target(target_type: str, name: str):
     return {"status": "ok", "requeued": requeued, "posts": len(post_rows)}
 
 
+@app.get("/api/admin/target/{target_type}/{name}/audit")
+def audit_target(target_type: str, name: str):
+    """Return per-target media integrity stats."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
+    col = "author" if target_type == "user" else "subreddit"
+    with get_db_cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(DISTINCT p.id)                                            AS total_posts,
+                COUNT(m.id)                                                     AS total_media,
+                COUNT(m.id) FILTER (WHERE m.status='done' AND m.file_path IS NOT NULL AND m.file_path != '') AS media_ok,
+                COUNT(m.id) FILTER (WHERE m.status='error')                    AS media_error,
+                COUNT(m.id) FILTER (WHERE m.status='pending' OR m.status IS NULL) AS media_pending,
+                COUNT(DISTINCT p.id) FILTER (
+                    WHERE NOT EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
+                )                                                               AS posts_no_media,
+                COUNT(DISTINCT p.id) FILTER (
+                    WHERE EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM media mm WHERE mm.post_id=p.id
+                        AND (mm.status!='done' OR mm.file_path IS NULL OR mm.file_path='')
+                    )
+                )                                                               AS posts_ok,
+                COUNT(DISTINCT p.id) FILTER (
+                    WHERE EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id
+                        AND (mm.status!='done' OR mm.file_path IS NULL OR mm.file_path=''))
+                    AND EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id
+                        AND mm.status='done' AND mm.file_path IS NOT NULL AND mm.file_path!='')
+                )                                                               AS posts_partial,
+                COUNT(DISTINCT p.id) FILTER (
+                    WHERE EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM media mm WHERE mm.post_id=p.id
+                        AND mm.status='done' AND mm.file_path IS NOT NULL AND mm.file_path!=''
+                    )
+                )                                                               AS posts_all_missing
+            FROM posts p
+            LEFT JOIN media m ON m.post_id = p.id
+            WHERE LOWER(p.{col}) = LOWER(%s)
+            """,
+            (name,),
+        )
+        row = cur.fetchone()
+
+    (
+        total_posts,
+        total_media,
+        media_ok,
+        media_error,
+        media_pending,
+        posts_no_media,
+        posts_ok,
+        posts_partial,
+        posts_all_missing,
+    ) = row
+    media_missing = (total_media or 0) - (media_ok or 0)
+    return {
+        "total_posts": total_posts or 0,
+        "total_media": total_media or 0,
+        "media_ok": media_ok or 0,
+        "media_error": media_error or 0,
+        "media_pending": media_pending or 0,
+        "media_missing": media_missing,
+        "posts_no_media": posts_no_media or 0,
+        "posts_ok": posts_ok or 0,
+        "posts_partial": posts_partial or 0,
+        "posts_all_missing": posts_all_missing or 0,
+    }
+
+
+@app.post("/api/admin/target/{target_type}/{name}/scrape")
+def scrape_target(target_type: str, name: str):
+    """Trigger an immediate scrape for a single target."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+    rd.lpush(
+        "scrape_trigger",
+        json.dumps(
+            {
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+                "target_type": target_type,
+                "target_name": name,
+            }
+        ),
+    )
+    return {"status": "ok", "message": f"Scrape triggered for {target_type}:{name}"}
+
+
+@app.post("/api/admin/target/{target_type}/{name}/backfill")
+def backfill_target(
+    target_type: str,
+    name: str,
+    passes: int = Query(2, ge=1, le=10),
+    workers: int = Query(3, ge=1, le=20),
+):
+    """Trigger a backfill for a single target."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+    rd.lpush(
+        "backfill_trigger",
+        json.dumps(
+            {
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+                "target_type": target_type,
+                "target_name": name,
+                "passes": passes,
+                "workers": workers,
+            }
+        ),
+    )
+    return {"status": "ok", "message": f"Backfill triggered for {target_type}:{name}"}
+
+
 @app.post("/api/admin/scrape")
 def trigger_scrape(x_api_key: str | None = Depends(require_admin)):
     """Trigger immediate scrape of all enabled targets."""
