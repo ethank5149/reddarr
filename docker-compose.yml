@@ -82,6 +82,7 @@ services:
       - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      REDIS_HOST: redis
     secrets:
       - api_key
     depends_on:
