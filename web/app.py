@@ -14,10 +14,9 @@ from pathlib import Path
 
 import psycopg2
 from psycopg2 import pool as pg_pool
-from fastapi import FastAPI, Query, HTTPException, Depends
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.security import APIKeyQuery
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -79,32 +78,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-_API_KEY: str | None = None
-_API_KEY_PATH = os.getenv("API_KEY_PATH", "/run/secrets/api_key")
-
-
-def get_api_key() -> str | None:
-    global _API_KEY
-    if _API_KEY is not None:
-        return _API_KEY
-    try:
-        with open(_API_KEY_PATH, "r") as f:
-            _API_KEY = f.read().strip()
-    except FileNotFoundError:
-        logger.warning(
-            f"API key file not found at {_API_KEY_PATH}, admin endpoints will require no key"
-        )
-    return _API_KEY
-
-
-def require_admin(
-    x_api_key: str | None = Depends(APIKeyQuery(name="x-api-key", auto_error=False)),
-):
-    key = get_api_key()
-    if key and key != "" and x_api_key != key:
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
-    return x_api_key
 
 
 @app.middleware("http")
@@ -1608,7 +1581,7 @@ def backfill_target(
 
 
 @app.post("/api/admin/scrape")
-def trigger_scrape(x_api_key: str | None = Depends(require_admin)):
+def trigger_scrape():
     """Trigger immediate scrape of all enabled targets."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Redis not available")
@@ -1626,7 +1599,6 @@ def trigger_scrape(x_api_key: str | None = Depends(require_admin)):
 def trigger_backfill(
     passes: int = Query(2, ge=1, le=10, description="Number of backfill passes"),
     workers: int = Query(3, ge=1, le=20, description="Parallel workers"),
-    x_api_key: str | None = Depends(require_admin),
 ):
     """Trigger a backfill scrape to get historical posts."""
     if not redis_client:
@@ -2442,6 +2414,349 @@ def thumb_job_status(job_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Bulk archive utilities
+# ---------------------------------------------------------------------------
+
+# In-memory job registry for bulk archive jobs
+_archive_jobs: Dict[str, Any] = {}
+_archive_jobs_lock = threading.Lock()
+
+
+def _run_bulk_archive_job(job_id: str, post_ids: list, archive: bool):
+    """Background worker: archive (or unarchive) a list of post IDs."""
+    with _archive_jobs_lock:
+        _archive_jobs[job_id]["status"] = "running"
+
+    done = 0
+    skipped = 0
+    files_moved = 0
+    errors = []
+
+    for post_id in post_ids:
+        try:
+            moved, errs = _move_post_media(post_id, archive=archive)
+            files_moved += moved
+            if errs:
+                errors.extend(errs[:3])
+
+            conn = None
+            cur = None
+            try:
+                conn = connection_pool.getconn()
+                cur = conn.cursor()
+                if archive:
+                    cur.execute(
+                        "UPDATE posts SET archived = TRUE, archived_at = now() WHERE id = %s",
+                        (post_id,),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE posts SET archived = FALSE, archived_at = NULL WHERE id = %s",
+                        (post_id,),
+                    )
+                conn.commit()
+            finally:
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
+
+        except Exception as e:
+            errors.append(f"post {post_id}: {e}")
+            skipped += 1
+            logger.error(f"Bulk archive job {job_id}: failed for post {post_id}: {e}")
+
+        done += 1
+        with _archive_jobs_lock:
+            _archive_jobs[job_id]["done"] = done
+            _archive_jobs[job_id]["skipped"] = skipped
+            _archive_jobs[job_id]["files_moved"] = files_moved
+            _archive_jobs[job_id]["errors"] = errors[-20:]
+
+    with _archive_jobs_lock:
+        _archive_jobs[job_id]["status"] = "done"
+        _archive_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+        # Evict old completed jobs
+        cutoff = datetime.now(timezone.utc).timestamp() - 3600
+        to_evict = [
+            jid
+            for jid, jdata in _archive_jobs.items()
+            if jdata.get("status") == "done"
+            and jdata.get("finished_at")
+            and datetime.fromisoformat(jdata["finished_at"]).timestamp() < cutoff
+            and jid != job_id
+        ]
+        for jid in to_evict:
+            del _archive_jobs[jid]
+
+    logger.info(
+        f"Bulk archive job {job_id} finished: {done} processed, {skipped} skipped, "
+        f"{files_moved} files moved, {len(errors)} errors"
+    )
+
+
+@app.get("/api/admin/archive/stats")
+def archive_stats():
+    """Return unarchived post counts broken down by target and date buckets."""
+    with get_db_cursor() as cur:
+        # Total unarchived / archived
+        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = FALSE")
+        total_unarchived = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
+        total_archived = cur.fetchone()[0]
+
+        # Per subreddit target breakdown (unarchived)
+        cur.execute("""
+            SELECT p.subreddit, COUNT(*) as cnt
+            FROM posts p
+            WHERE p.archived = FALSE
+            GROUP BY p.subreddit
+            ORDER BY cnt DESC
+            LIMIT 50
+        """)
+        by_subreddit = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        # Per user target breakdown (unarchived)
+        cur.execute("""
+            SELECT p.author, COUNT(*) as cnt
+            FROM posts p
+            JOIN targets t ON t.type = 'user' AND LOWER(t.name) = LOWER(p.author)
+            WHERE p.archived = FALSE
+            GROUP BY p.author
+            ORDER BY cnt DESC
+            LIMIT 50
+        """)
+        by_user = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        # By age bucket
+        cur.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '365 days') as older_than_1y,
+                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '180 days'
+                                   AND created_utc >= now() - INTERVAL '365 days') as age_6m_1y,
+                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '90 days'
+                                   AND created_utc >= now() - INTERVAL '180 days') as age_3m_6m,
+                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '30 days'
+                                   AND created_utc >= now() - INTERVAL '90 days') as age_1m_3m,
+                COUNT(*) FILTER (WHERE created_utc >= now() - INTERVAL '30 days') as newer_than_1m
+            FROM posts
+            WHERE archived = FALSE
+        """)
+        row = cur.fetchone()
+        by_age = {
+            "older_1y": row[0] or 0,
+            "age_6m_1y": row[1] or 0,
+            "age_3m_6m": row[2] or 0,
+            "age_1m_3m": row[3] or 0,
+            "newer_1m": row[4] or 0,
+        }
+
+        # Active archive jobs
+        with _archive_jobs_lock:
+            active_jobs = [
+                {**v, "id": k}
+                for k, v in _archive_jobs.items()
+                if v.get("status") in ("pending", "running")
+            ]
+
+    return {
+        "total_unarchived": total_unarchived,
+        "total_archived": total_archived,
+        "total_posts": total_unarchived + total_archived,
+        "archive_pct": round(
+            total_archived / max(1, total_unarchived + total_archived) * 100, 1
+        ),
+        "by_subreddit": by_subreddit,
+        "by_user": by_user,
+        "by_age": by_age,
+        "active_jobs": active_jobs,
+    }
+
+
+@app.post("/api/admin/archive/bulk")
+def bulk_archive(
+    target_type: Optional[str] = None,
+    target_name: Optional[str] = None,
+    before_days: Optional[int] = None,
+    media_status: Optional[str] = None,
+    dry_run: bool = False,
+):
+    """
+    Bulk archive posts matching specified criteria.
+
+    Filters (all optional, combined with AND):
+    - target_type + target_name: limit to a specific subreddit or user
+    - before_days: only posts older than N days
+    - media_status: 'done' | 'pending' | 'none' (posts with no media)
+    """
+    conditions = ["archived = FALSE"]
+    params = []
+
+    if target_type and target_name:
+        if target_type == "subreddit":
+            conditions.append("LOWER(subreddit) = LOWER(%s)")
+        else:
+            conditions.append("LOWER(author) = LOWER(%s)")
+        params.append(target_name)
+
+    if before_days is not None and before_days > 0:
+        conditions.append("created_utc < now() - INTERVAL '%s days'")
+        params.append(before_days)
+
+    where = " AND ".join(conditions)
+
+    with get_db_cursor() as cur:
+        if media_status == "done":
+            query = f"""
+                SELECT DISTINCT p.id FROM posts p
+                JOIN media m ON m.post_id = p.id AND m.status = 'done'
+                WHERE {where}
+            """
+        elif media_status == "none":
+            query = f"""
+                SELECT p.id FROM posts p
+                WHERE {where}
+                  AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id)
+            """
+        else:
+            query = f"SELECT id FROM posts WHERE {where}"
+
+        cur.execute(query, params)
+        post_ids = [r[0] for r in cur.fetchall()]
+
+    if dry_run:
+        return {"dry_run": True, "post_count": len(post_ids)}
+
+    if not post_ids:
+        return {
+            "job_id": None,
+            "total": 0,
+            "message": "No posts match the given filters",
+        }
+
+    job_id = str(uuid.uuid4())
+    with _archive_jobs_lock:
+        _archive_jobs[job_id] = {
+            "type": "bulk_archive",
+            "status": "pending",
+            "total": len(post_ids),
+            "done": 0,
+            "skipped": 0,
+            "files_moved": 0,
+            "errors": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "filter_summary": {
+                "target_type": target_type,
+                "target_name": target_name,
+                "before_days": before_days,
+                "media_status": media_status,
+            },
+        }
+
+    t = threading.Thread(
+        target=_run_bulk_archive_job, args=(job_id, post_ids, True), daemon=True
+    )
+    t.start()
+
+    return {"job_id": job_id, "total": len(post_ids)}
+
+
+@app.post("/api/admin/archive/all")
+def archive_all_posts():
+    """Archive every unarchived post. Starts a background job."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            "SELECT id FROM posts WHERE archived = FALSE ORDER BY created_utc ASC"
+        )
+        post_ids = [r[0] for r in cur.fetchall()]
+
+    if not post_ids:
+        return {"job_id": None, "total": 0, "message": "All posts are already archived"}
+
+    job_id = str(uuid.uuid4())
+    with _archive_jobs_lock:
+        _archive_jobs[job_id] = {
+            "type": "archive_all",
+            "status": "pending",
+            "total": len(post_ids),
+            "done": 0,
+            "skipped": 0,
+            "files_moved": 0,
+            "errors": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+        }
+
+    t = threading.Thread(
+        target=_run_bulk_archive_job, args=(job_id, post_ids, True), daemon=True
+    )
+    t.start()
+
+    return {"job_id": job_id, "total": len(post_ids)}
+
+
+@app.post("/api/admin/target/{target_type}/{name}/archive-all")
+def archive_all_target(target_type: str, name: str):
+    """Archive all unarchived posts belonging to a specific target."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
+    with get_db_cursor() as cur:
+        if target_type == "subreddit":
+            cur.execute(
+                "SELECT id FROM posts WHERE archived = FALSE AND LOWER(subreddit) = LOWER(%s) ORDER BY created_utc ASC",
+                (name,),
+            )
+        else:
+            cur.execute(
+                "SELECT id FROM posts WHERE archived = FALSE AND LOWER(author) = LOWER(%s) ORDER BY created_utc ASC",
+                (name,),
+            )
+        post_ids = [r[0] for r in cur.fetchall()]
+
+    if not post_ids:
+        return {
+            "job_id": None,
+            "total": 0,
+            "message": f"No unarchived posts for {target_type}:{name}",
+        }
+
+    job_id = str(uuid.uuid4())
+    with _archive_jobs_lock:
+        _archive_jobs[job_id] = {
+            "type": "archive_target",
+            "status": "pending",
+            "total": len(post_ids),
+            "done": 0,
+            "skipped": 0,
+            "files_moved": 0,
+            "errors": [],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "filter_summary": {"target_type": target_type, "target_name": name},
+        }
+
+    t = threading.Thread(
+        target=_run_bulk_archive_job, args=(job_id, post_ids, True), daemon=True
+    )
+    t.start()
+
+    return {"job_id": job_id, "total": len(post_ids)}
+
+
+@app.get("/api/admin/archive/job/{job_id}")
+def archive_job_status(job_id: str):
+    """Poll the status of a background bulk archive job."""
+    with _archive_jobs_lock:
+        job = _archive_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+# ---------------------------------------------------------------------------
 # Media re-scan utilities
 # ---------------------------------------------------------------------------
 
@@ -3085,9 +3400,7 @@ def get_media(
 
 
 @app.delete("/api/admin/reset")
-def reset_all(
-    confirm: str = Query(...), x_api_key: str | None = Depends(require_admin)
-):
+def reset_all(confirm: str = Query(...)):
     """Wipe all archived data: files on disk, every DB table, and the Redis queue."""
     if confirm != "RESET":
         raise HTTPException(status_code=400, detail="Pass confirm=RESET to proceed")

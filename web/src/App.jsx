@@ -147,6 +147,17 @@ export default function App(){
   const [thumbJobResult, setThumbJobResult] = useState(null)  // last finished job
   const thumbPollRef = useRef(null)
 
+  // Bulk archive state
+  const [archiveStats, setArchiveStats] = useState(null)
+  const [archiveJob, setArchiveJob] = useState(null)           // current running job
+  const [archiveJobResult, setArchiveJobResult] = useState(null) // last finished job
+  const archiveJobPollRef = useRef(null)
+  const [archiveBulkFilter, setArchiveBulkFilter] = useState({
+    target_type: "", target_name: "", before_days: "", media_status: ""
+  })
+  const [archivePanelOpen, setArchivePanelOpen] = useState(false)
+  const [cardArchiving, setCardArchiving] = useState({})        // { "type:name": bool }
+
   // Backfill status
   const [backfillStatus, setBackfillStatus] = useState(null)
   const backfillPollRef = useRef(null)
@@ -722,6 +733,103 @@ export default function App(){
       .catch(err=>toastError("Purge failed: " + (err.response?.data?.detail||err.message)))
   }
 
+  // ── Bulk Archive functions ──
+  function loadArchiveStats(){
+    axios.get("/api/admin/archive/stats")
+      .then(r=>setArchiveStats(r.data))
+      .catch(()=>setArchiveStats(null))
+  }
+
+  function startArchiveJobPoll(jobId){
+    if(archiveJobPollRef.current) clearInterval(archiveJobPollRef.current)
+    archiveJobPollRef.current = setInterval(()=>{
+      axios.get(`/api/admin/archive/job/${jobId}`)
+        .then(r=>{
+          setArchiveJob(r.data)
+          if(r.data.status === "done"){
+            clearInterval(archiveJobPollRef.current)
+            archiveJobPollRef.current = null
+            setArchiveJobResult(r.data)
+            setArchiveJob(null)
+            loadArchiveStats()
+            loadAdmin()
+          }
+        })
+        .catch(()=>{
+          clearInterval(archiveJobPollRef.current)
+          archiveJobPollRef.current = null
+        })
+    }, 1500)
+  }
+
+  function runArchiveAll(){
+    if(!window.confirm(`Archive ALL unarchived posts?\n\nThis will mark every active post as hidden and move their media files. This can take a while for large collections.`)) return
+    setArchiveJobResult(null)
+    axios.post("/api/admin/archive/all")
+      .then(r=>{
+        if(!r.data.job_id){ toastSuccess(r.data.message || "Nothing to archive"); return }
+        setArchiveJob({status:"pending", total:r.data.total, done:0, skipped:0, files_moved:0, errors:[]})
+        startArchiveJobPoll(r.data.job_id)
+        toastSuccess(`Archiving ${r.data.total.toLocaleString()} posts…`)
+      })
+      .catch(err=>toastError("Archive all failed: " + (err.response?.data?.detail||err.message)))
+  }
+
+  function runBulkArchiveFiltered(){
+    const f = archiveBulkFilter
+    const params = new URLSearchParams()
+    if(f.target_type && f.target_name){ params.set("target_type", f.target_type); params.set("target_name", f.target_name) }
+    if(f.before_days) params.set("before_days", f.before_days)
+    if(f.media_status) params.set("media_status", f.media_status)
+    // First dry run to show count
+    axios.post(`/api/admin/archive/bulk?${params.toString()}&dry_run=true`)
+      .then(r=>{
+        if(r.data.post_count === 0){ toastSuccess("No posts match these filters"); return }
+        if(!window.confirm(`Archive ${r.data.post_count.toLocaleString()} post(s) matching the current filters?`)) return
+        setArchiveJobResult(null)
+        return axios.post(`/api/admin/archive/bulk?${params.toString()}`)
+          .then(res=>{
+            if(!res.data.job_id){ toastSuccess(res.data.message || "Nothing to archive"); return }
+            setArchiveJob({status:"pending", total:res.data.total, done:0, skipped:0, files_moved:0, errors:[]})
+            startArchiveJobPoll(res.data.job_id)
+            toastSuccess(`Archiving ${res.data.total.toLocaleString()} posts…`)
+          })
+      })
+      .catch(err=>toastError("Bulk archive failed: " + (err.response?.data?.detail||err.message)))
+  }
+
+  function runArchiveTarget(ttype, name){
+    const key = `${ttype}:${name}`
+    setCardArchiving(prev=>({...prev, [key]:true}))
+    // Dry run first
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/archive-all`)
+      .then(r=>{
+        if(!r.data.job_id){
+          toastSuccess(r.data.message || "Nothing to archive")
+          setCardArchiving(prev=>({...prev, [key]:false}))
+          return
+        }
+        setArchiveJob({status:"pending", total:r.data.total, done:0, skipped:0, files_moved:0, errors:[]})
+        startArchiveJobPoll(r.data.job_id)
+        toastSuccess(`Archiving ${r.data.total.toLocaleString()} posts from ${ttype==="subreddit"?"r/":"u/"}${name}`)
+        setCardArchiving(prev=>({...prev, [key]:false}))
+      })
+      .catch(err=>{
+        toastError(`Archive failed: ` + (err.response?.data?.detail||err.message))
+        setCardArchiving(prev=>({...prev, [key]:false}))
+      })
+  }
+
+  useEffect(()=>{
+    return ()=>{ if(archiveJobPollRef.current) clearInterval(archiveJobPollRef.current) }
+  }, [])
+
+  // Load archive stats when admin tab opens
+  useEffect(()=>{
+    if(activeTab === "admin" && !archiveStats) loadArchiveStats()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab])
+
   function formatEta(seconds){
     if(!seconds) return "N/A"
     if(seconds < 60) return `${Math.round(seconds)}s`
@@ -739,7 +847,7 @@ export default function App(){
 
   function truncateText(text,len=150){
     if(!text) return ""
-    return text.length>len ? text.substring(0,len)+"..." : text
+    return text.length>len ? text.substring(0,len)+"…" : text
   }
 
   function formatTime(iso){
@@ -830,7 +938,7 @@ export default function App(){
         boxShadow:connected?"0 0 6px #46d160":"none",
         animation:connected?"pulse 2s ease-in-out infinite":"none"
       }}/>
-      {connected?"LIVE":"connecting..."}
+      {connected?"LIVE":"connecting…"}
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </div>
   )
@@ -922,7 +1030,7 @@ export default function App(){
                   display:"flex",
                   alignItems:"center",
                   gap:"6px",
-                  transition:"all 0.2s ease",
+                  transition:"background 0.2s ease, color 0.2s ease",
                   textDecoration:"none",
                   whiteSpace:"nowrap"
                 })}>
@@ -941,8 +1049,8 @@ export default function App(){
             )}
             <div style={{position:"relative"}}>
               <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
-              <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search..." value={search} onChange={handleSearch}
-                style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"200px",minWidth:"140px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"all 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
+              <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search…" aria-label="Search posts" autoComplete="off" spellCheck={false} value={search} onChange={handleSearch}
+                style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"200px",minWidth:"140px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"border-color 0.2s ease, box-shadow 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
             </div>
           </div>
         </div>
@@ -998,13 +1106,13 @@ export default function App(){
           )}
 
           <div style={{display:"flex",gap:"12px",marginBottom:"20px"}}>
-            <select value={auditFilters.status} onChange={e=>{setAuditFilters(f=>({...f,status:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,e.target.value,auditFilters.subreddit)}}
+            <select aria-label="Filter by status" value={auditFilters.status} onChange={e=>{setAuditFilters(f=>({...f,status:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,e.target.value,auditFilters.subreddit)}}
               style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px"}}>
-              <option value="">All</option>
+              <option value="">All statuses</option>
               <option value="ok">All OK</option>
               <option value="missing">Has Missing</option>
             </select>
-            <input type="text" placeholder="r/ filter" value={auditFilters.subreddit}
+            <input type="text" placeholder="r/ subreddit…" aria-label="Filter by subreddit" autoComplete="off" spellCheck={false} value={auditFilters.subreddit}
               onChange={e=>{setAuditFilters(f=>({...f,subreddit:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,auditFilters.status,e.target.value)}}
               style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",width:"140px"}}/>
           </div>
@@ -1034,7 +1142,7 @@ export default function App(){
               </tbody>
             </table>
             {auditPosts.length===0 && !auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>No archived posts.</div>}
-            {auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>Loading...</div>}
+            {auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>Loading…</div>}
           </div>
 
           {auditPosts.length > 0 && (
@@ -1087,7 +1195,7 @@ export default function App(){
       {/* ── ADMIN TAB ── */}
       {activeTab === "admin" && (
         <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-          {adminLoading && <div style={{textAlign:"center",padding:"40px",color:"#666"}}>Loading admin data...</div>}
+          {adminLoading && <div style={{textAlign:"center",padding:"40px",color:"#666"}}>Loading admin data…</div>}
           {!adminLoading && !adminData && <div style={{textAlign:"center",padding:"40px",color:"#ff4500"}}>Failed to load admin data.</div>}
 
           {adminData && (<>
@@ -1149,17 +1257,241 @@ export default function App(){
           </>)}
 
           {adminData && (<>
+            {/* ── Archive Manager ── */}
+            <div style={{marginBottom:"40px"}}>
+              {/* Section header */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
+                  <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Archive Manager</h2>
+                  {archiveStats && (
+                    <span style={{fontSize:"12px",color:"#555",background:"#1a1a1a",padding:"3px 8px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                      {archiveStats.archive_pct}% archived
+                    </span>
+                  )}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                  <button onClick={loadArchiveStats} style={{padding:"6px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"12px"}}>↻ Refresh</button>
+                  <button
+                    onClick={()=>setArchivePanelOpen(o=>!o)}
+                    style={{padding:"6px 14px",background:archivePanelOpen?"#1a2a1a":"#1a2a1a",border:`1px solid ${archivePanelOpen?"#46d160":"#2a4a2a"}`,borderRadius:"8px",color:archivePanelOpen?"#46d160":"#4a8a4a",cursor:"pointer",fontSize:"12px",fontWeight:"500"}}>
+                    {archivePanelOpen ? "▲ Filters" : "▼ Filters"}
+                  </button>
+                  <button
+                    onClick={runArchiveAll}
+                    disabled={!!archiveJob}
+                    style={{padding:"6px 16px",background:archiveJob?"#2a2a2a":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"8px",color:archiveJob?"#555":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"700",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                    {archiveJob ? "⏳ Archiving…" : "Archive All Posts"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Archive progress overview */}
+              {archiveStats && (()=>{
+                const total = archiveStats.total_posts
+                const archived = archiveStats.total_archived
+                const unarchived = archiveStats.total_unarchived
+                const pct = archiveStats.archive_pct
+                return (
+                  <div style={{background:"linear-gradient(145deg,#131f13,#0e180e)",borderRadius:"16px",border:"1px solid #1a3a1a",padding:"20px",marginBottom:"16px"}}>
+                    {/* Top stats row */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"16px",marginBottom:"16px"}}>
+                      {[
+                        {label:"Total Posts", value:total, color:"#fff"},
+                        {label:"Archived (Hidden)", value:archived, color:"#46d160"},
+                        {label:"Unarchived (Active)", value:unarchived, color:unarchived===0?"#46d160":"#f9c300"},
+                      ].map(s=>(
+                        <div key={s.label}>
+                          <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"4px"}}>{s.label}</div>
+                          <div style={{fontSize:"26px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{s.value.toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Progress bar */}
+                    <div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555",marginBottom:"6px"}}>
+                        <span>Archive completion</span>
+                        <span style={{color:pct>=100?"#46d160":pct>50?"#7ab3e0":"#f9c300",fontWeight:"600"}}>{pct}%</span>
+                      </div>
+                      <div style={{background:"#111",height:"10px",borderRadius:"5px",overflow:"hidden"}}>
+                        <div style={{width:`${pct}%`,background:pct>=100?"linear-gradient(90deg,#46d160,#2ea84e)":"linear-gradient(90deg,#2ea84e,#46d160)",height:"100%",borderRadius:"5px",transition:"width 0.5s ease"}}/>
+                      </div>
+                    </div>
+                    {/* Age breakdown */}
+                    {archiveStats.by_age && unarchived > 0 && (
+                      <div style={{marginTop:"14px",paddingTop:"14px",borderTop:"1px solid #1a2e1a"}}>
+                        <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"8px"}}>Unarchived posts by age</div>
+                        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+                          {[
+                            {label:">1 year", value:archiveStats.by_age.older_1y, days:365},
+                            {label:"6m–1y",   value:archiveStats.by_age.age_6m_1y, days:180},
+                            {label:"3m–6m",   value:archiveStats.by_age.age_3m_6m, days:90},
+                            {label:"1m–3m",   value:archiveStats.by_age.age_1m_3m, days:30},
+                            {label:"<1 month",value:archiveStats.by_age.newer_1m,  days:0},
+                          ].filter(b=>b.value>0).map(b=>(
+                            <button
+                              key={b.label}
+                              onClick={()=>{
+                                if(b.days===0){ toastSuccess("No quick filter for <1 month"); return }
+                                if(!window.confirm(`Archive ${b.value.toLocaleString()} posts older than ${b.days} days?`)) return
+                                setArchiveJobResult(null)
+                                axios.post(`/api/admin/archive/bulk?before_days=${b.days}`)
+                                  .then(r=>{
+                                    if(!r.data.job_id){ toastSuccess(r.data.message||"Nothing to archive"); return }
+                                    setArchiveJob({status:"pending",total:r.data.total,done:0,skipped:0,files_moved:0,errors:[]})
+                                    startArchiveJobPoll(r.data.job_id)
+                                    toastSuccess(`Archiving ${r.data.total.toLocaleString()} posts…`)
+                                  })
+                                  .catch(err=>toastError("Failed: "+(err.response?.data?.detail||err.message)))
+                              }}
+                              disabled={!!archiveJob || b.days===0}
+                              title={b.days>0?`Archive all posts older than ${b.days} days`:"Too recent to quick-archive"}
+                              style={{padding:"4px 12px",background:b.days===0?"#111":"#0e200e",border:`1px solid ${b.days===0?"#1a1a1a":"#1a4a1a"}`,borderRadius:"20px",color:b.days===0?"#333":"#46d160",cursor:b.days===0||archiveJob?"not-allowed":"pointer",fontSize:"11px",fontWeight:"500",transition:"background 0.15s, color 0.15s, opacity 0.15s",opacity:archiveJob?0.5:1}}>
+                              {b.label}: <b>{b.value.toLocaleString()}</b>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Active archive job progress */}
+              {archiveJob && (()=>{
+                const pct = archiveJob.total>0 ? Math.round(archiveJob.done/archiveJob.total*100) : 0
+                return (
+                  <div style={{background:"#131f13",borderRadius:"12px",border:"1px solid #1a3a1a",padding:"16px",marginBottom:"16px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                      <span style={{fontSize:"13px",color:"#46d160",fontWeight:"600"}}>Archiving in progress…</span>
+                      <span style={{fontSize:"12px",color:"#666",fontVariantNumeric:"tabular-nums"}}>{archiveJob.done.toLocaleString()} / {archiveJob.total.toLocaleString()} posts</span>
+                    </div>
+                    <div style={{background:"#0a120a",height:"8px",borderRadius:"4px",overflow:"hidden",marginBottom:"8px"}}>
+                      <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#46d160,#2ea84e)",height:"100%",borderRadius:"4px",transition:"width 0.4s ease"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:"16px",fontSize:"11px",color:"#555"}}>
+                      <span>{pct}% complete</span>
+                      {archiveJob.files_moved>0 && <span style={{color:"#46d160"}}>{archiveJob.files_moved.toLocaleString()} files moved</span>}
+                      {archiveJob.skipped>0 && <span style={{color:"#f9c300"}}>{archiveJob.skipped} skipped</span>}
+                      {archiveJob.errors?.length>0 && <span style={{color:"#ff6b6b"}}>{archiveJob.errors.length} error(s)</span>}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Last job result */}
+              {archiveJobResult && !archiveJob && (
+                <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"10px",padding:"12px 16px",marginBottom:"16px",fontSize:"13px",color:"#46d160"}}>
+                  Archive job complete — {archiveJobResult.done?.toLocaleString()} posts processed
+                  {archiveJobResult.files_moved>0 && <span style={{color:"#7ab3e0"}}>, {archiveJobResult.files_moved.toLocaleString()} files moved</span>}
+                  {archiveJobResult.skipped>0 && <span style={{color:"#888"}}>, {archiveJobResult.skipped} skipped</span>}
+                  {archiveJobResult.errors?.length>0 && <span style={{color:"#ff6b6b"}}>, {archiveJobResult.errors.length} error(s)</span>}
+                </div>
+              )}
+
+              {/* Expandable filter panel for targeted bulk archive */}
+              {archivePanelOpen && (
+                <div style={{background:"#141414",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"16px"}}>
+                  <div style={{fontSize:"12px",color:"#666",marginBottom:"12px",textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:"500"}}>Bulk Archive by Filter</div>
+                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"flex-end"}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                      <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>Target type</label>
+                      <select value={archiveBulkFilter.target_type} onChange={e=>setArchiveBulkFilter(f=>({...f,target_type:e.target.value,target_name:""}))}
+                        style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                        <option value="">Any</option>
+                        <option value="subreddit">r/ subreddit</option>
+                        <option value="user">u/ user</option>
+                      </select>
+                    </div>
+                    {archiveBulkFilter.target_type && (
+                      <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                        <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>{archiveBulkFilter.target_type==="subreddit"?"Subreddit name":"Username"}</label>
+                        <input type="text"
+                          placeholder={archiveBulkFilter.target_type==="subreddit"?"e.g. python":"e.g. spez"}
+                          value={archiveBulkFilter.target_name}
+                          onChange={e=>setArchiveBulkFilter(f=>({...f,target_name:e.target.value}))}
+                          style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
+                      </div>
+                    )}
+                    <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                      <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>Older than (days)</label>
+                      <input type="number" min="1" placeholder="e.g. 90"
+                        value={archiveBulkFilter.before_days}
+                        onChange={e=>setArchiveBulkFilter(f=>({...f,before_days:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"120px"}}/>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
+                      <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>Media status</label>
+                      <select value={archiveBulkFilter.media_status} onChange={e=>setArchiveBulkFilter(f=>({...f,media_status:e.target.value}))}
+                        style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                        <option value="">Any</option>
+                        <option value="done">Downloaded only</option>
+                        <option value="none">No media (text posts)</option>
+                      </select>
+                    </div>
+                    <button
+                      onClick={runBulkArchiveFiltered}
+                      disabled={!!archiveJob}
+                      style={{padding:"8px 18px",background:archiveJob?"#2a2a2a":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"8px",color:archiveJob?"#555":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"700",alignSelf:"flex-end",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                      Archive Matching
+                    </button>
+                    <button
+                      onClick={()=>{
+                        const f = archiveBulkFilter
+                        const params = new URLSearchParams()
+                        if(f.target_type && f.target_name){ params.set("target_type", f.target_type); params.set("target_name", f.target_name) }
+                        if(f.before_days) params.set("before_days", f.before_days)
+                        if(f.media_status) params.set("media_status", f.media_status)
+                        axios.post(`/api/admin/archive/bulk?${params.toString()}&dry_run=true`)
+                          .then(r=>toastSuccess(`${r.data.post_count.toLocaleString()} posts would be archived`))
+                          .catch(err=>toastError("Preview failed: "+(err.response?.data?.detail||err.message)))
+                      }}
+                      style={{padding:"8px 14px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px",alignSelf:"flex-end"}}>
+                      Preview Count
+                    </button>
+                  </div>
+                  {/* Per-subreddit quick targets */}
+                  {archiveStats?.by_subreddit?.length > 0 && (
+                    <div style={{marginTop:"14px",paddingTop:"14px",borderTop:"1px solid #222"}}>
+                      <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"8px"}}>Quick: archive by subreddit</div>
+                      <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                        {archiveStats.by_subreddit.slice(0,15).map(s=>(
+                          <button key={s.name}
+                            onClick={()=>{
+                              if(!window.confirm(`Archive all ${s.count.toLocaleString()} unarchived posts from r/${s.name}?`)) return
+                              setArchiveJobResult(null)
+                              axios.post(`/api/admin/target/subreddit/${encodeURIComponent(s.name)}/archive-all`)
+                                .then(r=>{
+                                  if(!r.data.job_id){toastSuccess(r.data.message||"Nothing to archive");return}
+                                  setArchiveJob({status:"pending",total:r.data.total,done:0,skipped:0,files_moved:0,errors:[]})
+                                  startArchiveJobPoll(r.data.job_id)
+                                  toastSuccess(`Archiving ${r.data.total.toLocaleString()} posts…`)
+                                })
+                                .catch(err=>toastError("Failed: "+(err.response?.data?.detail||err.message)))
+                            }}
+                            disabled={!!archiveJob}
+                            style={{padding:"4px 10px",background:"#111",border:"1px solid #2a2a2a",borderRadius:"20px",color:"#888",cursor:archiveJob?"not-allowed":"pointer",fontSize:"11px",transition:"background 0.15s, color 0.15s, opacity 0.15s",opacity:archiveJob?0.5:1}}>
+                            r/{s.name} <span style={{color:"#46d160",fontWeight:"600"}}>{s.count.toLocaleString()}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Scrape Targets */}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                 <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
                 <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Scrape Targets</h2>
                 <button onClick={scrapeNow}
-                  style={{padding:"6px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.3s ease"}}>
+                  style={{padding:"6px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
                   {scrapeTriggered ? "✓ Triggered" : "⚡ Scrape Now"}
                 </button>
                 <button onClick={triggerBackfill}
-                  style={{padding:"6px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"all 0.3s ease"}}>
+                  style={{padding:"6px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
                   {backfillTriggered ? "✓ Triggered" : "📜 Backfill"}
                 </button>
               </div>
@@ -1167,7 +1499,7 @@ export default function App(){
               {backfillStatus && backfillStatus.status !== "none" && (
                 <div style={{marginBottom:"16px",padding:"12px",background:backfillStatus.status==="done"?"#0d2818":backfillStatus.status==="partial"?"#2d2000":"#1e3a5f",borderRadius:"8px",border:`1px solid ${backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#2a5a8a"}`}}>
                   <div style={{fontSize:"13px",fontWeight:"600",color:backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#7ab3e0",marginBottom:"8px"}}>
-                    {backfillStatus.status === "done" ? "✓ Backfill Complete" : backfillStatus.status === "partial" ? "⚠ Backfill Partial" : "🔄 Backfill Running..."}
+                    {backfillStatus.status === "done" ? "✓ Backfill Complete" : backfillStatus.status === "partial" ? "⚠ Backfill Partial" : "🔄 Backfill Running…"}
                   </div>
                   <div style={{display:"flex",gap:"16px",fontSize:"12px",color:"#ccc",marginBottom:"8px",flexWrap:"wrap"}}>
                     <span>Total: <b style={{color:"#fff"}}>{backfillStatus.total}</b></span>
@@ -1189,13 +1521,14 @@ export default function App(){
               {/* Add target form */}
               <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
                 <select value={addTargetType} onChange={e=>setAddTargetType(e.target.value)}
-                  style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer"}}>
-                  <option value="subreddit">r/ subreddit</option>
-                  <option value="user">u/ user</option>
-                </select>
-                <input type="text" placeholder="name" value={addTargetName} onChange={e=>setAddTargetName(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&addTarget()}
-                  style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
+                   aria-label="Target type"
+                   style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer"}}>
+                   <option value="subreddit">r/ subreddit</option>
+                   <option value="user">u/ user</option>
+                 </select>
+                 <input type="text" placeholder="name…" aria-label={`Add ${addTargetType} name`} autoComplete="off" spellCheck={false} value={addTargetName} onChange={e=>setAddTargetName(e.target.value)}
+                   onKeyDown={e=>e.key==="Enter"&&addTarget()}
+                   style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
                 <button onClick={addTarget} disabled={!addTargetName.trim()}
                   style={{padding:"8px 16px",background:addTargetName.trim()?"linear-gradient(135deg,#ff4500,#ff6a33)":"#2a2a2a",border:"none",borderRadius:"8px",color:addTargetName.trim()?"#fff":"#555",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
                   + Add
@@ -1216,7 +1549,7 @@ export default function App(){
                   borderRadius:"10px",
                   border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":isExpanded?"1px solid #ff450055":"1px solid #2a2a2a",
                   opacity:t.enabled?1:0.7,
-                  transition:"all 0.2s ease",
+                  transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease",
                   display:"flex",
                   flexDirection:"column",
                   overflow:"hidden",
@@ -1286,7 +1619,9 @@ export default function App(){
                   </div>
 
                   {/* Expanded panel */}
-                  {isExpanded && (
+                  {isExpanded && (()=>{
+                    const isArchivingTarget = cardArchiving[cardKey]
+                    return (
                     <div style={{borderTop:"1px solid #2a2a2a",padding:"10px 12px",background:"#161616",display:"flex",flexDirection:"column",gap:"10px"}}>
 
                       {/* Action buttons row */}
@@ -1296,7 +1631,7 @@ export default function App(){
                             onClick={()=>scrapeTargetNow(t.type,t.name)}
                             disabled={isScraping}
                             title="Trigger an immediate scrape for this target only"
-                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isScraping?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:isScraping?"#555":"#fff",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"all 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isScraping?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:isScraping?"#555":"#fff",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
                             {isScraping ? "✓ Sent" : "⚡ Scrape"}
                           </button>
                         )}
@@ -1305,7 +1640,7 @@ export default function App(){
                             onClick={()=>backfillTargetNow(t.type,t.name)}
                             disabled={isBackfilling}
                             title="Trigger a historical backfill for this target only"
-                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isBackfilling?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"6px",color:isBackfilling?"#555":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"all 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isBackfilling?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"6px",color:isBackfilling?"#555":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
                             {isBackfilling ? "✓ Sent" : "📜 Backfill"}
                           </button>
                         )}
@@ -1320,13 +1655,23 @@ export default function App(){
                           disabled={auditLoading}
                           title="Check media integrity for this target"
                           style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:"#1e1e2a",border:"1px solid #2a2a4a",borderRadius:"6px",color:auditLoading?"#555":"#7193ff",cursor:auditLoading?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",flex:"1",justifyContent:"center",minWidth:"80px"}}>
-                          {auditLoading ? "..." : "🔍 Audit"}
+                          {auditLoading ? "…" : "🔍 Audit"}
+                        </button>
+                        <button
+                          onClick={()=>{
+                            if(!window.confirm(`Archive all ${t.post_count?.toLocaleString()||"?"} posts from ${t.type==="subreddit"?"r/":"u/"}${t.name}?\n\nThis will move their media files to the archive directory and hide them from the Browse tab.`)) return
+                            runArchiveTarget(t.type, t.name)
+                          }}
+                          disabled={!!archiveJob||isArchivingTarget||t.post_count===0}
+                          title={`Archive all posts from ${t.type==="subreddit"?"r/":"u/"}${t.name}`}
+                          style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isArchivingTarget?"#2a2a2a":"#132213",border:"1px solid #1a3a1a",borderRadius:"6px",color:isArchivingTarget?"#555":"#46d160",cursor:(archiveJob||isArchivingTarget||t.post_count===0)?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
+                          {isArchivingTarget ? "⏳" : "📦 Archive All"}
                         </button>
                       </div>
 
                       {/* Audit results */}
                       {auditLoading && (
-                        <div style={{fontSize:"11px",color:"#555",textAlign:"center",padding:"8px 0"}}>Running integrity check...</div>
+                        <div style={{fontSize:"11px",color:"#555",textAlign:"center",padding:"8px 0"}}>Running integrity check…</div>
                       )}
                       {audit && !auditLoading && (()=>{
                         const missingPct = audit.total_media > 0 ? Math.round((audit.media_missing / audit.total_media) * 100) : 0
@@ -1375,7 +1720,7 @@ export default function App(){
                         )
                       })()}
                     </div>
-                  )}
+                  )})()}
                 </div>
               )})}
             </div>
@@ -1519,9 +1864,9 @@ export default function App(){
       {/* ── BROWSE TAB ── */}
       {activeTab === "browse" && (<>
         {newPostsAvailable > 0 && !searchResults && (
-          <div onClick={refreshPosts} style={{position:"sticky",top:"73px",zIndex:90,margin:"0",padding:"12px 24px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",color:"#fff",textAlign:"center",cursor:"pointer",fontSize:"14px",fontWeight:"600",boxShadow:"0 4px 20px rgba(255,69,0,0.4)",transition:"all 0.2s ease",letterSpacing:"0.3px"}}>
+          <button onClick={refreshPosts} aria-label={`${newPostsAvailable} new post${newPostsAvailable>1?"s":""} available — click to refresh`} style={{position:"sticky",top:"73px",zIndex:90,width:"100%",margin:"0",padding:"12px 24px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",color:"#fff",textAlign:"center",cursor:"pointer",fontSize:"14px",fontWeight:"600",boxShadow:"0 4px 20px rgba(255,69,0,0.4)",transition:"opacity 0.2s ease",letterSpacing:"0.3px",border:"none"}}>
             ↑ {newPostsAvailable} new post{newPostsAvailable>1?"s":""} — click to refresh
-          </div>
+          </button>
         )}
 
         {/* ── FILTER / SORT BAR ── */}
@@ -1532,8 +1877,10 @@ export default function App(){
               <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                 <button
                   onClick={()=>setFilterBarOpen(o=>!o)}
-                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:filterBarOpen||hasActiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${filterBarOpen||hasActiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"all 0.2s"}}>
-                  <span style={{fontSize:"14px"}}>⚙</span>
+                  aria-label={filterBarOpen?"Collapse filters":"Expand filters"}
+                  aria-expanded={filterBarOpen}
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:filterBarOpen||hasActiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${filterBarOpen||hasActiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"background 0.2s, border-color 0.2s, color 0.2s"}}>
+                  <span style={{fontSize:"14px"}} aria-hidden="true">⚙</span>
                   Filters
                   {hasActiveFilters() && <span style={{background:"#ff4500",color:"#fff",borderRadius:"10px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
                   <span style={{fontSize:"10px",opacity:0.6,marginLeft:"2px"}}>{filterBarOpen?"▲":"▼"}</span>
@@ -1565,7 +1912,8 @@ export default function App(){
               <div style={{padding:"12px 16px 16px",borderTop:"1px solid #1a1a1a"}}>
                 <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
                   <input
-                    type="text" inputMode="text" placeholder="r/ subreddit"
+                    type="text" inputMode="text" placeholder="r/ subreddit…"
+                    aria-label="Filter by subreddit" autoComplete="off" spellCheck={false}
                     value={filterSubreddit}
                     onChange={e=>{
                       const v = e.target.value
@@ -1578,7 +1926,8 @@ export default function App(){
                     style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
                   />
                   <input
-                    type="text" inputMode="text" placeholder="u/ author"
+                    type="text" inputMode="text" placeholder="u/ author…"
+                    aria-label="Filter by author" autoComplete="off" spellCheck={false}
                     value={filterAuthor}
                     onChange={e=>{
                       const v = e.target.value
@@ -1596,7 +1945,7 @@ export default function App(){
                       {value:"video", label:"🎬 Videos"},
                       {value:"text", label:"📝 Text"},
                     ].map(mt => (
-                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:filterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s",minHeight:"36px"}}>
+                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:filterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"background 0.15s, color 0.15s, opacity 0.15s",minHeight:"36px"}}>
                         <input type="checkbox" checked={filterMediaTypes.includes(mt.value)} onChange={e=>{
                           const newTypes = e.target.checked
                             ? [...filterMediaTypes, mt.value]
@@ -1638,7 +1987,7 @@ export default function App(){
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
               {searchResults.map(p=>(
-                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
+                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease"}}>
                   {p.is_video || p.video_url ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
                       {(p.thumb_url || p.video_url) && (
@@ -1671,10 +2020,13 @@ export default function App(){
           <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"16px"}} className="mobile-grid-2">
               {posts.map(p=>(
-                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
+                <article key={p.id}
+                  onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
+                  onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();setGalleryIdx(0);setSelectedPost(p)}}}
                   onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
+                  role="button" tabIndex={0} aria-label={p.title}
                   className="post-card"
-                  style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",transition:"all 0.25s ease",transform:hoveredCard===p.id?"translateY(-4px)":"translateY(0)",boxShadow:hoveredCard===p.id?"0 12px 40px rgba(255,69,0,0.15)":"0 4px 12px rgba(0,0,0,0.3)",border:"1px solid #2a2a2a"}}>
+                  style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a"}}>
                   {p.is_video ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
                       {/* Hover video preview */}
@@ -1690,12 +2042,12 @@ export default function App(){
                           {(p.thumb_url || p.preview_url) && (
                              <img
                                src={p.thumb_url || p.preview_url}
-                               loading="lazy" decoding="async"
+                               alt="" loading="lazy" decoding="async"
                                style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}}
                                onError={e=>e.target.style.display="none"}
                              />
                           )}
-                          <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)",backdropFilter:"blur(2px)"}}>
+                          <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)",backdropFilter:"blur(2px)"}}>
                             <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #ff4500",marginLeft:"4px"}}/>
                           </div>
                         </div>
@@ -1711,7 +2063,7 @@ export default function App(){
                     </div>
                   ) : (p.url || p.image_urls?.[0]) ? (
                     <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
-                      <img src={p.url || p.image_urls?.[0]} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
+                      <img src={p.url || p.image_urls?.[0]} alt={p.title} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
                       {/* Gallery indicator */}
                       {p.image_urls?.length > 1 && (
                         <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>
@@ -1735,24 +2087,24 @@ export default function App(){
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
                       </div>
                       <div style={{display:"flex",gap:"4px",flexShrink:0}}>
-                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete"
-                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
-                          🗑
+                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} aria-label="Delete post"
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                          <span aria-hidden="true">🗑</span>
                         </button>
-                        <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} title="Hide"
-                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
-                          👁
+                        <button onClick={e=>{e.stopPropagation();archivePost(p.id)}} aria-label="Hide post"
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                          <span aria-hidden="true">👁</span>
                         </button>
                       </div>
                     </div>
-                </div>
+                </article>
               ))}
             </div>
             {isLoading && (
               <div style={{padding:"40px",textAlign:"center",color:"#ff4500",fontSize:"14px"}}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
                   <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
-                  Loading posts...
+                  Loading posts…
                 </div>
               </div>
             )}
@@ -1764,7 +2116,7 @@ export default function App(){
             <div ref={loader} style={{padding:"60px",textAlign:"center",color:"#444",fontSize:"14px"}}>
               <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
                 <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
-                Loading more posts...
+                Loading more posts…
               </div>
               <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
             </div>
@@ -1781,8 +2133,10 @@ export default function App(){
               <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
                 <button
                   onClick={()=>setArchiveFilterBarOpen(o=>!o)}
-                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveArchiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"all 0.2s"}}>
-                  <span>👁</span> Filters
+                  aria-label={archiveFilterBarOpen?"Collapse hidden filters":"Expand hidden filters"}
+                  aria-expanded={archiveFilterBarOpen}
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveArchiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"background 0.2s, border-color 0.2s, color 0.2s"}}>
+                  <span aria-hidden="true">👁</span> Filters
                   {hasActiveArchiveFilters() && <span style={{background:"#ff4500",color:"#fff",borderRadius:"10px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
                   <span style={{fontSize:"10px",opacity:0.6}}>{archiveFilterBarOpen?"▲":"▼"}</span>
                 </button>
@@ -1803,7 +2157,7 @@ export default function App(){
                 )}
                 <div style={{position:"relative"}}>
                   <span style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"15px"}}>⌕</span>
-                  <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search hidden..." value={archiveSearch} onChange={handleArchiveSearch}
+                  <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search hidden…" aria-label="Search hidden posts" autoComplete="off" spellCheck={false} value={archiveSearch} onChange={handleArchiveSearch}
                     style={{padding:"8px 12px 8px 36px",borderRadius:"20px",border:"1px solid #333",width:"200px",background:"#1a1a1a",color:"#fff",fontSize:"13px",outline:"none"}}/>
                 </div>
               </div>
@@ -1811,14 +2165,14 @@ export default function App(){
             {archiveFilterBarOpen && (
               <div style={{padding:"12px 16px 16px",borderTop:"1px solid #1a1a1a"}}>
                 <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
-                  <input type="text" inputMode="text" placeholder="r/ subreddit" value={archiveFilterSubreddit}
+                  <input type="text" inputMode="text" placeholder="r/ subreddit…" aria-label="Filter hidden by subreddit" autoComplete="off" spellCheck={false} value={archiveFilterSubreddit}
                     onChange={e=>{
                       const v=e.target.value; setArchiveFilterSubreddit(v)
                       clearTimeout(archiveSearchTimeout._sub)
                       archiveSearchTimeout._sub=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)
                     }}
                     style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
-                  <input type="text" inputMode="text" placeholder="u/ author" value={archiveFilterAuthor}
+                  <input type="text" inputMode="text" placeholder="u/ author…" aria-label="Filter hidden by author" autoComplete="off" spellCheck={false} value={archiveFilterAuthor}
                     onChange={e=>{
                       const v=e.target.value; setArchiveFilterAuthor(v)
                       clearTimeout(archiveSearchTimeout._auth)
@@ -1827,7 +2181,7 @@ export default function App(){
                     style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
                   <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
                     {[{value:"image",label:"🖼 Images"},{value:"video",label:"🎬 Videos"},{value:"text",label:"📝 Text"}].map(mt=>(
-                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:archiveFilterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"all 0.15s",minHeight:"36px"}}>
+                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:archiveFilterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"background 0.15s, color 0.15s, opacity 0.15s",minHeight:"36px"}}>
                         <input type="checkbox" checked={archiveFilterMediaTypes.includes(mt.value)} onChange={e=>{
                           const newTypes=e.target.checked?[...archiveFilterMediaTypes,mt.value]:archiveFilterMediaTypes.filter(t=>t!==mt.value)
                           setArchiveFilterMediaTypes(newTypes)
@@ -1862,7 +2216,7 @@ export default function App(){
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archiveSearchResults.map(p=>(
-                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"all 0.2s ease"}}>
+                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease"}}>
                     <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit?`r/${p.subreddit}`:""}</div>
                     <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
                     {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
@@ -1879,8 +2233,10 @@ export default function App(){
               )}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archivePosts.map(p=>(
-                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
+                   <article key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}}
+                    onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();setGalleryIdx(0);setSelectedPost(p)}}}
                     onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
+                    role="button" tabIndex={0} aria-label={p.title}
                     className="post-card"
                     style={{background:"linear-gradient(145deg,#1a1a1a,#141414)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",border:"1px solid #222",opacity:0.9}}>
                     {p.is_video ? (
@@ -1889,7 +2245,7 @@ export default function App(){
                           <video src={p.video_url} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                         ) : (
                           <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
-                            {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} loading="lazy" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>}
+                            {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} alt="" loading="lazy" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.6}} onError={e=>e.target.style.display="none"}/>}
                             <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(100,100,100,0.6)",display:"flex",alignItems:"center",justifyContent:"center"}}>
                               <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #888",marginLeft:"4px"}}/>
                             </div>
@@ -1905,7 +2261,7 @@ export default function App(){
                       </div>
                     ) : (p.url||p.image_urls?.[0]) ? (
                       <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
-                        <img src={p.url||p.image_urls?.[0]} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.85}} onError={e=>e.target.style.display="none"}/>
+                         <img src={p.url||p.image_urls?.[0]} alt={p.title} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.85}} onError={e=>e.target.style.display="none"}/>
                         {p.image_urls?.length>1 && (
                           <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>1/{p.image_urls.length}</div>
                         )}
@@ -1927,18 +2283,18 @@ export default function App(){
                         <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#888"}}>{p.title}</div>
                       </div>
                       <div style={{display:"flex",gap:"4px",flexShrink:0}}>
-                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} title="Delete"
-                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          🗑
-                        </button>
-                        <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} title="Unhide"
-                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          👁
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                        <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} aria-label="Delete post"
+                           style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                           <span aria-hidden="true">🗑</span>
+                         </button>
+                         <button onClick={e=>{e.stopPropagation();unarchivePost(p.id)}} aria-label="Unhide post"
+                           style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                           <span aria-hidden="true">👁</span>
+                         </button>
+                       </div>
+                     </div>
+                   </article>
+                 ))}
               </div>
               {archiveIsLoading && (
                 <div style={{padding:"40px",textAlign:"center",color:"#555",fontSize:"14px"}}>
@@ -1968,10 +2324,10 @@ export default function App(){
               </ul>
               {!resetResult ? (<>
                 <p style={{margin:"0 0 12px",color:"#666",fontSize:"13px"}}>Type <strong style={{color:"#ff4444",fontFamily:"monospace"}}>RESET</strong> to confirm:</p>
-                <input autoFocus type="text" value={resetInput} onChange={e=>setResetInput(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&resetInput==="RESET"&&!resetLoading&&doReset()}
-                  placeholder="RESET"
-                  style={{width:"100%",boxSizing:"border-box",padding:"12px 16px",borderRadius:"10px",border:`1px solid ${resetInput==="RESET"?"#ff4444":"#333"}`,background:"#141414",color:"#fff",fontSize:"16px",fontFamily:"monospace",outline:"none",marginBottom:"20px",transition:"border-color 0.2s"}}/>
+                 <input type="text" aria-label='Type RESET to confirm' autoComplete="off" spellCheck={false} value={resetInput} onChange={e=>setResetInput(e.target.value)}
+                   onKeyDown={e=>e.key==="Enter"&&resetInput==="RESET"&&!resetLoading&&doReset()}
+                   placeholder="RESET"
+                   style={{width:"100%",boxSizing:"border-box",padding:"12px 16px",borderRadius:"10px",border:`1px solid ${resetInput==="RESET"?"#ff4444":"#333"}`,background:"#141414",color:"#fff",fontSize:"16px",fontFamily:"monospace",outline:"none",marginBottom:"20px",transition:"border-color 0.2s"}}/>
               </>) : (
                 <div style={{background:"#0a1a0a",border:"1px solid #1a4a1a",borderRadius:"10px",padding:"16px",marginBottom:"20px",fontSize:"13px",color:"#46d160"}}>
                   {resetResult.error
@@ -1988,8 +2344,8 @@ export default function App(){
               </button>
               {!resetResult && (
                 <button onClick={doReset} disabled={resetInput!=="RESET"||resetLoading}
-                  style={{padding:"12px 24px",background:resetInput==="RESET"?"#cc0000":"#330000",border:"1px solid #550000",borderRadius:"10px",color:resetInput==="RESET"?"#fff":"#555",cursor:resetInput==="RESET"?"pointer":"not-allowed",fontSize:"14px",fontWeight:"600",transition:"all 0.2s"}}>
-                  {resetLoading?"Resetting...":"Confirm Reset"}
+                  style={{padding:"12px 24px",background:resetInput==="RESET"?"#cc0000":"#330000",border:"1px solid #550000",borderRadius:"10px",color:resetInput==="RESET"?"#fff":"#555",cursor:resetInput==="RESET"?"pointer":"not-allowed",fontSize:"14px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                  {resetLoading?"Resetting…":"Confirm Reset"}
                 </button>
               )}
             </div>
@@ -2089,33 +2445,36 @@ export default function App(){
               </div>
             ) : (selectedPost.url || selectedPost.image_urls?.[0]) ? (
               <div style={{background:"#000",position:"relative",userSelect:"none"}}>
-                <img 
-                  src={selectedPost.image_urls?.[galleryIdx] || selectedPost.url || selectedPost.image_urls?.[0]} 
-                  style={{width:"100%",maxHeight:"460px",objectFit:"contain",display:"block"}} 
-                  onError={e=>e.target.style.display="none"}
-                  draggable={false}
+                 <img 
+                   src={selectedPost.image_urls?.[galleryIdx] || selectedPost.url || selectedPost.image_urls?.[0]} 
+                   alt={selectedPost.title}
+                   style={{width:"100%",maxHeight:"460px",objectFit:"contain",display:"block"}} 
+                   onError={e=>e.target.style.display="none"}
+                   draggable={false}
                 />
                 {/* Gallery navigation - large touch targets */}
                 {selectedPost.image_urls?.length > 1 && (
                   <>
-                    <button 
-                      onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.max(0,i-1))}} 
-                      disabled={galleryIdx===0}
-                      style={{position:"absolute",top:"50%",left:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===0?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s",WebkitTapHighlightColor:"transparent"}}>
-                      ‹
-                    </button>
-                    <button 
-                      onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.min(selectedPost.image_urls.length-1,i+1))}} 
-                      disabled={galleryIdx===selectedPost.image_urls.length-1}
-                      style={{position:"absolute",top:"50%",right:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===selectedPost.image_urls.length-1?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s",WebkitTapHighlightColor:"transparent"}}>
-                      ›
-                    </button>
-                    {/* Dot indicators */}
-                    <div style={{position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",display:"flex",gap:"5px",zIndex:10}}>
-                      {selectedPost.image_urls.slice(0, Math.min(selectedPost.image_urls.length, 10)).map((_,i)=>(
-                        <button key={i} onClick={e=>{e.stopPropagation();setGalleryIdx(i)}}
-                          style={{width:i===galleryIdx?"20px":"7px",height:"7px",borderRadius:"4px",border:"none",background:i===galleryIdx?"#ff4500":"rgba(255,255,255,0.4)",cursor:"pointer",padding:0,transition:"all 0.25s ease",WebkitTapHighlightColor:"transparent"}}/>
-                      ))}
+                     <button 
+                       aria-label="Previous image"
+                       onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.max(0,i-1))}} 
+                       disabled={galleryIdx===0}
+                       style={{position:"absolute",top:"50%",left:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===0?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s",WebkitTapHighlightColor:"transparent"}}>
+                       <span aria-hidden="true">‹</span>
+                     </button>
+                     <button 
+                       aria-label="Next image"
+                       onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.min(selectedPost.image_urls.length-1,i+1))}} 
+                       disabled={galleryIdx===selectedPost.image_urls.length-1}
+                       style={{position:"absolute",top:"50%",right:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===selectedPost.image_urls.length-1?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s",WebkitTapHighlightColor:"transparent"}}>
+                       <span aria-hidden="true">›</span>
+                     </button>
+                     {/* Dot indicators */}
+                     <div style={{position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",display:"flex",gap:"5px",zIndex:10}}>
+                       {selectedPost.image_urls.slice(0, Math.min(selectedPost.image_urls.length, 10)).map((_,i)=>(
+                         <button key={i} aria-label={`Go to image ${i+1}`} aria-current={i===galleryIdx?"true":undefined} onClick={e=>{e.stopPropagation();setGalleryIdx(i)}}
+                           style={{width:i===galleryIdx?"20px":"7px",height:"7px",borderRadius:"4px",border:"none",background:i===galleryIdx?"#ff4500":"rgba(255,255,255,0.4)",cursor:"pointer",padding:0,transition:"width 0.25s ease, background 0.25s ease",WebkitTapHighlightColor:"transparent"}}/>
+                       ))}
                       {selectedPost.image_urls.length > 10 && <span style={{color:"rgba(255,255,255,0.5)",fontSize:"10px",lineHeight:"7px"}}>+{selectedPost.image_urls.length-10}</span>}
                     </div>
                     {/* Counter badge */}
@@ -2146,25 +2505,25 @@ export default function App(){
 
               {/* Actions row */}
               <div style={{marginBottom:"20px",display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                <button onClick={()=>deletePost(selectedPost.id)}
-                  style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"10px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
-                  🗑 Delete
-                </button>
-                {selectedPost.archived ? (
-                  <button onClick={()=>unarchivePost(selectedPost.id)}
-                    style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
-                    ↩ Unhide
-                  </button>
-                ) : (
-                  <button onClick={()=>archivePost(selectedPost.id)}
-                    style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
-                    👁 Hide
-                  </button>
-                )}
-                <button onClick={()=>setSelectedPost(null)}
-                  style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"10px",color:"#555",cursor:"pointer",fontSize:"13px",marginLeft:"auto",minHeight:"44px"}}>
-                  ✕ Close
-                </button>
+                 <button onClick={()=>deletePost(selectedPost.id)}
+                   style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"10px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                   <span aria-hidden="true">🗑</span> Delete
+                 </button>
+                 {selectedPost.archived ? (
+                   <button onClick={()=>unarchivePost(selectedPost.id)}
+                     style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                     ↩ Unhide
+                   </button>
+                 ) : (
+                   <button onClick={()=>archivePost(selectedPost.id)}
+                     style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                     <span aria-hidden="true">👁</span> Hide
+                   </button>
+                 )}
+                 <button onClick={()=>setSelectedPost(null)} aria-label="Close post"
+                   style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"10px",color:"#555",cursor:"pointer",fontSize:"13px",marginLeft:"auto",minHeight:"44px"}}>
+                   ✕ Close
+                 </button>
               </div>
 
               {/* Comments */}
@@ -2201,7 +2560,7 @@ export default function App(){
       )}
 
       {/* ── TOAST NOTIFICATIONS ── */}
-      <div style={{position:"fixed",bottom:"max(24px, env(safe-area-inset-bottom, 24px))",left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",gap:"8px",zIndex:1000,pointerEvents:"none",width:"min(400px, calc(100vw - 32px))"}}>
+      <div role="status" aria-live="polite" aria-atomic="false" style={{position:"fixed",bottom:"max(24px, env(safe-area-inset-bottom, 24px))",left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",gap:"8px",zIndex:1000,pointerEvents:"none",width:"min(400px, calc(100vw - 32px))"}}>
         {toasts.map(t=>(
           <div key={t.id} style={{
             background:t.type==="success"?"linear-gradient(135deg,#0d2818,#1a1a1a)":t.type==="error"?"linear-gradient(135deg,#2d0a00,#1a1a1a)":"#1e1e1e",
@@ -2218,7 +2577,7 @@ export default function App(){
             gap:"10px",
             pointerEvents:"auto"
           }}>
-            <span style={{fontSize:"16px"}}>{t.type==="success"?"✓":t.type==="error"?"✗":"ⓘ"}</span>
+            <span style={{fontSize:"16px"}} aria-hidden="true">{t.type==="success"?"✓":t.type==="error"?"✗":"ⓘ"}</span>
             {t.message}
           </div>
         ))}
@@ -2260,8 +2619,9 @@ export default function App(){
             </button>
             <button
               onClick={()=>setShowInstallBanner(false)}
+              aria-label="Dismiss install prompt"
               style={{padding:"7px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#555",cursor:"pointer",fontSize:"12px"}}>
-              ✕
+              <span aria-hidden="true">✕</span>
             </button>
           </div>
         </div>
