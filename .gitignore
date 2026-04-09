@@ -16,3 +16,5 @@ __pycache__/
 
 targets.txt
 git-purge-ignored.sh
+
+forgejo-github-mirror-pat.txt

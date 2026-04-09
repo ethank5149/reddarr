@@ -1,0 +1,17 @@
+name: Mirror to GitHub
+on: [push]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push to GitHub
+        run: |
+          git remote add github https://${{ secrets.USER_GITHUB }}:${{ secrets.PAT_GITHUB }}@github.com/${{ secrets.USER_GITHUB }}/${{ github.event.repository.name }}.git
+          git push github --all --force
+          git push github --tags --force
