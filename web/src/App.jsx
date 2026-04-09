@@ -371,11 +371,7 @@ export default function App(){
               })),
               ...prev
             ].slice(0,50))
-            if(filtersRef.current.sort === "last_added"){
-              refreshPosts()
-            } else {
-              setNewPostsAvailable(n => n + data.new_posts.length)
-            }
+            refreshPosts()
           }
           if(data.new_media && data.new_media.length > 0){
             if(filtersRef.current.sort === "last_added"){
