@@ -318,17 +318,6 @@ def icon():
     raise HTTPException(status_code=404, detail="Not Found")
 
 
-
-# SPA catch-all: serve index.html for all client-side routes
-@app.get("/{full_path:path}")
-def spa_catchall(full_path: str):
-    if full_path.startswith(("api/", "media/", "hidden-media/", "thumb/", "hidden-thumb/", "static/", "icon.png")):
-        raise HTTPException(status_code=404, detail="Not Found")
-    idx = DIST_DIR / "index.html"
-    if idx.exists():
-        return FileResponse(str(idx))
-    return {"detail": "Not Found"}
-
 @app.get("/api/debug/{post_id}")
 def debug_post(post_id: str):
     with get_db_cursor() as cur:
@@ -3598,3 +3587,15 @@ def posts_by_date(
             }
             for r in cur.fetchall()
         ]
+
+
+# SPA catch-all: serve index.html for all client-side routes
+# MUST be the last route so it doesn't shadow /api/* handlers
+@app.get("/{full_path:path}")
+def spa_catchall(full_path: str):
+    if full_path.startswith(("api/", "media/", "hidden-media/", "thumb/", "hidden-thumb/", "static/", "icon.png")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    idx = DIST_DIR / "index.html"
+    if idx.exists():
+        return FileResponse(str(idx))
+    return {"detail": "Not Found"}
