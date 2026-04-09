@@ -85,6 +85,7 @@ services:
       REDIS_HOST: redis
     secrets:
       - api_key
+      - admin_password
     depends_on:
       db:
         condition: service_healthy
@@ -170,3 +171,5 @@ secrets:
     file: ./secrets/reddit_client_secret
   api_key:
     file: ./secrets/api_key
+  admin_password:
+    file: ./secrets/admin_password

@@ -133,6 +133,17 @@ async def metrics_middleware(request: Request, call_next):
     return response
 
 
+def get_admin_password():
+    secret_path = os.environ.get("ADMIN_PASSWORD_FILE", "/run/secrets/admin_password")
+    if os.path.exists(secret_path):
+        try:
+            with open(secret_path, "r") as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    return os.environ.get("ADMIN_PASSWORD", "admin")
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -140,7 +151,7 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/login")
 def login(req: LoginRequest):
-    if req.username == "admin" and req.password == "admin":
+    if req.username == "admin" and req.password == get_admin_password():
         return {"token": "admin-token-123", "role": "admin"}
     elif req.username == "guest" and req.password == "guest":
         return {"token": "guest-token-123", "role": "guest"}
@@ -1427,6 +1438,50 @@ def list_authors(limit: int = Query(50, ge=1, le=200)):
 def admin_stats():
     with get_db_cursor() as cur:
         cur.execute("""
+            WITH sub_stats AS (
+                SELECT 
+                    LOWER(p.subreddit) as name,
+                    COUNT(p.id) as post_count,
+                    COUNT(p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d
+                FROM targets t
+                JOIN posts p ON LOWER(p.subreddit) = LOWER(t.name)
+                WHERE t.type = 'subreddit'
+                GROUP BY LOWER(p.subreddit)
+            ),
+            user_stats AS (
+                SELECT 
+                    LOWER(p.author) as name,
+                    COUNT(p.id) as post_count,
+                    COUNT(p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d
+                FROM targets t
+                JOIN posts p ON LOWER(p.author) = LOWER(t.name)
+                WHERE t.type = 'user'
+                GROUP BY LOWER(p.author)
+            ),
+            sub_media_stats AS (
+                SELECT 
+                    LOWER(p.subreddit) as name,
+                    COUNT(m.id) as total_media,
+                    COUNT(m.id) FILTER (WHERE m.status = 'done') AS downloaded_media,
+                    COUNT(m.id) FILTER (WHERE m.status = 'pending') AS pending_media
+                FROM targets t
+                JOIN posts p ON LOWER(p.subreddit) = LOWER(t.name)
+                JOIN media m ON m.post_id = p.id
+                WHERE t.type = 'subreddit'
+                GROUP BY LOWER(p.subreddit)
+            ),
+            user_media_stats AS (
+                SELECT 
+                    LOWER(p.author) as name,
+                    COUNT(m.id) as total_media,
+                    COUNT(m.id) FILTER (WHERE m.status = 'done') AS downloaded_media,
+                    COUNT(m.id) FILTER (WHERE m.status = 'pending') AS pending_media
+                FROM targets t
+                JOIN posts p ON LOWER(p.author) = LOWER(t.name)
+                JOIN media m ON m.post_id = p.id
+                WHERE t.type = 'user'
+                GROUP BY LOWER(p.author)
+            )
             SELECT
                 t.type,
                 t.name,
@@ -1434,16 +1489,16 @@ def admin_stats():
                 t.status,
                 t.icon_url,
                 t.last_created,
-                COUNT(DISTINCT p.id) AS post_count,
-                COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
-                COUNT(DISTINCT m.id) AS total_media,
-                COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
-                COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
+                COALESCE(CASE WHEN t.type = 'subreddit' THEN ss.post_count ELSE us.post_count END, 0) AS post_count,
+                COALESCE(CASE WHEN t.type = 'subreddit' THEN ss.posts_7d ELSE us.posts_7d END, 0) AS posts_7d,
+                COALESCE(CASE WHEN t.type = 'subreddit' THEN sms.total_media ELSE ums.total_media END, 0) AS total_media,
+                COALESCE(CASE WHEN t.type = 'subreddit' THEN sms.downloaded_media ELSE ums.downloaded_media END, 0) AS downloaded_media,
+                COALESCE(CASE WHEN t.type = 'subreddit' THEN sms.pending_media ELSE ums.pending_media END, 0) AS pending_media
             FROM targets t
-            LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
-                              OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
-            LEFT JOIN media m ON m.post_id = p.id
-            GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
+            LEFT JOIN sub_stats ss ON t.type = 'subreddit' AND LOWER(t.name) = ss.name
+            LEFT JOIN user_stats us ON t.type = 'user' AND LOWER(t.name) = us.name
+            LEFT JOIN sub_media_stats sms ON t.type = 'subreddit' AND LOWER(t.name) = sms.name
+            LEFT JOIN user_media_stats ums ON t.type = 'user' AND LOWER(t.name) = ums.name
             ORDER BY t.type, t.name
         """)
         targets = []

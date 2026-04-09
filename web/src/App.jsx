@@ -46,19 +46,19 @@ export default function App(){
   const location = useLocation()
   const navigate = useNavigate()
 
-  // Parse route — default landing is subreddits (Sonarr-style)
+  // Parse route — default landing is library
   const pathParts = location.pathname.split('/').filter(Boolean)
-  let activeTab = "subreddits"
+  let activeTab = "library"
   let targetDetailType = null
   let targetDetailName = null
-  if(pathParts[0] === "subreddits" || pathParts.length === 0) {
+  if(pathParts[0] === "library" || pathParts.length === 0) {
+    activeTab = "library"
+  } else if(pathParts[0] === "subreddits") {
     activeTab = "subreddits"
-    if(pathParts[0] === "subreddits" && pathParts[1]) { targetDetailType = "subreddit"; targetDetailName = decodeURIComponent(pathParts[1]) }
+    if(pathParts[1]) { targetDetailType = "subreddit"; targetDetailName = decodeURIComponent(pathParts[1]) }
   } else if(pathParts[0] === "users") {
     activeTab = "users"
     if(pathParts[1]) { targetDetailType = "user"; targetDetailName = decodeURIComponent(pathParts[1]) }
-  } else if(pathParts[0] === "library") {
-    activeTab = "library"
   } else if(pathParts[0] === "archive") {
     activeTab = "archive"
   } else if(pathParts[0] === "wanted") {
@@ -67,9 +67,9 @@ export default function App(){
     activeTab = "system"
   }
 
-  // Redirect bare / to /subreddits
+  // Redirect bare / to /library
   useEffect(() => {
-    if(location.pathname === "/") navigate("/subreddits", {replace: true})
+    if(location.pathname === "/") navigate("/library", {replace: true})
   }, [location.pathname])
 
   // View mode for index pages
@@ -1034,9 +1034,9 @@ export default function App(){
   // Sidebar nav items (Sonarr/Radarr style)
   const sidebarWidth = sidebarCollapsed ? 60 : 200
   const navItems = [
+    {to:"/library",label:"All Posts",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>)},
     {to:"/subreddits",label:"Subreddits",match:"subreddits",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>),count:subredditTargets.length},
     {to:"/users",label:"Users",match:"users",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>),count:userTargets.length},
-    {to:"/library",label:"All Posts",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>)},
     role === "admin" && {to:"/archive",label:"Hidden",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>)},
     role === "admin" && {to:"/wanted",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
     role === "admin" && {to:"/system",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
@@ -1348,15 +1348,17 @@ export default function App(){
                   <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}}/>
                   <span style={{fontSize:"14px",color:"#5a7b9a"}}>{items.length} {typeLabel}{items.length!==1?"s":""}</span>
                 </div>
-                <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
-                  <input type="text" placeholder={`Add ${typeLabel}…`} aria-label={`Add ${typeLabel}`} autoComplete="off" spellCheck={false} value={addTargetType===typeLabel?addTargetName:""} onChange={e=>{setAddTargetType(typeLabel);setAddTargetName(e.target.value)}}
-                    onKeyDown={e=>{if(e.key==="Enter"){setAddTargetType(typeLabel);addTarget()}}}
-                    style={{padding:"8px 12px",background:"#0b1728",border:"1px solid #1c2a3f",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"180px"}}/>
-                  <button onClick={()=>{setAddTargetType(typeLabel);addTarget()}} disabled={!addTargetName.trim()||addTargetType!==typeLabel}
-                    style={{padding:"8px 16px",background:addTargetName.trim()&&addTargetType===typeLabel?"linear-gradient(135deg,#35c5f4,#5fd4f8)":"#243447",border:"none",borderRadius:"3px",color:addTargetName.trim()&&addTargetType===typeLabel?"#f5f7fa":"#5a7b9a",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
-                    + Add
-                  </button>
-                </div>
+                {role === "admin" && (
+                  <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+                    <input type="text" placeholder={`Add ${typeLabel}…`} aria-label={`Add ${typeLabel}`} autoComplete="off" spellCheck={false} value={addTargetType===typeLabel?addTargetName:""} onChange={e=>{setAddTargetType(typeLabel);setAddTargetName(e.target.value)}}
+                      onKeyDown={e=>{if(e.key==="Enter"){setAddTargetType(typeLabel);addTarget()}}}
+                      style={{padding:"8px 12px",background:"#0b1728",border:"1px solid #1c2a3f",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"180px"}}/>
+                    <button onClick={()=>{setAddTargetType(typeLabel);addTarget()}} disabled={!addTargetName.trim()||addTargetType!==typeLabel}
+                      style={{padding:"8px 16px",background:addTargetName.trim()&&addTargetType===typeLabel?"linear-gradient(135deg,#35c5f4,#5fd4f8)":"#243447",border:"none",borderRadius:"3px",color:addTargetName.trim()&&addTargetType===typeLabel?"#f5f7fa":"#5a7b9a",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
+                      + Add
+                    </button>
+                  </div>
+                )}
               </div>
 
               {items.length === 0 && (
@@ -1415,17 +1417,19 @@ export default function App(){
                     <div style={{width:`${currentTarget.total_media>0?Math.min(100,Math.round(currentTarget.downloaded_media/currentTarget.total_media*100)):0}%`,height:"100%",background:"linear-gradient(90deg,#35c5f4,#5fd4f8)",transition:"width 0.3s"}}/>
                   </div>
                   {/* Action buttons */}
-                  <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                    <button onClick={()=>toggleTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:currentTarget.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"3px",color:currentTarget.enabled?"#000":"#5a7b9a",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
-                      {currentTarget.enabled?"Enabled":"Disabled"}
-                    </button>
-                    <button onClick={()=>scrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Scrape</button>
-                    <button onClick={()=>backfillTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📜 Backfill</button>
-                    <button onClick={()=>rescanTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescan</button>
-                    <button onClick={()=>rescrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2d2000",border:"1px solid #4a3a00",borderRadius:"3px",color:"#f9c300",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescrape Missing</button>
-                    <button onClick={()=>{if(window.confirm(`Archive all posts from ${targetDetailType==="subreddit"?"r/":"u/"}${currentTarget.name}?`))runArchiveTarget(currentTarget.type,currentTarget.name)}} style={{padding:"6px 14px",background:"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📦 Archive All</button>
-                    <button onClick={()=>deleteTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>✕ Remove</button>
-                  </div>
+                  {role === "admin" && (
+                    <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+                      <button onClick={()=>toggleTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:currentTarget.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"3px",color:currentTarget.enabled?"#000":"#5a7b9a",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
+                        {currentTarget.enabled?"Enabled":"Disabled"}
+                      </button>
+                      <button onClick={()=>scrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Scrape</button>
+                      <button onClick={()=>backfillTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📜 Backfill</button>
+                      <button onClick={()=>rescanTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescan</button>
+                      <button onClick={()=>rescrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2d2000",border:"1px solid #4a3a00",borderRadius:"3px",color:"#f9c300",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescrape Missing</button>
+                      <button onClick={()=>{if(window.confirm(`Archive all posts from ${targetDetailType==="subreddit"?"r/":"u/"}${currentTarget.name}?`))runArchiveTarget(currentTarget.type,currentTarget.name)}} style={{padding:"6px 14px",background:"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📦 Archive All</button>
+                      <button onClick={()=>deleteTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>✕ Remove</button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
