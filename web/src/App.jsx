@@ -972,14 +972,13 @@ export default function App(){
   }
 
   const LiveDot = ({connected}) => (
-    <div style={{display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",color:connected?"#46d160":"#666"}}>
+    <div title={connected?"Connected":"Connecting…"} style={{display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{
         width:"8px",height:"8px",borderRadius:"50%",
-        background:connected?"#46d160":"#444",
+        background:connected?"#46d160":"#3a5068",
         boxShadow:connected?"0 0 6px #46d160":"none",
         animation:connected?"pulse 2s ease-in-out infinite":"none"
       }}/>
-      {connected?"LIVE":"connecting…"}
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </div>
   )
@@ -1013,16 +1012,16 @@ export default function App(){
     return (
       <div style={{marginBottom:"40px"}}>
         <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
-          <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+          <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}} />
           <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Posts (Last 7 Days)</h2>
         </div>
-        <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",border:"1px solid #2a2a2a",padding:"20px"}}>
+        <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"20px"}}>
           <div style={{display:"flex",alignItems:"flex-end",gap:"8px",height:"80px"}}>
             {data.map(d=>(
               <div key={d.date} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:"4px"}}>
-                <span style={{fontSize:"10px",color:"#555",fontVariantNumeric:"tabular-nums"}}>{d.count}</span>
-                <div style={{width:"100%",height:`${Math.round((d.count/max)*60)+4}px`,background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"3px 3px 0 0",minHeight:"4px"}}/>
-                <span style={{fontSize:"9px",color:"#444",whiteSpace:"nowrap"}}>{d.date.slice(5)}</span>
+                <span style={{fontSize:"10px",color:"#5a7b9a",fontVariantNumeric:"tabular-nums"}}>{d.count}</span>
+                <div style={{width:"100%",height:`${Math.round((d.count/max)*60)+4}px`,background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px 2px 0 0",minHeight:"4px"}}/>
+                <span style={{fontSize:"9px",color:"#3a5068",whiteSpace:"nowrap"}}>{d.date.slice(5)}</span>
               </div>
             ))}
           </div>
@@ -1031,71 +1030,94 @@ export default function App(){
     )
   }
 
+  // Sidebar nav items
+  const navItems = [
+    {to:"/",label:"Library",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>)},
+    {to:"/archive",label:"Hidden",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>)},
+    {to:"/audit",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
+    {to:"/admin",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
+  ]
+
   return (
-    <div style={{minHeight:"100vh",background:"#0d0d0d",color:"#fff",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif",paddingBottom:"env(safe-area-inset-bottom, 0)"}}>
-      <header style={{
-        padding:"16px 24px",
-        paddingTop:"max(16px, env(safe-area-inset-top, 16px))",
-        background:"linear-gradient(180deg,#1a1a1a 0%,#141414 100%)",
-        borderBottom:"1px solid #222",
-        position:"sticky",
+    <div style={{display:"flex",minHeight:"100vh",background:"#1a2234",color:"#dfe6ed",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif"}}>
+      {/* ── SIDEBAR ── */}
+      <nav style={{
+        width:"60px",
+        minHeight:"100vh",
+        background:"#0b1728",
+        borderRight:"1px solid #1c2a3f",
+        display:"flex",
+        flexDirection:"column",
+        alignItems:"center",
+        padding:"0",
+        position:"fixed",
         top:0,
+        left:0,
         zIndex:100,
-        backdropFilter:"blur(20px)",
-        WebkitBackdropFilter:"blur(20px)",
-        backgroundColor:"rgba(20,20,20,0.95)"
+        transition:"width 0.2s ease"
       }}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"1400px",margin:"0 auto",gap:"12px"}}>
-          <div style={{display:"flex",alignItems:"center",gap:"16px",flexShrink:0}}>
-            <div style={{position:"relative"}}>
-              <img src="/icon.png" alt="Logo" style={{width:"40px",height:"40px",borderRadius:"12px",boxShadow:"0 4px 12px rgba(255,69,0,0.3)"}} />
-              <div style={{position:"absolute",bottom:"-2px",right:"-2px",width:"10px",height:"10px",background:"#46d160",borderRadius:"50%",border:"2px solid #141414"}} />
-            </div>
-            <h1 style={{margin:0,fontSize:"20px",fontWeight:"700",background:"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",backgroundClip:"text",whiteSpace:"nowrap"}}>Reddit Archive</h1>
-            <div style={{display:"flex",gap:"4px",background:"#1a1a1a",padding:"4px",borderRadius:"10px"}}>
-              {[
-                {to:"/",label:"Browse",icon:"⊞"},
-                {to:"/archive",label:"Hidden",icon:"👁"},
-                {to:"/audit",label:"Audit",icon:"✓"},
-                {to:"/admin",label:"Admin",icon:"⚙"}
-              ].map(tab=>(
-                <NavLink key={tab.to} to={tab.to} end={tab.to==="/"} style={({isActive})=>({
-                  padding:"8px 14px",
-                  background:isActive?"linear-gradient(135deg,#ff4500 0%,#ff6a33 100%)":"transparent",
-                  border:"none",
-                  borderRadius:"8px",
-                  color:"#fff",
-                  cursor:"pointer",
-                  fontWeight:isActive?"600":"400",
-                  fontSize:"13px",
-                  display:"flex",
-                  alignItems:"center",
-                  gap:"6px",
-                  transition:"background 0.2s ease, color 0.2s ease",
-                  textDecoration:"none",
-                  whiteSpace:"nowrap"
-                })}>
-                  <span style={{fontSize:"14px"}}>{tab.icon}</span><span className="hide-on-mobile">{tab.label}</span>
-                </NavLink>
-              ))}
-            </div>
-            <LiveDot connected={liveConnected}/>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:"12px",flexWrap:"wrap",justifyContent:"flex-end"}}>
+        {/* Logo */}
+        <div style={{padding:"16px 0 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:"2px",borderBottom:"1px solid #1c2a3f",width:"100%"}}>
+          <div style={{width:"36px",height:"36px",borderRadius:"3px",background:"linear-gradient(135deg,#35c5f4,#2196f3)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"900",fontSize:"16px",color:"#f5f7fa",letterSpacing:"-1px"}}>R</div>
+        </div>
+        {/* Nav links */}
+        <div style={{display:"flex",flexDirection:"column",gap:"4px",padding:"12px 0",width:"100%",alignItems:"center"}}>
+          {navItems.map(item=>(
+            <NavLink key={item.to} to={item.to} end={item.to==="/"} style={({isActive})=>({
+              width:"44px",height:"44px",
+              borderRadius:"3px",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              background:isActive?"#35c5f4":"transparent",
+              color:isActive?"#f5f7fa":"#5a7b9a",
+              cursor:"pointer",
+              transition:"all 0.15s ease",
+              textDecoration:"none",
+              position:"relative",
+            })} title={item.label}>
+              {item.icon}
+            </NavLink>
+          ))}
+        </div>
+        {/* Bottom status */}
+        <div style={{marginTop:"auto",paddingBottom:"16px",display:"flex",flexDirection:"column",alignItems:"center",gap:"8px"}}>
+          <LiveDot connected={liveConnected}/>
+        </div>
+      </nav>
+
+      {/* ── MAIN CONTENT ── */}
+      <div style={{flex:1,marginLeft:"60px",minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+        {/* Top toolbar (*arr style) */}
+        <header style={{
+          padding:"0 24px",
+          height:"50px",
+          background:"#161d2f",
+          borderBottom:"1px solid #1c2a3f",
+          display:"flex",
+          alignItems:"center",
+          justifyContent:"space-between",
+          position:"sticky",
+          top:0,
+          zIndex:90,
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:"16px"}}>
+            <h1 style={{margin:0,fontSize:"18px",fontWeight:"700",color:"#f5f7fa",letterSpacing:"-0.5px"}}>
+              {activeTab === "browse" ? "Library" : activeTab === "archive" ? "Hidden" : activeTab === "audit" ? "Wanted" : "System"}
+            </h1>
             {queueInfo && (
-              <div style={{fontSize:"12px",color:"#555",display:"flex",alignItems:"center",gap:"6px"}}>
-                <span style={{color:"#333"}}>queue:</span>
+              <div style={{fontSize:"12px",color:"#5a7b9a",display:"flex",alignItems:"center",gap:"6px"}}>
+                <span>Queue:</span>
                 <span style={{color:queueInfo.queue_length>0?"#f9c300":"#46d160",fontWeight:"600",fontVariantNumeric:"tabular-nums"}}>{(queueInfo.queue_length||0).toLocaleString()}</span>
               </div>
             )}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
             <div style={{position:"relative"}}>
-              <span style={{position:"absolute",left:"14px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"16px"}}>⌕</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5a7b9a" strokeWidth="2" style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search…" aria-label="Search posts" autoComplete="off" spellCheck={false} value={search} onChange={handleSearch}
-                style={{padding:"12px 16px 12px 42px",borderRadius:"24px",border:"1px solid #333",width:"200px",minWidth:"140px",background:"#1a1a1a",color:"#fff",fontSize:"14px",outline:"none",transition:"border-color 0.2s ease, box-shadow 0.2s ease",boxShadow:"0 2px 8px rgba(0,0,0,0.2)"}}/>
+                style={{padding:"8px 12px 8px 36px",borderRadius:"3px",border:"1px solid #1c2a3f",width:"220px",background:"#0b1728",color:"#dfe6ed",fontSize:"13px",outline:"none"}}/>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
       {/* ── AUDIT TAB ── */}
       {activeTab === "audit" && (
@@ -1104,22 +1126,22 @@ export default function App(){
             <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
               <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#46d160,#2da64d)",borderRadius:"2px"}} />
               <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Audit Dashboard</h2>
-              <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>Hidden Assets</span>
+              <span style={{fontSize:"12px",color:"#5a7b9a",marginLeft:"4px"}}>Hidden Assets</span>
             </div>
-            <button onClick={()=>{loadAuditSummary();loadAuditPosts()}} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
+            <button onClick={()=>{loadAuditSummary();loadAuditPosts()}} style={{padding:"8px 16px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
           </div>
 
           {auditData && (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"16px",marginBottom:"32px"}}>
               {[
-                {label:"Total Posts",value:auditData.total_hidden_posts,color:"#fff",icon:"📦"},
+                {label:"Total Posts",value:auditData.total_hidden_posts,color:"#f5f7fa",icon:"📦"},
                 {label:"Posts All OK",value:auditData.posts_all_ok,color:"#46d160",icon:"✓"},
-                {label:"Posts w/Issues",value:auditData.posts_with_issues,color:auditData.posts_with_issues>0?"#ff4500":"#46d160",icon:"⚠"},
+                {label:"Posts w/Issues",value:auditData.posts_with_issues,color:auditData.posts_with_issues>0?"#35c5f4":"#46d160",icon:"⚠"},
                 {label:"Media OK",value:auditData.media_ok,color:"#46d160",icon:"✓"},
-                {label:"Media Missing",value:auditData.media_missing,color:auditData.media_missing>0?"#ff4500":"#46d160",icon:"✗"},
+                {label:"Media Missing",value:auditData.media_missing,color:auditData.media_missing>0?"#35c5f4":"#46d160",icon:"✗"},
               ].map(s=>(
-                <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                  <div style={{fontSize:"11px",color:"#666",marginBottom:"6px",textTransform:"uppercase"}}>{s.label}</div>
+                <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"16px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                  <div style={{fontSize:"11px",color:"#5a7b9a",marginBottom:"6px",textTransform:"uppercase"}}>{s.label}</div>
                   <div style={{fontSize:"24px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
                 </div>
               ))}
@@ -1127,71 +1149,71 @@ export default function App(){
           )}
 
           {auditData && auditData.posts_with_issues===0 && (
-            <div style={{background:"#0d2818",border:"1px solid #1a4a1a",borderRadius:"12px",padding:"20px",marginBottom:"24px"}}>
+            <div style={{background:"#0d2818",border:"1px solid #1a4a1a",borderRadius:"3px",padding:"20px",marginBottom:"24px"}}>
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                 <div style={{fontSize:"24px"}}>✓</div>
                 <div><div style={{fontSize:"16px",fontWeight:"600",color:"#46d160"}}>All Assets Verified</div>
-                <div style={{fontSize:"13px",color:"#888"}}>Every hidden media file is present and accessible.</div></div>
+                <div style={{fontSize:"13px",color:"#8aa4bd"}}>Every hidden media file is present and accessible.</div></div>
               </div>
             </div>
           )}
 
           {auditData && auditData.posts_with_issues>0 && (
-            <div style={{background:"#2d1a00",border:"1px solid #4a3a00",borderRadius:"12px",padding:"20px",marginBottom:"24px"}}>
+            <div style={{background:"#2d1a00",border:"1px solid #4a3a00",borderRadius:"3px",padding:"20px",marginBottom:"24px"}}>
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                 <div style={{fontSize:"24px"}}>⚠</div>
-                <div><div style={{fontSize:"16px",fontWeight:"600",color:"#ff4500"}}>{auditData.posts_with_issues} Posts Need Attention</div>
-                <div style={{fontSize:"13px",color:"#888"}}>Some media files missing - review details below.</div></div>
+                <div><div style={{fontSize:"16px",fontWeight:"600",color:"#35c5f4"}}>{auditData.posts_with_issues} Posts Need Attention</div>
+                <div style={{fontSize:"13px",color:"#8aa4bd"}}>Some media files missing - review details below.</div></div>
               </div>
             </div>
           )}
 
           <div style={{display:"flex",gap:"12px",marginBottom:"20px"}}>
             <select aria-label="Filter by status" value={auditFilters.status} onChange={e=>{setAuditFilters(f=>({...f,status:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,e.target.value,auditFilters.subreddit)}}
-              style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px"}}>
+              style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#c8d6e0",fontSize:"13px"}}>
               <option value="">All statuses</option>
               <option value="ok">All OK</option>
               <option value="missing">Has Missing</option>
             </select>
             <input type="text" placeholder="r/ subreddit…" aria-label="Filter by subreddit" autoComplete="off" spellCheck={false} value={auditFilters.subreddit}
               onChange={e=>{setAuditFilters(f=>({...f,subreddit:e.target.value}));auditOffsetRef.current=0;setAuditOffset(0);loadAuditPosts(0,auditFilters.status,e.target.value)}}
-              style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",width:"140px"}}/>
+              style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",width:"140px"}}/>
           </div>
 
-          <div style={{background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
+          <div style={{background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
-              <thead><tr style={{background:"#141414"}}>
+              <thead><tr style={{background:"#131b2e"}}>
                 {["Status","Subreddit","Title","Media","Date"].map(h=>(
-                  <th key={h} style={{padding:"12px 16px",textAlign:"left",color:"#666",fontSize:"11px",textTransform:"uppercase"}}>{h}</th>
+                  <th key={h} style={{padding:"12px 16px",textAlign:"left",color:"#5a7b9a",fontSize:"11px",textTransform:"uppercase"}}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
                 {auditPosts.map(p=>(
-                  <tr key={p.id} onClick={()=>loadAuditPostDetail(p.id)} style={{cursor:"pointer",borderBottom:"1px solid #222"}} onMouseEnter={e=>e.currentTarget.style.background="#1a1a1a"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                  <tr key={p.id} onClick={()=>loadAuditPostDetail(p.id)} style={{cursor:"pointer",borderBottom:"1px solid #222"}} onMouseEnter={e=>e.currentTarget.style.background="#161d2f"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                     <td style={{padding:"12px 16px"}}>
-                      {p.status==="ok" && <span style={{background:"#0d2818",color:"#46d160",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>✓ OK</span>}
-                      {p.status==="partial" && <span style={{background:"#2d2000",color:"#f9c300",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>⚠ Partial</span>}
-                      {p.status==="all_missing" && <span style={{background:"#2d0000",color:"#ff4500",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>✗ Missing</span>}
-                      {p.status==="no_media" && <span style={{background:"#1a1a1a",color:"#666",padding:"3px 8px",borderRadius:"4px",fontSize:"11px"}}>— None</span>}
+                      {p.status==="ok" && <span style={{background:"#0d2818",color:"#46d160",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>✓ OK</span>}
+                      {p.status==="partial" && <span style={{background:"#2d2000",color:"#f9c300",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>⚠ Partial</span>}
+                      {p.status==="all_missing" && <span style={{background:"#2d0000",color:"#35c5f4",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>✗ Missing</span>}
+                      {p.status==="no_media" && <span style={{background:"#161d2f",color:"#5a7b9a",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>— None</span>}
                     </td>
-                    <td style={{padding:"12px 16px",color:"#ff4500"}}>{p.subreddit}</td>
+                    <td style={{padding:"12px 16px",color:"#35c5f4"}}>{p.subreddit}</td>
                     <td style={{padding:"12px 16px",maxWidth:"300px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.title}</td>
-                    <td style={{padding:"12px 16px",fontVariantNumeric:"tabular-nums"}}><span style={{color:p.media_missing>0?"#ff4500":"#46d160"}}>{p.media_ok}</span>/{p.media_count}</td>
-                    <td style={{padding:"12px 16px",color:"#555"}}>{p.created_utc?new Date(p.created_utc).toLocaleDateString():"-"}</td>
+                    <td style={{padding:"12px 16px",fontVariantNumeric:"tabular-nums"}}><span style={{color:p.media_missing>0?"#35c5f4":"#46d160"}}>{p.media_ok}</span>/{p.media_count}</td>
+                    <td style={{padding:"12px 16px",color:"#5a7b9a"}}>{p.created_utc?new Date(p.created_utc).toLocaleDateString():"-"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {auditPosts.length===0 && !auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>No hidden posts.</div>}
-            {auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#555"}}>Loading…</div>}
+            {auditPosts.length===0 && !auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#5a7b9a"}}>No hidden posts.</div>}
+            {auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#5a7b9a"}}>Loading…</div>}
           </div>
 
           {auditPosts.length > 0 && (
             <div style={{display:"flex",justifyContent:"center",gap:"8px",marginTop:"16px"}}>
               <button onClick={()=>{const o=Math.max(0,auditOffsetRef.current-50);auditOffsetRef.current=o;setAuditOffset(o);loadAuditPosts(o,auditFilters.status,auditFilters.subreddit)}} disabled={auditOffset===0}
-                style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:auditOffset===0?"#444":"#888",cursor:auditOffset===0?"not-allowed":"pointer"}}>← Prev</button>
+                style={{padding:"8px 16px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:auditOffset===0?"#3a5068":"#8aa4bd",cursor:auditOffset===0?"not-allowed":"pointer"}}>← Prev</button>
               <button onClick={()=>{const o=auditOffsetRef.current+50;auditOffsetRef.current=o;setAuditOffset(o);loadAuditPosts(o,auditFilters.status,auditFilters.subreddit)}} disabled={auditPosts.length<50}
-                style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:auditPosts.length<50?"#444":"#888",cursor:auditPosts.length<50?"not-allowed":"pointer"}}>Next →</button>
+                style={{padding:"8px 16px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:auditPosts.length<50?"#3a5068":"#8aa4bd",cursor:auditPosts.length<50?"not-allowed":"pointer"}}>Next →</button>
             </div>
           )}
         </div>
@@ -1199,35 +1221,35 @@ export default function App(){
 
       {auditPostDetail && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:"20px"}} onClick={()=>setAuditPostDetail(null)}>
-          <div style={{background:"#0d0d0d",borderRadius:"16px",maxWidth:"600px",width:"100%",maxHeight:"80vh",overflow:"auto",border:"1px solid #222"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:"#1a2234",borderRadius:"3px",maxWidth:"600px",width:"100%",maxHeight:"80vh",overflow:"auto",border:"1px solid #222"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"20px",borderBottom:"1px solid #1a1a1a"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                 <div>
-                  <div style={{fontSize:"11px",color:"#ff4500",marginBottom:"4px"}}>r/{auditPostDetail.subreddit}</div>
+                  <div style={{fontSize:"11px",color:"#35c5f4",marginBottom:"4px"}}>r/{auditPostDetail.subreddit}</div>
                   <div style={{fontSize:"16px",fontWeight:"600"}}>{auditPostDetail.title}</div>
                 </div>
-                {auditPostDetail.overall_status==="ok" && <span style={{background:"#0d2818",color:"#46d160",padding:"4px 10px",borderRadius:"6px",fontSize:"11px"}}>✓ OK</span>}
-                {auditPostDetail.overall_status==="partial" && <span style={{background:"#2d2000",color:"#f9c300",padding:"4px 10px",borderRadius:"6px",fontSize:"11px"}}>⚠ Partial</span>}
-                {auditPostDetail.overall_status==="all_missing" && <span style={{background:"#2d0000",color:"#ff4500",padding:"4px 10px",borderRadius:"6px",fontSize:"11px"}}>✗ Missing</span>}
+                {auditPostDetail.overall_status==="ok" && <span style={{background:"#0d2818",color:"#46d160",padding:"4px 10px",borderRadius:"3px",fontSize:"11px"}}>✓ OK</span>}
+                {auditPostDetail.overall_status==="partial" && <span style={{background:"#2d2000",color:"#f9c300",padding:"4px 10px",borderRadius:"3px",fontSize:"11px"}}>⚠ Partial</span>}
+                {auditPostDetail.overall_status==="all_missing" && <span style={{background:"#2d0000",color:"#35c5f4",padding:"4px 10px",borderRadius:"3px",fontSize:"11px"}}>✗ Missing</span>}
               </div>
             </div>
             <div style={{padding:"20px"}}>
-              {auditPostDetail.media.length===0 && <div style={{color:"#555"}}>No media items.</div>}
+              {auditPostDetail.media.length===0 && <div style={{color:"#5a7b9a"}}>No media items.</div>}
               {auditPostDetail.media.map(m=>(
-                <div key={m.id} style={{background:"#141414",borderRadius:"8px",padding:"12px",marginBottom:"8px",border:m.resolved_status==="ok"?"1px solid #1a3a1a":"1px solid #3a1a1a"}}>
+                <div key={m.id} style={{background:"#131b2e",borderRadius:"3px",padding:"12px",marginBottom:"8px",border:m.resolved_status==="ok"?"1px solid #1a3a1a":"1px solid #3a1a1a"}}>
                   <div style={{marginBottom:"4px"}}>
                     {m.resolved_status==="ok" && <span style={{color:"#46d160",fontSize:"11px"}}>✓ Available</span>}
-                    {m.resolved_status==="missing_file" && <span style={{color:"#ff4500",fontSize:"11px"}}>✗ File Missing</span>}
+                    {m.resolved_status==="missing_file" && <span style={{color:"#35c5f4",fontSize:"11px"}}>✗ File Missing</span>}
                     {m.resolved_status==="pending" && <span style={{color:"#7193ff",fontSize:"11px"}}>⏳ Pending</span>}
-                    {m.resolved_status==="failed" && <span style={{color:"#ff4500",fontSize:"11px"}}>✗ Failed</span>}
+                    {m.resolved_status==="failed" && <span style={{color:"#35c5f4",fontSize:"11px"}}>✗ Failed</span>}
                   </div>
-                  <div style={{fontSize:"12px",color:"#888",wordBreak:"break-all"}}>{m.url}</div>
-                  {m.file_path && <div style={{fontSize:"11px",color:"#555",marginTop:"4px"}}>File: {m.file_exists?"✓":"✗"} | {m.file_path}</div>}
+                  <div style={{fontSize:"12px",color:"#8aa4bd",wordBreak:"break-all"}}>{m.url}</div>
+                  {m.file_path && <div style={{fontSize:"11px",color:"#5a7b9a",marginTop:"4px"}}>File: {m.file_exists?"✓":"✗"} | {m.file_path}</div>}
                 </div>
               ))}
             </div>
             <div style={{padding:"16px 20px",borderTop:"1px solid #1a1a1a",display:"flex",justifyContent:"flex-end"}}>
-              <button onClick={()=>setAuditPostDetail(null)} style={{padding:"8px 16px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"6px",color:"#888"}}>Close</button>
+              <button onClick={()=>setAuditPostDetail(null)} style={{padding:"8px 16px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd"}}>Close</button>
             </div>
           </div>
         </div>
@@ -1236,39 +1258,39 @@ export default function App(){
       {/* ── ADMIN TAB ── */}
       {activeTab === "admin" && (
         <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-          {adminLoading && <div style={{textAlign:"center",padding:"40px",color:"#666"}}>Loading admin data…</div>}
-          {!adminLoading && !adminData && <div style={{textAlign:"center",padding:"40px",color:"#ff4500"}}>Failed to load admin data.</div>}
+          {adminLoading && <div style={{textAlign:"center",padding:"40px",color:"#5a7b9a"}}>Loading admin data…</div>}
+          {!adminLoading && !adminData && <div style={{textAlign:"center",padding:"40px",color:"#35c5f4"}}>Failed to load admin data.</div>}
 
           {adminData && (<>
             {/* Header row */}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px",flexWrap:"wrap",gap:"12px"}}>
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}} />
                 <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Admin Dashboard</h2>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                <button onClick={collapseAllSections} title="Collapse all sections" style={{padding:"6px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>⊟ All</button>
-                <button onClick={expandAllSections} title="Expand all sections" style={{padding:"6px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>⊞ All</button>
-                {lastUpdated && <span style={{fontSize:"11px",color:"#444",fontVariantNumeric:"tabular-nums"}}>synced {lastUpdated.toLocaleTimeString()}</span>}
-                <button onClick={loadAdmin} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
-                <button onClick={()=>{setResetModal(true);setResetInput("");setResetResult(null)}} style={{padding:"8px 16px",background:"#1a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>⚠ Reset</button>
+                <button onClick={collapseAllSections} title="Collapse all sections" style={{padding:"6px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"11px"}}>⊟ All</button>
+                <button onClick={expandAllSections} title="Expand all sections" style={{padding:"6px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"11px"}}>⊞ All</button>
+                {lastUpdated && <span style={{fontSize:"11px",color:"#3a5068",fontVariantNumeric:"tabular-nums"}}>synced {lastUpdated.toLocaleTimeString()}</span>}
+                <button onClick={loadAdmin} style={{padding:"8px 16px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
+                <button onClick={()=>{setResetModal(true);setResetInput("");setResetResult(null)}} style={{padding:"8px 16px",background:"#1a0000",border:"1px solid #550000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>⚠ Reset</button>
               </div>
             </div>
 
             {/* Active jobs indicator */}
             {(archiveJob || thumbJob) && (
-              <div style={{display:"flex",gap:"16px",marginBottom:"20px",padding:"12px 16px",background:"#1a1a00",borderRadius:"10px",border:"1px solid #3a3a00",flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:"16px",marginBottom:"20px",padding:"12px 16px",background:"#1a1a00",borderRadius:"3px",border:"1px solid #3a3a00",flexWrap:"wrap"}}>
                 <div style={{fontSize:"12px",color:"#f9c300",fontWeight:"600",display:"flex",alignItems:"center",gap:"6px"}}>
                   <span style={{width:"8px",height:"8px",borderRadius:"50%",background:"#f9c300",animation:"pulse 1.5s infinite"}}/>
                   Jobs Running
                 </div>
                 {archiveJob && (
-                  <span style={{fontSize:"11px",color:"#888"}}>
+                  <span style={{fontSize:"11px",color:"#8aa4bd"}}>
                     Archive: <span style={{color:"#46d160"}}>{Math.round((archiveJob.done/(archiveJob.total||1))*100)}%</span>
                   </span>
                 )}
                 {thumbJob && (
-                  <span style={{fontSize:"11px",color:"#888"}}>
+                  <span style={{fontSize:"11px",color:"#8aa4bd"}}>
                     Thumbnails: <span style={{color:"#46d160"}}>{Math.round((thumbJob.done/(thumbJob.total||1))*100)}%</span>
                   </span>
                 )}
@@ -1279,39 +1301,39 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("status")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.status?"16px":0,transition:"border-radius 0.2s",borderBottomLeftRadius:adminSections.status?"12px":"12px",borderBottomRightRadius:adminSections.status?"12px":"12px"}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.status?"16px":0,transition:"border-radius 0.2s",borderBottomLeftRadius:adminSections.status?"12px":"12px",borderBottomRightRadius:adminSections.status?"12px":"12px"}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>System Status</h3>
-                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>Health · Queue</span>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>System Status</h3>
+                  <span style={{fontSize:"11px",color:"#5a7b9a",background:"#131b2e",padding:"2px 8px",borderRadius:"3px"}}>Health · Queue</span>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                   {healthStatus && (
-                    <span style={{fontSize:"11px",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500",padding:"2px 8px",background:healthStatus?.status==="healthy"?"#0d1f0d":healthStatus?.status==="degraded"?"#2d2000":"#1f0d0d",borderRadius:"6px"}}>
+                    <span style={{fontSize:"11px",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#35c5f4",padding:"2px 8px",background:healthStatus?.status==="healthy"?"#0d1f0d":healthStatus?.status==="degraded"?"#2d2000":"#1f0d0d",borderRadius:"3px"}}>
                       {healthStatus.status}
                     </span>
                   )}
-                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.status?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                  <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.status?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
                 </div>
               </div>
               {adminSections.status && (
                 <div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,200px)",gap:"12px",marginBottom:"24px"}}>
-                    <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                      <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Health</div>
-                      <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500"}}>{healthStatus?.status||"unknown"}</div>
-                      {healthStatus?.issues?.length>0 && <div style={{fontSize:"10px",color:"#ff4500",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>}
+                    <div style={{background:"#1c2a3f",padding:"16px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                      <div style={{fontSize:"11px",color:"#5a7b9a",marginBottom:"8px"}}>Health</div>
+                      <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#35c5f4"}}>{healthStatus?.status||"unknown"}</div>
+                      {healthStatus?.issues?.length>0 && <div style={{fontSize:"10px",color:"#35c5f4",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>}
                     </div>
-                    <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                      <div style={{fontSize:"11px",color:"#666",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div style={{background:"#1c2a3f",padding:"16px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                      <div style={{fontSize:"11px",color:"#5a7b9a",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                         <span>Queue</span>
                         {queueInfo?.queue_length > 0 && (
-                          <button onClick={(e)=>{e.stopPropagation();clearQueue()}} style={{fontSize:"10px",padding:"2px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"4px",color:"#ff4444",cursor:"pointer"}}>clear</button>
+                          <button onClick={(e)=>{e.stopPropagation();clearQueue()}} style={{fontSize:"10px",padding:"2px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:"#ff4444",cursor:"pointer"}}>clear</button>
                         )}
                       </div>
-                      <div style={{fontSize:"18px",fontWeight:"600",color:queueInfo?.queue_length>0?"#f9c300":"#fff",transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
-                      <div style={{fontSize:"10px",color:"#555",marginTop:"4px"}}>pending items</div>
+                      <div style={{fontSize:"18px",fontWeight:"600",color:queueInfo?.queue_length>0?"#f9c300":"#f5f7fa",transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
+                      <div style={{fontSize:"10px",color:"#5a7b9a",marginTop:"4px"}}>pending items</div>
                     </div>
                   </div>
                 </div>
@@ -1320,20 +1342,20 @@ export default function App(){
 
             {/* Health + Queue */}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,200px)",gap:"12px",marginBottom:"32px"}}>
-              <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Health</div>
-                <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500"}}>{healthStatus?.status||"unknown"}</div>
-                {healthStatus?.issues?.length>0 && <div style={{fontSize:"10px",color:"#ff4500",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>}
+              <div style={{background:"#1c2a3f",padding:"16px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                <div style={{fontSize:"11px",color:"#5a7b9a",marginBottom:"8px"}}>Health</div>
+                <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#35c5f4"}}>{healthStatus?.status||"unknown"}</div>
+                {healthStatus?.issues?.length>0 && <div style={{fontSize:"10px",color:"#35c5f4",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>}
               </div>
-              <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                <div style={{fontSize:"11px",color:"#666",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{background:"#1c2a3f",padding:"16px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                <div style={{fontSize:"11px",color:"#5a7b9a",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <span>Queue</span>
                   {queueInfo?.queue_length > 0 && (
-                    <button onClick={clearQueue} style={{fontSize:"10px",padding:"2px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"4px",color:"#ff4444",cursor:"pointer"}}>clear</button>
+                    <button onClick={clearQueue} style={{fontSize:"10px",padding:"2px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:"#ff4444",cursor:"pointer"}}>clear</button>
                   )}
                 </div>
-                <div style={{fontSize:"18px",fontWeight:"600",color:queueInfo?.queue_length>0?"#f9c300":"#fff",transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
-                <div style={{fontSize:"10px",color:"#555",marginTop:"4px"}}>pending items</div>
+                <div style={{fontSize:"18px",fontWeight:"600",color:queueInfo?.queue_length>0?"#f9c300":"#f5f7fa",transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
+                <div style={{fontSize:"10px",color:"#5a7b9a",marginTop:"4px"}}>pending items</div>
               </div>
             </div>
 
@@ -1341,28 +1363,28 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("overview")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.overview?"16px":0}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.overview?"16px":0}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                   <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Overview</h3>
-                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>Statistics · Chart</span>
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Overview</h3>
+                  <span style={{fontSize:"11px",color:"#5a7b9a",background:"#131b2e",padding:"2px 8px",borderRadius:"3px"}}>Statistics · Chart</span>
                 </div>
-                <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.overview?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.overview?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
               </div>
               {adminSections.overview && (
                 <div>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"12px",marginBottom:"20px"}}>
                     {[
-                      {label:"Visible",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
-                      {label:"Hidden",value:adminData.hidden_posts,color:"#888",icon:"👁"},
+                      {label:"Visible",value:adminData.total_posts,color:"#35c5f4",icon:"📄"},
+                      {label:"Hidden",value:adminData.hidden_posts,color:"#8aa4bd",icon:"👁"},
                       {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
                       {label:"Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
                       {label:"Queued",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
-                      {label:"Total Media",value:adminData.total_media,color:"#fff",icon:"📁"},
+                      {label:"Total Media",value:adminData.total_media,color:"#f5f7fa",icon:"📁"},
                     ].map(s=>(
-                      <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a",transition:"transform 0.2s",cursor:"default",":hover":{transform:"translateY(-2px)"}}}>
-                        <div style={{display:"flex",alignItems:"center",gap:"6px",fontSize:"10px",color:"#666",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.5px"}}><span>{s.icon}</span>{s.label}</div>
+                      <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"16px",borderRadius:"3px",border:"1px solid #2a2a2a",transition:"transform 0.2s",cursor:"default",":hover":{transform:"translateY(-2px)"}}}>
+                        <div style={{display:"flex",alignItems:"center",gap:"6px",fontSize:"10px",color:"#5a7b9a",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.5px"}}><span>{s.icon}</span>{s.label}</div>
                         <div style={{fontSize:"26px",fontWeight:"700",color:s.color,transition:"color 0.3s",fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
                       </div>
                     ))}
@@ -1378,26 +1400,26 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("archive")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.archive?"16px":0}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.archive?"16px":0}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                   <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Archive Manager</h3>
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Archive Manager</h3>
                   {archiveStats && (
-                    <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>
+                    <span style={{fontSize:"11px",color:"#5a7b9a",background:"#131b2e",padding:"2px 8px",borderRadius:"3px"}}>
                       {archiveStats.archive_pct}% archived
                     </span>
                   )}
                   {archiveJob && (
-                    <span style={{fontSize:"11px",color:"#f9c300",background:"#2d2000",padding:"2px 8px",borderRadius:"10px",display:"flex",alignItems:"center",gap:"4px"}}>
+                    <span style={{fontSize:"11px",color:"#f9c300",background:"#2d2000",padding:"2px 8px",borderRadius:"3px",display:"flex",alignItems:"center",gap:"4px"}}>
                       <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#f9c300",animation:"pulse 1.5s infinite"}}/>
                       Running
                     </span>
                   )}
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                  <button onClick={(e)=>{e.stopPropagation();loadArchiveStats()}} style={{padding:"4px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>↻</button>
-                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.archive?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                  <button onClick={(e)=>{e.stopPropagation();loadArchiveStats()}} style={{padding:"4px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"11px"}}>↻</button>
+                  <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.archive?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
                 </div>
               </div>
               {adminSections.archive && (
@@ -1407,7 +1429,7 @@ export default function App(){
                     <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                       <button
                         onClick={()=>setArchivePanelOpen(o=>!o)}
-                        style={{padding:"6px 14px",background:archivePanelOpen?"#1a2a1a":"#1a2a1a",border:`1px solid ${archivePanelOpen?"#46d160":"#2a4a2a"}`,borderRadius:"8px",color:archivePanelOpen?"#46d160":"#4a8a4a",cursor:"pointer",fontSize:"12px",fontWeight:"500"}}>
+                        style={{padding:"6px 14px",background:archivePanelOpen?"#1a2a1a":"#1a2a1a",border:`1px solid ${archivePanelOpen?"#46d160":"#2a4a2a"}`,borderRadius:"3px",color:archivePanelOpen?"#46d160":"#4a8a4a",cursor:"pointer",fontSize:"12px",fontWeight:"500"}}>
                         {archivePanelOpen ? "▲ Hide" : "▼ Filters"} Advanced
                       </button>
                     </div>
@@ -1415,7 +1437,7 @@ export default function App(){
                       <button
                         onClick={runArchiveAll}
                         disabled={!!archiveJob}
-                        style={{padding:"8px 16px",background:archiveJob?"#2a2a2a":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"8px",color:archiveJob?"#555":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"700",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                        style={{padding:"8px 16px",background:archiveJob?"#243447":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"3px",color:archiveJob?"#5a7b9a":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"700",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
                         {archiveJob ? "⏳ Archiving…" : "📦 Archive All Posts"}
                       </button>
                     </div>
@@ -1428,34 +1450,34 @@ export default function App(){
                 const unhidden = archiveStats.total_unhidden
                 const pct = archiveStats.archive_pct
                 return (
-                  <div style={{background:"linear-gradient(145deg,#131f13,#0e180e)",borderRadius:"16px",border:"1px solid #1a3a1a",padding:"20px",marginBottom:"16px"}}>
+                  <div style={{background:"linear-gradient(145deg,#131f13,#0e180e)",borderRadius:"3px",border:"1px solid #1a3a1a",padding:"20px",marginBottom:"16px"}}>
                     {/* Top stats row */}
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"16px",marginBottom:"16px"}}>
                       {[
-                        {label:"Total Posts", value:total, color:"#fff"},
+                        {label:"Total Posts", value:total, color:"#f5f7fa"},
                         {label:"Archived (Hidden)", value:hidden, color:"#46d160"},
                         {label:"Unhidden (Active)", value:unhidden, color:unhidden===0?"#46d160":"#f9c300"},
                       ].map(s=>(
                         <div key={s.label}>
-                          <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"4px"}}>{s.label}</div>
+                          <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"4px"}}>{s.label}</div>
                           <div style={{fontSize:"26px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{s.value.toLocaleString()}</div>
                         </div>
                       ))}
                     </div>
                     {/* Progress bar */}
                     <div>
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555",marginBottom:"6px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#5a7b9a",marginBottom:"6px"}}>
                         <span>Archive completion</span>
                         <span style={{color:pct>=100?"#46d160":pct>50?"#7ab3e0":"#f9c300",fontWeight:"600"}}>{pct}%</span>
                       </div>
-                      <div style={{background:"#111",height:"10px",borderRadius:"5px",overflow:"hidden"}}>
+                      <div style={{background:"#0f1829",height:"10px",borderRadius:"5px",overflow:"hidden"}}>
                         <div style={{width:`${pct}%`,background:pct>=100?"linear-gradient(90deg,#46d160,#2ea84e)":"linear-gradient(90deg,#2ea84e,#46d160)",height:"100%",borderRadius:"5px",transition:"width 0.5s ease"}}/>
                       </div>
                     </div>
                     {/* Age breakdown */}
                     {archiveStats.by_age && unhidden > 0 && (
                       <div style={{marginTop:"14px",paddingTop:"14px",borderTop:"1px solid #1a2e1a"}}>
-                        <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"8px"}}>Unhidden posts by age</div>
+                        <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"8px"}}>Unhidden posts by age</div>
                         <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
                           {[
                             {label:">1 year", value:archiveStats.by_age.older_1y, days:365},
@@ -1481,7 +1503,7 @@ export default function App(){
                               }}
                               disabled={!!archiveJob || b.days===0}
                               title={b.days>0?`Archive all posts older than ${b.days} days`:"Too recent to quick-archive"}
-                              style={{padding:"4px 12px",background:b.days===0?"#111":"#0e200e",border:`1px solid ${b.days===0?"#1a1a1a":"#1a4a1a"}`,borderRadius:"20px",color:b.days===0?"#333":"#46d160",cursor:b.days===0||archiveJob?"not-allowed":"pointer",fontSize:"11px",fontWeight:"500",transition:"background 0.15s, color 0.15s, opacity 0.15s",opacity:archiveJob?0.5:1}}>
+                              style={{padding:"4px 12px",background:b.days===0?"#0f1829":"#0e200e",border:`1px solid ${b.days===0?"#161d2f":"#1a4a1a"}`,borderRadius:"3px",color:b.days===0?"#2d4156":"#46d160",cursor:b.days===0||archiveJob?"not-allowed":"pointer",fontSize:"11px",fontWeight:"500",transition:"background 0.15s, color 0.15s, opacity 0.15s",opacity:archiveJob?0.5:1}}>
                               {b.label}: <b>{b.value.toLocaleString()}</b>
                             </button>
                           ))}
@@ -1496,15 +1518,15 @@ export default function App(){
               {archiveJob && (()=>{
                 const pct = archiveJob.total>0 ? Math.round(archiveJob.done/archiveJob.total*100) : 0
                 return (
-                  <div style={{background:"#131f13",borderRadius:"12px",border:"1px solid #1a3a1a",padding:"16px",marginBottom:"16px"}}>
+                  <div style={{background:"#131f13",borderRadius:"3px",border:"1px solid #1a3a1a",padding:"16px",marginBottom:"16px"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
                       <span style={{fontSize:"13px",color:"#46d160",fontWeight:"600"}}>Archiving in progress…</span>
-                      <span style={{fontSize:"12px",color:"#666",fontVariantNumeric:"tabular-nums"}}>{archiveJob.done.toLocaleString()} / {archiveJob.total.toLocaleString()} posts</span>
+                      <span style={{fontSize:"12px",color:"#5a7b9a",fontVariantNumeric:"tabular-nums"}}>{archiveJob.done.toLocaleString()} / {archiveJob.total.toLocaleString()} posts</span>
                     </div>
-                    <div style={{background:"#0a120a",height:"8px",borderRadius:"4px",overflow:"hidden",marginBottom:"8px"}}>
-                      <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#46d160,#2ea84e)",height:"100%",borderRadius:"4px",transition:"width 0.4s ease"}}/>
+                    <div style={{background:"#0a120a",height:"8px",borderRadius:"3px",overflow:"hidden",marginBottom:"8px"}}>
+                      <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#46d160,#2ea84e)",height:"100%",borderRadius:"3px",transition:"width 0.4s ease"}}/>
                     </div>
-                    <div style={{display:"flex",gap:"16px",fontSize:"11px",color:"#555"}}>
+                    <div style={{display:"flex",gap:"16px",fontSize:"11px",color:"#5a7b9a"}}>
                       <span>{pct}% complete</span>
                       {archiveJob.files_moved>0 && <span style={{color:"#46d160"}}>{archiveJob.files_moved.toLocaleString()} files moved</span>}
                       {archiveJob.skipped>0 && <span style={{color:"#f9c300"}}>{archiveJob.skipped} skipped</span>}
@@ -1516,23 +1538,23 @@ export default function App(){
 
               {/* Last job result */}
               {archiveJobResult && !archiveJob && (
-                <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"10px",padding:"12px 16px",marginBottom:"16px",fontSize:"13px",color:"#46d160"}}>
+                <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"3px",padding:"12px 16px",marginBottom:"16px",fontSize:"13px",color:"#46d160"}}>
                   Archive job complete — {archiveJobResult.done?.toLocaleString()} posts processed
                   {archiveJobResult.files_moved>0 && <span style={{color:"#7ab3e0"}}>, {archiveJobResult.files_moved.toLocaleString()} files moved</span>}
-                  {archiveJobResult.skipped>0 && <span style={{color:"#888"}}>, {archiveJobResult.skipped} skipped</span>}
+                  {archiveJobResult.skipped>0 && <span style={{color:"#8aa4bd"}}>, {archiveJobResult.skipped} skipped</span>}
                   {archiveJobResult.errors?.length>0 && <span style={{color:"#ff6b6b"}}>, {archiveJobResult.errors.length} error(s)</span>}
                 </div>
               )}
 
               {/* Expandable filter panel for targeted bulk archive */}
               {archivePanelOpen && (
-                <div style={{background:"#141414",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"16px"}}>
-                  <div style={{fontSize:"12px",color:"#666",marginBottom:"12px",textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:"500"}}>Bulk Archive by Filter</div>
+                <div style={{background:"#131b2e",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"16px"}}>
+                  <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"12px",textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:"500"}}>Bulk Archive by Filter</div>
                   <div style={{display:"flex",gap:"10px",flexWrap:"wrap",alignItems:"flex-end"}}>
                     <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
-                      <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>Target type</label>
+                      <label style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px"}}>Target type</label>
                       <select value={archiveBulkFilter.target_type} onChange={e=>setArchiveBulkFilter(f=>({...f,target_type:e.target.value,target_name:""}))}
-                        style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                        style={{padding:"8px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#c8d6e0",fontSize:"13px",cursor:"pointer",outline:"none"}}>
                         <option value="">Any</option>
                         <option value="subreddit">r/ subreddit</option>
                         <option value="user">u/ user</option>
@@ -1540,25 +1562,25 @@ export default function App(){
                     </div>
                     {archiveBulkFilter.target_type && (
                       <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
-                        <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>{archiveBulkFilter.target_type==="subreddit"?"Subreddit name":"Username"}</label>
+                        <label style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px"}}>{archiveBulkFilter.target_type==="subreddit"?"Subreddit name":"Username"}</label>
                         <input type="text"
                           placeholder={archiveBulkFilter.target_type==="subreddit"?"e.g. python":"e.g. spez"}
                           value={archiveBulkFilter.target_name}
                           onChange={e=>setArchiveBulkFilter(f=>({...f,target_name:e.target.value}))}
-                          style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
+                          style={{padding:"8px 12px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"160px"}}/>
                       </div>
                     )}
                     <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
-                      <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>Older than (days)</label>
+                      <label style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px"}}>Older than (days)</label>
                       <input type="number" min="1" placeholder="e.g. 90"
                         value={archiveBulkFilter.before_days}
                         onChange={e=>setArchiveBulkFilter(f=>({...f,before_days:e.target.value}))}
-                        style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"120px"}}/>
+                        style={{padding:"8px 12px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"120px"}}/>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:"4px"}}>
-                      <label style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>Media status</label>
+                      <label style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px"}}>Media status</label>
                       <select value={archiveBulkFilter.media_status} onChange={e=>setArchiveBulkFilter(f=>({...f,media_status:e.target.value}))}
-                        style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                        style={{padding:"8px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#c8d6e0",fontSize:"13px",cursor:"pointer",outline:"none"}}>
                         <option value="">Any</option>
                         <option value="done">Downloaded only</option>
                         <option value="none">No media (text posts)</option>
@@ -1567,7 +1589,7 @@ export default function App(){
                     <button
                       onClick={runBulkArchiveFiltered}
                       disabled={!!archiveJob}
-                      style={{padding:"8px 18px",background:archiveJob?"#2a2a2a":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"8px",color:archiveJob?"#555":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"700",alignSelf:"flex-end",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                      style={{padding:"8px 18px",background:archiveJob?"#243447":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"3px",color:archiveJob?"#5a7b9a":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"700",alignSelf:"flex-end",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
                       Archive Matching
                     </button>
                     <button
@@ -1581,14 +1603,14 @@ export default function App(){
                           .then(r=>toastSuccess(`${r.data.post_count.toLocaleString()} posts would be hidden`))
                           .catch(err=>toastError("Preview failed: "+(err.response?.data?.detail||err.message)))
                       }}
-                      style={{padding:"8px 14px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px",alignSelf:"flex-end"}}>
+                      style={{padding:"8px 14px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px",alignSelf:"flex-end"}}>
                       Preview Count
                     </button>
                   </div>
                   {/* Per-subreddit quick targets */}
                   {archiveStats?.by_subreddit?.length > 0 && (
                     <div style={{marginTop:"14px",paddingTop:"14px",borderTop:"1px solid #222"}}>
-                      <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"8px"}}>Quick: archive by subreddit</div>
+                      <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"8px"}}>Quick: archive by subreddit</div>
                       <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
                         {archiveStats.by_subreddit.slice(0,15).map(s=>(
                           <button key={s.name}
@@ -1605,7 +1627,7 @@ export default function App(){
                                 .catch(err=>toastError("Failed: "+(err.response?.data?.detail||err.message)))
                             }}
                             disabled={!!archiveJob}
-                            style={{padding:"4px 10px",background:"#111",border:"1px solid #2a2a2a",borderRadius:"20px",color:"#888",cursor:archiveJob?"not-allowed":"pointer",fontSize:"11px",transition:"background 0.15s, color 0.15s, opacity 0.15s",opacity:archiveJob?0.5:1}}>
+                            style={{padding:"4px 10px",background:"#0f1829",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#8aa4bd",cursor:archiveJob?"not-allowed":"pointer",fontSize:"11px",transition:"background 0.15s, color 0.15s, opacity 0.15s",opacity:archiveJob?0.5:1}}>
                             r/{s.name} <span style={{color:"#46d160",fontWeight:"600"}}>{s.count.toLocaleString()}</span>
                           </button>
                         ))}
@@ -1622,42 +1644,42 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("targets")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.targets?"16px":0}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.targets?"16px":0}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Scrape Targets</h3>
-                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>{adminData.targets?.length || 0} targets</span>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Scrape Targets</h3>
+                  <span style={{fontSize:"11px",color:"#5a7b9a",background:"#131b2e",padding:"2px 8px",borderRadius:"3px"}}>{adminData.targets?.length || 0} targets</span>
                   {adminData.targets?.filter(t=>t.enabled&&t.status==="active").length > 0 && (
-                    <span style={{fontSize:"11px",color:"#46d160",background:"#0d1f0d",padding:"2px 8px",borderRadius:"10px"}}>
+                    <span style={{fontSize:"11px",color:"#46d160",background:"#0d1f0d",padding:"2px 8px",borderRadius:"3px"}}>
                       {adminData.targets.filter(t=>t.enabled&&t.status==="active").length} active
                     </span>
                   )}
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.targets?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                  <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.targets?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
                 </div>
               </div>
               {adminSections.targets && (
                 <div>
                   {/* Backfill Status Display */}
                   {backfillStatus && backfillStatus.status !== "none" && (
-                    <div style={{marginBottom:"16px",padding:"12px",background:backfillStatus.status==="done"?"#0d2818":backfillStatus.status==="partial"?"#2d2000":"#1e3a5f",borderRadius:"8px",border:`1px solid ${backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#2a5a8a"}`}}>
+                    <div style={{marginBottom:"16px",padding:"12px",background:backfillStatus.status==="done"?"#0d2818":backfillStatus.status==="partial"?"#2d2000":"#1e3a5f",borderRadius:"3px",border:`1px solid ${backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#2a5a8a"}`}}>
                       <div style={{fontSize:"13px",fontWeight:"600",color:backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#7ab3e0",marginBottom:"8px"}}>
                         {backfillStatus.status === "done" ? "✓ Backfill Complete" : backfillStatus.status === "partial" ? "⚠ Backfill Partial" : "🔄 Backfill Running…"}
                       </div>
-                      <div style={{display:"flex",gap:"16px",fontSize:"12px",color:"#ccc",marginBottom:"8px",flexWrap:"wrap"}}>
-                        <span>Total: <b style={{color:"#fff"}}>{backfillStatus.total}</b></span>
+                      <div style={{display:"flex",gap:"16px",fontSize:"12px",color:"#c8d6e0",marginBottom:"8px",flexWrap:"wrap"}}>
+                        <span>Total: <b style={{color:"#f5f7fa"}}>{backfillStatus.total}</b></span>
                         <span>New: <b style={{color:"#46d160"}}>{backfillStatus.new}</b></span>
-                        <span>Skipped: <b style={{color:"#888"}}>{backfillStatus.skipped}</b></span>
-                        <span>Completed: <b style={{color:"#fff"}}>{backfillStatus.completed}</b>/{backfillStatus.targets_total}</span>
+                        <span>Skipped: <b style={{color:"#8aa4bd"}}>{backfillStatus.skipped}</b></span>
+                        <span>Completed: <b style={{color:"#f5f7fa"}}>{backfillStatus.completed}</b>/{backfillStatus.targets_total}</span>
                         {backfillStatus.rate_limited > 0 && (
                           <span style={{color:"#f9c300"}}>Rate Limited: <b>{backfillStatus.rate_limited}</b></span>
                         )}
                       </div>
                       {backfillStatus.errors && backfillStatus.errors.length > 0 && (
-                        <div style={{fontSize:"11px",color:"#ff6a33",background:"#1a0a00",padding:"8px",borderRadius:"4px",maxHeight:"100px",overflowY:"auto"}}>
-                          <div style={{fontWeight:"600",marginBottom:"4px",color:"#ff4500"}}>Errors:</div>
+                        <div style={{fontSize:"11px",color:"#5fd4f8",background:"#1a0a00",padding:"8px",borderRadius:"3px",maxHeight:"100px",overflowY:"auto"}}>
+                          <div style={{fontWeight:"600",marginBottom:"4px",color:"#35c5f4"}}>Errors:</div>
                           {backfillStatus.errors.map((e,i)=><div key={i} style={{fontFamily:"monospace",marginBottom:"2px"}}>{e}</div>)}
                         </div>
                       )}
@@ -1668,26 +1690,26 @@ export default function App(){
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
                     <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                       <button onClick={scrapeNow}
-                        style={{padding:"8px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
+                        style={{padding:"8px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:scrapeTriggered?"#000":"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
                         {scrapeTriggered ? "✓ Sent" : "⚡ Scrape All"}
                       </button>
                       <button onClick={triggerBackfill}
-                        style={{padding:"8px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
+                        style={{padding:"8px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
                         {backfillTriggered ? "✓ Sent" : "📜 Backfill All"}
                       </button>
                     </div>
                     <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
                       <select value={addTargetType} onChange={e=>setAddTargetType(e.target.value)}
                          aria-label="Target type"
-                         style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer"}}>
+                         style={{padding:"8px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#c8d6e0",fontSize:"13px",cursor:"pointer"}}>
                          <option value="subreddit">r/ subreddit</option>
                          <option value="user">u/ user</option>
                        </select>
                        <input type="text" placeholder="name…" aria-label={`Add ${addTargetType} name`} autoComplete="off" spellCheck={false} value={addTargetName} onChange={e=>setAddTargetName(e.target.value)}
                          onKeyDown={e=>e.key==="Enter"&&addTarget()}
-                         style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
+                         style={{padding:"8px 12px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"160px"}}/>
                       <button onClick={addTarget} disabled={!addTargetName.trim()}
-                        style={{padding:"8px 16px",background:addTargetName.trim()?"linear-gradient(135deg,#ff4500,#ff6a33)":"#2a2a2a",border:"none",borderRadius:"8px",color:addTargetName.trim()?"#fff":"#555",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
+                        style={{padding:"8px 16px",background:addTargetName.trim()?"linear-gradient(135deg,#35c5f4,#5fd4f8)":"#243447",border:"none",borderRadius:"3px",color:addTargetName.trim()?"#f5f7fa":"#5a7b9a",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
                         + Add
                       </button>
                     </div>
@@ -1707,8 +1729,8 @@ export default function App(){
                       return (
                       <div key={`${t.type}-${t.name}`} style={{
                         background:"linear-gradient(145deg,#1e1e1e,#171717)",
-                        borderRadius:"12px",
-                        border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":isExpanded?"1px solid #ff450055":"1px solid #2a2a2a",
+                        borderRadius:"3px",
+                        border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":isExpanded?"1px solid #35c5f455":"1px solid #2a2a2a",
                         opacity:t.enabled?1:0.6,
                         transition:"all 0.2s ease",
                         display:"flex",
@@ -1720,38 +1742,38 @@ export default function App(){
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                             <div style={{minWidth:0,flex:1,cursor:"pointer"}} onClick={()=>toggleCardExpand(t.type,t.name)}>
                               <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"4px"}}>
-                                <span style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:"600"}}>{t.type}</span>
+                                <span style={{fontSize:"9px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:"600"}}>{t.type}</span>
                                 {t.status!=="active" && (
-                                  <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#222",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#888"}}>
+                                  <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#1c2a3f",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#8aa4bd"}}>
                                     {t.status==="taken_down"?"⛔":t.status==="deleted"?"👤":""}
                                   </span>
                                 )}
                               </div>
-                              <div style={{fontSize:"15px",fontWeight:"600",color:t.status==="active"?"#fff":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              <div style={{fontSize:"15px",fontWeight:"600",color:t.status==="active"?"#f5f7fa":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#8aa4bd",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                                 {t.type==="subreddit"?"r/":"u/"}{t.name}
                               </div>
                             </div>
                             <div style={{display:"flex",gap:"4px",flexShrink:0,alignItems:"center"}}>
                               {t.status==="active" && (
-                                <button onClick={(e)=>{e.stopPropagation();toggleTarget(t.type,t.name)}} title={t.enabled?"Disable":"Enable"} style={{padding:"4px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"6px",color:t.enabled?"#000":"#666",cursor:"pointer",fontSize:"10px",fontWeight:"700"}}>
+                                <button onClick={(e)=>{e.stopPropagation();toggleTarget(t.type,t.name)}} title={t.enabled?"Disable":"Enable"} style={{padding:"4px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"3px",color:t.enabled?"#000":"#5a7b9a",cursor:"pointer",fontSize:"10px",fontWeight:"700"}}>
                                   {t.enabled?"●":"○"}
                                 </button>
                               )}
                               {(t.status==="taken_down"||t.status==="deleted") && (
-                                <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"active")}} title="Reactivate" style={{padding:"4px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
+                                <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"active")}} title="Reactivate" style={{padding:"4px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"3px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
                               )}
                               {t.status==="active" && (
                                 <>
                                   {t.type==="subreddit" && (
-                                    <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"taken_down")}} title="Mark taken down" style={{padding:"4px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
+                                    <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"taken_down")}} title="Mark taken down" style={{padding:"4px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
                                   )}
                                   {t.type==="user" && (
-                                    <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"deleted")}} title="Mark deleted" style={{padding:"4px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"6px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
+                                    <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"deleted")}} title="Mark deleted" style={{padding:"4px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"3px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
                                   )}
-                                  <button onClick={(e)=>{e.stopPropagation();deleteTarget(t.type,t.name)}} title="Remove" style={{padding:"4px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
+                                  <button onClick={(e)=>{e.stopPropagation();deleteTarget(t.type,t.name)}} title="Remove" style={{padding:"4px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
                                 </>
                               )}
-                              <button onClick={()=>toggleCardExpand(t.type,t.name)} title={isExpanded?"Collapse":"Expand"} style={{padding:"4px 6px",background:"transparent",border:"1px solid #333",borderRadius:"6px",color:isExpanded?"#ff4500":"#555",cursor:"pointer",fontSize:"12px",lineHeight:1,transition:"color 0.2s"}}>
+                              <button onClick={()=>toggleCardExpand(t.type,t.name)} title={isExpanded?"Collapse":"Expand"} style={{padding:"4px 6px",background:"transparent",border:"1px solid #333",borderRadius:"3px",color:isExpanded?"#35c5f4":"#5a7b9a",cursor:"pointer",fontSize:"12px",lineHeight:1,transition:"color 0.2s"}}>
                                 {isExpanded?"▲":"▼"}
                               </button>
                             </div>
@@ -1759,18 +1781,18 @@ export default function App(){
                           {/* Stats row */}
                           {(t.status==="active" || t.status==="taken_down") && (
                             <div style={{display:"flex",gap:"12px",fontSize:"11px"}}>
-                              <div><span style={{color:"#666"}}>Posts </span><span style={{color:t.status==="taken_down"?"#888":"#fff",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</span></div>
-                              <div><span style={{color:"#666"}}>Media </span><span style={{color:"#46d160",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</span></div>
+                              <div><span style={{color:"#5a7b9a"}}>Posts </span><span style={{color:t.status==="taken_down"?"#8aa4bd":"#f5f7fa",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</span></div>
+                              <div><span style={{color:"#5a7b9a"}}>Media </span><span style={{color:"#46d160",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</span></div>
                             </div>
                           )}
                           {/* Progress bar for active targets */}
                           {t.status==="active" && (
                             <>
-                              <div style={{background:"#141414",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
-                                <div style={{width:`${Math.min(100,mediaPct)}%`,background:mediaPct>=100?"#46d160":"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"2px",transition:"width 0.3s"}}/>
+                              <div style={{background:"#131b2e",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
+                                <div style={{width:`${Math.min(100,mediaPct)}%`,background:mediaPct>=100?"#46d160":"linear-gradient(90deg,#35c5f4,#5fd4f8)",height:"100%",borderRadius:"2px",transition:"width 0.3s"}}/>
                               </div>
                               {t.last_created && (
-                                <div style={{fontSize:"10px",color:"#444",display:"flex",justifyContent:"space-between"}}>
+                                <div style={{fontSize:"10px",color:"#3a5068",display:"flex",justifyContent:"space-between"}}>
                                   <span>{new Date(t.last_created).toLocaleDateString()}</span>
                                   <span>{formatRate(t.rate_per_second)}/s</span>
                                 </div>
@@ -1785,19 +1807,19 @@ export default function App(){
                             {/* Quick action buttons */}
                             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px"}}>
                               {t.status==="active" && t.enabled && (
-                                <button onClick={()=>scrapeTargetNow(t.type,t.name)} disabled={isScraping} style={{padding:"6px 10px",background:isScraping?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:isScraping?"#555":"#fff",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                <button onClick={()=>scrapeTargetNow(t.type,t.name)} disabled={isScraping} style={{padding:"6px 10px",background:isScraping?"#243447":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:isScraping?"#5a7b9a":"#f5f7fa",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
                                   {isScraping?"✓":"⚡"} Scrape
                                 </button>
                               )}
                               {t.status==="active" && t.enabled && (
-                                <button onClick={()=>backfillTargetNow(t.type,t.name)} disabled={isBackfilling} style={{padding:"6px 10px",background:isBackfilling?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"6px",color:isBackfilling?"#555":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                <button onClick={()=>backfillTargetNow(t.type,t.name)} disabled={isBackfilling} style={{padding:"6px 10px",background:isBackfilling?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:isBackfilling?"#5a7b9a":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
                                   {isBackfilling?"✓":"📜"} Backfill
                                 </button>
                               )}
-                              <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"6px 10px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"6px",color:"#46d160",cursor:"pointer",fontSize:"11px",fontWeight:"600"}}>
+                              <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"6px 10px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"11px",fontWeight:"600"}}>
                                 ↻ Rescan
                               </button>
-                              <button onClick={()=>fetchCardAudit(t.type,t.name)} disabled={auditLoading} style={{padding:"6px 10px",background:"#1e1e2a",border:"1px solid #2a2a4a",borderRadius:"6px",color:auditLoading?"#555":"#7193ff",cursor:auditLoading?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                              <button onClick={()=>fetchCardAudit(t.type,t.name)} disabled={auditLoading} style={{padding:"6px 10px",background:"#1e1e2a",border:"1px solid #2a2a4a",borderRadius:"3px",color:auditLoading?"#5a7b9a":"#7193ff",cursor:auditLoading?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
                                 {auditLoading?"…":"🔍"} Audit
                               </button>
                             </div>
@@ -1805,31 +1827,31 @@ export default function App(){
                             <button onClick={()=>{
                               if(!window.confirm(`Archive all ${t.post_count?.toLocaleString()||"?"} posts from ${t.type==="subreddit"?"r/":"u/"}${t.name}?`)) return
                               runArchiveTarget(t.type, t.name)
-                            }} disabled={!!archiveJob||isArchivingTarget||t.post_count===0} style={{padding:"6px 10px",background:isArchivingTarget?"#2a2a2a":"#132213",border:"1px solid #1a3a1a",borderRadius:"6px",color:isArchivingTarget?"#555":"#46d160",cursor:(archiveJob||isArchivingTarget||t.post_count===0)?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                            }} disabled={!!archiveJob||isArchivingTarget||t.post_count===0} style={{padding:"6px 10px",background:isArchivingTarget?"#243447":"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:isArchivingTarget?"#5a7b9a":"#46d160",cursor:(archiveJob||isArchivingTarget||t.post_count===0)?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
                               {isArchivingTarget?"⏳":"📦"} Archive All
                             </button>
 
                             {/* Audit results */}
-                            {auditLoading && <div style={{fontSize:"11px",color:"#555",textAlign:"center",padding:"8px"}}>Running integrity check…</div>}
+                            {auditLoading && <div style={{fontSize:"11px",color:"#5a7b9a",textAlign:"center",padding:"8px"}}>Running integrity check…</div>}
                             {audit && !auditLoading && (()=>{
                               const okPct = audit.total_media > 0 ? Math.round((audit.media_ok / audit.total_media) * 100) : 100
                               const hasIssues = audit.media_missing > 0 || audit.posts_all_missing > 0
                               return (
-                                <div style={{background:"#111",borderRadius:"8px",padding:"10px",border:`1px solid ${hasIssues?"#ff450033":"#46d16033"}`}}>
-                                  <div style={{fontSize:"10px",fontWeight:"600",color:hasIssues?"#ff6b3d":"#46d160",marginBottom:"6px"}}>
+                                <div style={{background:"#0f1829",borderRadius:"3px",padding:"10px",border:`1px solid ${hasIssues?"#35c5f433":"#46d16033"}`}}>
+                                  <div style={{fontSize:"10px",fontWeight:"600",color:hasIssues?"#5fd4f8":"#46d160",marginBottom:"6px"}}>
                                     {hasIssues ? "⚠ Issues" : "✓ OK"}
                                   </div>
-                                  <div style={{background:"#222",height:"4px",borderRadius:"2px",overflow:"hidden",marginBottom:"6px"}}>
+                                  <div style={{background:"#1c2a3f",height:"4px",borderRadius:"2px",overflow:"hidden",marginBottom:"6px"}}>
                                     <div style={{width:`${okPct}%`,background:hasIssues?"#f9c300":"#46d160",height:"100%"}}/>
                                   </div>
                                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px",fontSize:"9px"}}>
-                                    <span style={{color:"#666"}}>Posts</span><span style={{color:"#fff",textAlign:"right"}}>{audit.total_posts?.toLocaleString()}</span>
+                                    <span style={{color:"#5a7b9a"}}>Posts</span><span style={{color:"#f5f7fa",textAlign:"right"}}>{audit.total_posts?.toLocaleString()}</span>
                                     <span style={{color:"#46d160"}}>OK</span><span style={{color:"#46d160",textAlign:"right"}}>{audit.posts_ok?.toLocaleString()}</span>
                                     {audit.media_missing>0 && <><span style={{color:"#ff6b6b"}}>Missing</span><span style={{color:"#ff6b6b",textAlign:"right"}}>{audit.media_missing.toLocaleString()}</span></>}
-                                    {audit.media_error>0 && <><span style={{color:"#ff4500"}}>Errors</span><span style={{color:"#ff4500",textAlign:"right"}}>{audit.media_error.toLocaleString()}</span></>}
+                                    {audit.media_error>0 && <><span style={{color:"#35c5f4"}}>Errors</span><span style={{color:"#35c5f4",textAlign:"right"}}>{audit.media_error.toLocaleString()}</span></>}
                                   </div>
                                   {audit.media_missing>0 && (
-                                    <button onClick={()=>rescanTarget(t.type,t.name)} style={{marginTop:"6px",width:"100%",padding:"4px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"4px",color:"#fff",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
+                                    <button onClick={()=>rescanTarget(t.type,t.name)} style={{marginTop:"6px",width:"100%",padding:"4px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
                                       Re-queue {audit.media_missing} missing
                                     </button>
                                   )}
@@ -1849,21 +1871,21 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("thumbnails")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.thumbnails?"16px":0}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.thumbnails?"16px":0}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                   <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#7193ff,#5a7ad4)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Thumbnail Utilities</h3>
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Thumbnail Utilities</h3>
                   {thumbJob && (
-                    <span style={{fontSize:"11px",color:"#f9c300",background:"#2d2000",padding:"2px 8px",borderRadius:"10px",display:"flex",alignItems:"center",gap:"4px"}}>
+                    <span style={{fontSize:"11px",color:"#f9c300",background:"#2d2000",padding:"2px 8px",borderRadius:"3px",display:"flex",alignItems:"center",gap:"4px"}}>
                       <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#f9c300",animation:"pulse 1.5s infinite"}}/>
                       Running
                     </span>
                   )}
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                  <button onClick={(e)=>{e.stopPropagation();loadThumbStats()}} style={{padding:"4px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>↻</button>
-                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.thumbnails?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                  <button onClick={(e)=>{e.stopPropagation();loadThumbStats()}} style={{padding:"4px 10px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"11px"}}>↻</button>
+                  <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.thumbnails?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
                 </div>
               </div>
               {adminSections.thumbnails && (
@@ -1872,14 +1894,14 @@ export default function App(){
                   {thumbStats && (
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"10px",marginBottom:"16px"}}>
                       {[
-                        {label:"Media files",value:thumbStats.total_media_with_file,color:"#fff"},
+                        {label:"Media files",value:thumbStats.total_media_with_file,color:"#f5f7fa"},
                         {label:"Thumbs OK",value:thumbStats.with_thumb_in_db,color:"#46d160"},
                         {label:"Missing",value:thumbStats.missing_thumb_in_db,color:thumbStats.missing_thumb_in_db>0?"#f9c300":"#46d160"},
                         {label:"On disk",value:thumbStats.thumb_files_on_disk,color:"#7193ff"},
-                        {label:"Disk",value:`${thumbStats.thumb_disk_mb} MB`,color:"#888"},
+                        {label:"Disk",value:`${thumbStats.thumb_disk_mb} MB`,color:"#8aa4bd"},
                       ].map(s=>(
-                        <div key={s.label} style={{background:"#1a1a1a",padding:"12px 14px",borderRadius:"10px",border:"1px solid #2a2a2a"}}>
-                          <div style={{fontSize:"10px",color:"#555",marginBottom:"4px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
+                        <div key={s.label} style={{background:"#161d2f",padding:"12px 14px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                          <div style={{fontSize:"10px",color:"#5a7b9a",marginBottom:"4px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
                           <div style={{fontSize:"20px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{typeof s.value==="number"?s.value.toLocaleString():s.value}</div>
                         </div>
                       ))}
@@ -1888,13 +1910,13 @@ export default function App(){
 
                   {/* Action buttons */}
                   <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"16px"}}>
-                    <button onClick={runThumbBackfill} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:thumbJob?"#555":"#fff",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                    <button onClick={runThumbBackfill} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#f5f7fa",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
                       {thumbJob?"⏳":"⬇"} Backfill Missing
                     </button>
-                    <button onClick={runThumbRebuildAll} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:thumbJob?"#555":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                    <button onClick={runThumbRebuildAll} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
                       {thumbJob?"⏳":"🔄"} Rebuild All
                     </button>
-                    <button onClick={runThumbPurgeOrphans} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#2a2a2a":"#2a0000",border:"1px solid #550000",borderRadius:"8px",color:thumbJob?"#555":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                    <button onClick={runThumbPurgeOrphans} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
                       {thumbJob?"⏳":"🗑"} Purge Orphans
                     </button>
                   </div>
@@ -1903,15 +1925,15 @@ export default function App(){
                   {thumbJob && (()=>{
                     const pct = thumbJob.total>0 ? Math.round(thumbJob.done/thumbJob.total*100) : 0
                     return (
-                      <div style={{background:"#1a1a1a",borderRadius:"10px",border:"1px solid #2a2a2a",padding:"14px",marginBottom:"16px"}}>
+                      <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"14px",marginBottom:"16px"}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
-                          <span style={{fontSize:"12px",color:"#ccc",fontWeight:"500"}}>{thumbJob.type||"job"} — {thumbJob.status}</span>
-                          <span style={{fontSize:"12px",color:"#666",fontVariantNumeric:"tabular-nums"}}>{thumbJob.done.toLocaleString()} / {thumbJob.total.toLocaleString()}</span>
+                          <span style={{fontSize:"12px",color:"#c8d6e0",fontWeight:"500"}}>{thumbJob.type||"job"} — {thumbJob.status}</span>
+                          <span style={{fontSize:"12px",color:"#5a7b9a",fontVariantNumeric:"tabular-nums"}}>{thumbJob.done.toLocaleString()} / {thumbJob.total.toLocaleString()}</span>
                         </div>
-                        <div style={{background:"#141414",height:"6px",borderRadius:"3px",overflow:"hidden",marginBottom:"6px"}}>
-                          <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"3px",transition:"width 0.4s ease"}}/>
+                        <div style={{background:"#131b2e",height:"6px",borderRadius:"3px",overflow:"hidden",marginBottom:"6px"}}>
+                          <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#35c5f4,#5fd4f8)",height:"100%",borderRadius:"3px",transition:"width 0.4s ease"}}/>
                         </div>
-                        <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#5a7b9a"}}>
                           <span>{pct}%{thumbJob.skipped>0?` · ${thumbJob.skipped} skipped`:""}</span>
                           {thumbJob.errors?.length>0 && <span style={{color:"#ff6b6b"}}>{thumbJob.errors.length} error(s)</span>}
                         </div>
@@ -1921,9 +1943,9 @@ export default function App(){
 
                   {/* Last job result summary */}
                   {thumbJobResult && !thumbJob && (
-                    <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"8px",padding:"12px 14px",fontSize:"12px",color:"#46d160"}}>
+                    <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"3px",padding:"12px 14px",fontSize:"12px",color:"#46d160"}}>
                       ✓ Complete — {thumbJobResult.done?.toLocaleString()} processed
-                      {thumbJobResult.skipped>0 && <span style={{color:"#888"}}>, {thumbJobResult.skipped} skipped</span>}
+                      {thumbJobResult.skipped>0 && <span style={{color:"#8aa4bd"}}>, {thumbJobResult.skipped} skipped</span>}
                       {thumbJobResult.errors?.length>0 && <span style={{color:"#ff6b6b"}}>, {thumbJobResult.errors.length} error(s)</span>}
                     </div>
                   )}
@@ -1935,18 +1957,18 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("media")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.media?"16px":0}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.media?"16px":0}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Media Re-scan</h3>
-                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>Find missing media</span>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Media Re-scan</h3>
+                  <span style={{fontSize:"11px",color:"#5a7b9a",background:"#131b2e",padding:"2px 8px",borderRadius:"3px"}}>Find missing media</span>
                 </div>
-                <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.media?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.media?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
               </div>
               {adminSections.media && (
-                <div style={{background:"#1a1a1a",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px"}}>
-                  <p style={{fontSize:"12px",color:"#888",marginBottom:"12px",margin:0}}>
+                <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px"}}>
+                  <p style={{fontSize:"12px",color:"#8aa4bd",marginBottom:"12px",margin:0}}>
                     Re-scan existing posts to find additional images/videos that weren't originally queued for download.
                   </p>
                   <button
@@ -1957,7 +1979,7 @@ export default function App(){
                         loadAdmin()
                       }).catch(err=>toastError("Rescan failed: " + (err.response?.data?.detail||err.message)))
                     }}
-                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}
+                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}
                   >
                     🔍 Re-scan All Posts
                   </button>
@@ -1969,23 +1991,23 @@ export default function App(){
             <div style={{marginBottom:"16px"}}>
               <div 
                 onClick={()=>toggleAdminSection("activity")}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.activity?"16px":0}}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.activity?"16px":0}}
               >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                   <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
-                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Recent Activity</h3>
-                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>live</span>
-                  <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#444",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Recent Activity</h3>
+                  <span style={{fontSize:"11px",color:"#5a7b9a",background:"#131b2e",padding:"2px 8px",borderRadius:"3px"}}>live</span>
+                  <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#3a5068",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
                 </div>
-                <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.activity?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                <span style={{color:"#5a7b9a",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.activity?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
               </div>
               {adminSections.activity && (
-                <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"12px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
+                <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
                     <thead>
-                      <tr style={{background:"#141414",borderBottom:"1px solid #2a2a2a"}}>
+                      <tr style={{background:"#131b2e",borderBottom:"1px solid #2a2a2a"}}>
                         {["Time","Subreddit","Author","Title"].map(h=>(
-                          <th key={h} style={{padding:"12px 14px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"11px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{h}</th>
+                          <th key={h} style={{padding:"12px 14px",textAlign:"left",color:"#5a7b9a",fontWeight:"500",fontSize:"11px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1993,10 +2015,10 @@ export default function App(){
                       <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}`}</style>
                       {logs && logs.map(l=>(
                         <tr key={l.id} className={highlightedRows.has(l.id)?"row-new":""} style={{borderBottom:"1px solid #222",transition:"background 0.3s ease"}}>
-                          <td style={{padding:"12px 14px",color:"#555"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
-                          <td style={{padding:"12px 14px"}}><span style={{background:"#ff450022",color:"#ff4500",padding:"4px 8px",borderRadius:"4px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
-                          <td style={{padding:"12px 14px",color:"#888"}}>{l.author||"-"}</td>
-                          <td style={{padding:"12px 14px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{l.title||"-"}</td>
+                          <td style={{padding:"12px 14px",color:"#5a7b9a"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
+                          <td style={{padding:"12px 14px"}}><span style={{background:"rgba(53,197,244,0.13)",color:"#35c5f4",padding:"4px 8px",borderRadius:"3px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
+                          <td style={{padding:"12px 14px",color:"#8aa4bd"}}>{l.author||"-"}</td>
+                          <td style={{padding:"12px 14px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#c8d6e0"}}>{l.title||"-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -2011,14 +2033,14 @@ export default function App(){
       {/* ── BROWSE TAB ── */}
       {activeTab === "browse" && (<>
         {newPostsAvailable > 0 && !searchResults && (
-          <button onClick={refreshPosts} aria-label={`${newPostsAvailable} new post${newPostsAvailable>1?"s":""} available — click to refresh`} style={{position:"sticky",top:"73px",zIndex:90,width:"100%",margin:"0",padding:"12px 24px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",color:"#fff",textAlign:"center",cursor:"pointer",fontSize:"14px",fontWeight:"600",boxShadow:"0 4px 20px rgba(255,69,0,0.4)",transition:"opacity 0.2s ease",letterSpacing:"0.3px",border:"none"}}>
+          <button onClick={refreshPosts} aria-label={`${newPostsAvailable} new post${newPostsAvailable>1?"s":""} available — click to refresh`} style={{position:"sticky",top:"73px",zIndex:90,width:"100%",margin:"0",padding:"12px 24px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",color:"#f5f7fa",textAlign:"center",cursor:"pointer",fontSize:"14px",fontWeight:"600",boxShadow:"0 4px 20px rgba(255,69,0,0.4)",transition:"opacity 0.2s ease",letterSpacing:"0.3px",border:"none"}}>
             ↑ {newPostsAvailable} new post{newPostsAvailable>1?"s":""} — click to refresh
           </button>
         )}
 
         {/* ── FILTER / SORT BAR ── */}
         {!searchResults && (
-          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111"}}>
+          <div style={{borderBottom:"1px solid #1e1e1e",background:"#0f1829"}}>
             {/* Mobile filter toggle bar */}
             <div style={{padding:"8px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",maxWidth:"1400px",margin:"0 auto"}}>
               <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
@@ -2026,10 +2048,10 @@ export default function App(){
                   onClick={()=>setFilterBarOpen(o=>!o)}
                   aria-label={filterBarOpen?"Collapse filters":"Expand filters"}
                   aria-expanded={filterBarOpen}
-                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:filterBarOpen||hasActiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${filterBarOpen||hasActiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"background 0.2s, border-color 0.2s, color 0.2s"}}>
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:filterBarOpen||hasActiveFilters()?"#35c5f418":"#161d2f",border:`1px solid ${filterBarOpen||hasActiveFilters()?"rgba(53,197,244,0.27)":"#243447"}`,borderRadius:"3px",color:hasActiveFilters()?"#5fd4f8":"#8aa4bd",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"background 0.2s, border-color 0.2s, color 0.2s"}}>
                   <span style={{fontSize:"14px"}} aria-hidden="true">⚙</span>
                   Filters
-                  {hasActiveFilters() && <span style={{background:"#ff4500",color:"#fff",borderRadius:"10px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
+                  {hasActiveFilters() && <span style={{background:"#35c5f4",color:"#f5f7fa",borderRadius:"3px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
                   <span style={{fontSize:"10px",opacity:0.6,marginLeft:"2px"}}>{filterBarOpen?"▲":"▼"}</span>
                 </button>
                 <select
@@ -2040,7 +2062,7 @@ export default function App(){
                     const f = {...filtersRef.current, sort: v}
                     applyFilters(f)
                   }}
-                  style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:sortBy!=="last_added"?"#ff6a33":"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}
+                  style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:sortBy!=="last_added"?"#5fd4f8":"#8aa4bd",fontSize:"13px",cursor:"pointer",outline:"none"}}
                 >
                   <option value="last_added">Last added</option>
                   <option value="newest">Reddit date ↓</option>
@@ -2050,7 +2072,7 @@ export default function App(){
                 </select>
               </div>
               {hasActiveFilters() && (
-                <button onClick={clearFilters} style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear</button>
+                <button onClick={clearFilters} style={{padding:"8px 12px",background:"#1c2a3f",border:"1px solid #35c5f444",borderRadius:"3px",color:"#5fd4f8",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear</button>
               )}
             </div>
 
@@ -2070,7 +2092,7 @@ export default function App(){
                         applyFilters({...filtersRef.current, subreddit: v})
                       }, 400)
                     }}
-                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
+                    style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}
                   />
                   <input
                     type="text" inputMode="text" placeholder="u/ author…"
@@ -2084,7 +2106,7 @@ export default function App(){
                         applyFilters({...filtersRef.current, author: v})
                       }, 400)
                     }}
-                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}
+                    style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}
                   />
                   <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
                     {[
@@ -2092,15 +2114,15 @@ export default function App(){
                       {value:"video", label:"🎬 Videos"},
                       {value:"text", label:"📝 Text"},
                     ].map(mt => (
-                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:filterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"background 0.15s, color 0.15s, opacity 0.15s",minHeight:"36px"}}>
+                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:filterMediaTypes.includes(mt.value)?"rgba(53,197,244,0.13)":"#161d2f",borderRadius:"3px",border:"1px solid",borderColor:filterMediaTypes.includes(mt.value)?"#35c5f4":"#243447",transition:"background 0.15s, color 0.15s, opacity 0.15s",minHeight:"36px"}}>
                         <input type="checkbox" checked={filterMediaTypes.includes(mt.value)} onChange={e=>{
                           const newTypes = e.target.checked
                             ? [...filterMediaTypes, mt.value]
                             : filterMediaTypes.filter(t => t !== mt.value)
                           setFilterMediaTypes(newTypes)
                           applyFilters({...filtersRef.current, mediaTypes: newTypes})
-                        }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
-                        <span style={{fontSize:"12px",color:filterMediaTypes.includes(mt.value)?"#ff6a33":"#666"}}>{mt.label}</span>
+                        }} style={{width:"14px",height:"14px",accentColor:"#35c5f4"}}/>
+                        <span style={{fontSize:"12px",color:filterMediaTypes.includes(mt.value)?"#5fd4f8":"#5a7b9a"}}>{mt.label}</span>
                       </label>
                     ))}
                   </div>
@@ -2113,9 +2135,9 @@ export default function App(){
                         localStorage.setItem("showNsfw", String(v))
                         applyFilters({...filtersRef.current, nsfw: v})
                       }}
-                      style={{width:"16px",height:"16px",accentColor:"#ff4500"}}
+                      style={{width:"16px",height:"16px",accentColor:"#35c5f4"}}
                     />
-                    <span style={{fontSize:"12px",color:showNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
+                    <span style={{fontSize:"12px",color:showNsfw?"#5fd4f8":"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
                   </label>
                 </div>
               </div>
@@ -2127,14 +2149,14 @@ export default function App(){
           <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}}>
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#666",fontWeight:"400"}}>({searchResults.length})</span></h2>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#35c5f4,#5fd4f8)",borderRadius:"2px"}} />
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#5a7b9a",fontWeight:"400"}}>({searchResults.length})</span></h2>
               </div>
-              <button onClick={()=>{setSearchResults(null);setSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
+              <button onClick={()=>{setSearchResults(null);setSearch("")}} style={{padding:"10px 20px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
               {searchResults.map(p=>(
-                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"14px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease"}}>
+                <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease"}}>
                   {p.is_video || p.video_url ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
                       {(p.thumb_url || p.video_url) && (
@@ -2142,10 +2164,10 @@ export default function App(){
                       )}
                       <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
                         <div style={{width:"48px",height:"48px",borderRadius:"50%",background:"rgba(0,0,0,0.6)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          <div style={{width:0,height:0,borderTop:"10px solid transparent",borderBottom:"10px solid transparent",borderLeft:"16px solid #ff4500",marginLeft:"4px"}}/>
+                          <div style={{width:0,height:0,borderTop:"10px solid transparent",borderBottom:"10px solid transparent",borderLeft:"16px solid #35c5f4",marginLeft:"4px"}}/>
                         </div>
                       </div>
-                      <div style={{position:"absolute",top:"8px",left:"8px",background:"rgba(0,0,0,0.75)",borderRadius:"4px",padding:"3px 6px",fontSize:"9px",fontWeight:"700",color:"#fff",letterSpacing:"0.5px"}}>VIDEO</div>
+                      <div style={{position:"absolute",top:"8px",left:"8px",background:"rgba(0,0,0,0.75)",borderRadius:"3px",padding:"3px 6px",fontSize:"9px",fontWeight:"700",color:"#f5f7fa",letterSpacing:"0.5px"}}>VIDEO</div>
                     </div>
                   ) : p.image_url ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative"}}>
@@ -2153,9 +2175,9 @@ export default function App(){
                     </div>
                   ) : null}
                   <div style={{padding:"16px"}}>
-                    <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit ? `r/${p.subreddit}` : ""}</div>
-                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
-                    {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
+                    <div style={{fontSize:"11px",color:"#35c5f4",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit ? `r/${p.subreddit}` : ""}</div>
+                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#dfe6ed"}}>{p.title}</div>
+                    {p.author && <div style={{fontSize:"12px",color:"#5a7b9a"}}>u/{p.author}</div>}
                   </div>
                 </div>
               ))}
@@ -2173,7 +2195,7 @@ export default function App(){
                   onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
                   role="button" tabIndex={0} aria-label={p.title}
                   className="post-card"
-                  style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a"}}>
+                  style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",overflow:"hidden",cursor:"pointer",border:"1px solid #2a2a2a"}}>
                   {p.is_video ? (
                     <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
                       {/* Hover video preview */}
@@ -2195,51 +2217,51 @@ export default function App(){
                              />
                           )}
                           <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)",backdropFilter:"blur(2px)"}}>
-                            <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #ff4500",marginLeft:"4px"}}/>
+                            <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #35c5f4",marginLeft:"4px"}}/>
                           </div>
                         </div>
                       )}
                       {/* Video badge */}
-                      <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"3px 8px",display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",fontWeight:"700",color:"#fff",letterSpacing:"0.5px",border:"1px solid rgba(255,255,255,0.1)"}}>
-                        <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #ff4500"}}/>
+                      <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"3px 8px",display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",fontWeight:"700",color:"#f5f7fa",letterSpacing:"0.5px",border:"1px solid rgba(255,255,255,0.1)"}}>
+                        <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #35c5f4"}}/>
                         VIDEO
                       </div>
                       <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
-                        <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"11px",color:"#35c5f4",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                       </div>
                     </div>
                   ) : (p.url || p.image_urls?.[0]) ? (
-                    <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
+                    <div style={{aspectRatio:"1",background:"#131b2e",position:"relative",overflow:"hidden"}}>
                       <img src={p.url || p.image_urls?.[0]} alt={p.title} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",transition:"transform 0.3s ease"}} onError={e=>e.target.style.display="none"}/>
                       {/* Gallery indicator */}
                       {p.image_urls?.length > 1 && (
-                        <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>
+                        <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#f5f7fa"}}>
                         1/{p.image_urls.length}
                       </div>
                       )}
                       <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
-                        <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"11px",color:"#35c5f4",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                       </div>
                     </div>
                   ) : (
                     <div style={{padding:"24px",background:"linear-gradient(135deg,#1a1a1a 0%,#222 100%)",minHeight:"180px",display:"flex",flexDirection:"column"}}>
-                      <div style={{fontSize:"11px",color:"#ff4500",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit||"reddit"}</div>
-                      <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#fff"}}>{p.title}</div>
-                      {p.selftext && <div style={{fontSize:"13px",color:"#777",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
+                      <div style={{fontSize:"11px",color:"#35c5f4",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit||"reddit"}</div>
+                      <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#f5f7fa"}}>{p.title}</div>
+                      {p.selftext && <div style={{fontSize:"13px",color:"#7a96ad",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
                     </div>
                   )}
                   <div style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px"}}>
                       <div style={{minWidth:0,flex:1}}>
-                        <div style={{fontSize:"10px",color:"#666",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
-                        <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{p.title}</div>
+                        <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#c8d6e0"}}>{p.title}</div>
                       </div>
                       <div style={{display:"flex",gap:"4px",flexShrink:0}}>
                         <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} aria-label="Delete post"
-                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
                           <span aria-hidden="true">🗑</span>
                         </button>
                         <button onClick={e=>{e.stopPropagation();hidePost(p.id)}} aria-label="Hide post"
-                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                          style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
                           <span aria-hidden="true">👁</span>
                         </button>
                       </div>
@@ -2248,21 +2270,21 @@ export default function App(){
               ))}
             </div>
             {isLoading && (
-              <div style={{padding:"40px",textAlign:"center",color:"#ff4500",fontSize:"14px"}}>
+              <div style={{padding:"40px",textAlign:"center",color:"#35c5f4",fontSize:"14px"}}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
-                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#35c5f4",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
                   Loading posts…
                 </div>
               </div>
             )}
             {!isLoading && posts.length === 0 && (
-              <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>
+              <div style={{padding:"60px",textAlign:"center",color:"#5a7b9a",fontSize:"14px"}}>
                 No posts found. Try adjusting your filters.
               </div>
             )}
-            <div ref={loader} style={{padding:"60px",textAlign:"center",color:"#444",fontSize:"14px"}}>
+            <div ref={loader} style={{padding:"60px",textAlign:"center",color:"#3a5068",fontSize:"14px"}}>
               <div style={{display:"inline-flex",alignItems:"center",gap:"8px"}}>
-                <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#ff4500",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+                <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#35c5f4",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
                 Loading more posts…
               </div>
               <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
@@ -2275,22 +2297,22 @@ export default function App(){
       {activeTab === "archive" && (<>
         {/* Hidden filter/sort bar */}
         {!archiveSearchResults && (
-          <div style={{borderBottom:"1px solid #1e1e1e",background:"#111"}}>
+          <div style={{borderBottom:"1px solid #1e1e1e",background:"#0f1829"}}>
             <div style={{padding:"8px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:"8px",flexWrap:"wrap",maxWidth:"1400px",margin:"0 auto"}}>
               <div style={{display:"flex",alignItems:"center",gap:"8px",flexWrap:"wrap"}}>
                 <button
                   onClick={()=>setArchiveFilterBarOpen(o=>!o)}
                   aria-label={archiveFilterBarOpen?"Collapse hidden filters":"Expand hidden filters"}
                   aria-expanded={archiveFilterBarOpen}
-                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450018":"#1a1a1a",border:`1px solid ${archiveFilterBarOpen||hasActiveArchiveFilters()?"#ff450044":"#2a2a2a"}`,borderRadius:"8px",color:hasActiveArchiveFilters()?"#ff6a33":"#888",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"background 0.2s, border-color 0.2s, color 0.2s"}}>
+                  style={{display:"flex",alignItems:"center",gap:"6px",padding:"8px 14px",background:archiveFilterBarOpen||hasActiveArchiveFilters()?"#35c5f418":"#161d2f",border:`1px solid ${archiveFilterBarOpen||hasActiveArchiveFilters()?"rgba(53,197,244,0.27)":"#243447"}`,borderRadius:"3px",color:hasActiveArchiveFilters()?"#5fd4f8":"#8aa4bd",cursor:"pointer",fontSize:"13px",fontWeight:"500",transition:"background 0.2s, border-color 0.2s, color 0.2s"}}>
                   <span aria-hidden="true">👁</span> Filters
-                  {hasActiveArchiveFilters() && <span style={{background:"#ff4500",color:"#fff",borderRadius:"10px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
+                  {hasActiveArchiveFilters() && <span style={{background:"#35c5f4",color:"#f5f7fa",borderRadius:"3px",padding:"1px 6px",fontSize:"10px",fontWeight:"700"}}>ON</span>}
                   <span style={{fontSize:"10px",opacity:0.6}}>{archiveFilterBarOpen?"▲":"▼"}</span>
                 </button>
                 <select value={archiveSortBy} onChange={e=>{
                   const v=e.target.value; setArchiveSortBy(v)
                   applyArchiveFilters({...archiveFiltersRef.current,sort:v})
-                }} style={{padding:"8px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#888",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                }} style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#8aa4bd",fontSize:"13px",cursor:"pointer",outline:"none"}}>
                   <option value="last_added">Last added</option>
                   <option value="newest">Reddit date ↓</option>
                   <option value="oldest">Reddit date ↑</option>
@@ -2300,12 +2322,12 @@ export default function App(){
               </div>
               <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
                 {hasActiveArchiveFilters() && (
-                  <button onClick={clearArchiveFilters} style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #ff450044",borderRadius:"8px",color:"#ff6a33",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear</button>
+                  <button onClick={clearArchiveFilters} style={{padding:"8px 12px",background:"#1c2a3f",border:"1px solid #35c5f444",borderRadius:"3px",color:"#5fd4f8",cursor:"pointer",fontSize:"12px",fontWeight:"500",whiteSpace:"nowrap"}}>✕ Clear</button>
                 )}
                 <div style={{position:"relative"}}>
-                  <span style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",color:"#666",fontSize:"15px"}}>⌕</span>
+                  <span style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",color:"#5a7b9a",fontSize:"15px"}}>⌕</span>
                   <input type="search" inputMode="search" enterKeyHint="search" placeholder="Search hidden…" aria-label="Search hidden posts" autoComplete="off" spellCheck={false} value={archiveSearch} onChange={handleArchiveSearch}
-                    style={{padding:"8px 12px 8px 36px",borderRadius:"20px",border:"1px solid #333",width:"200px",background:"#1a1a1a",color:"#fff",fontSize:"13px",outline:"none"}}/>
+                    style={{padding:"8px 12px 8px 36px",borderRadius:"3px",border:"1px solid #333",width:"200px",background:"#161d2f",color:"#f5f7fa",fontSize:"13px",outline:"none"}}/>
                 </div>
               </div>
             </div>
@@ -2318,23 +2340,23 @@ export default function App(){
                       clearTimeout(archiveSearchTimeout._sub)
                       archiveSearchTimeout._sub=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)
                     }}
-                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+                    style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}/>
                   <input type="text" inputMode="text" placeholder="u/ author…" aria-label="Filter hidden by author" autoComplete="off" spellCheck={false} value={archiveFilterAuthor}
                     onChange={e=>{
                       const v=e.target.value; setArchiveFilterAuthor(v)
                       clearTimeout(archiveSearchTimeout._auth)
                       archiveSearchTimeout._auth=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,author:v}),400)
                     }}
-                    style={{padding:"9px 12px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"140px"}}/>
+                    style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}/>
                   <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
                     {[{value:"image",label:"🖼 Images"},{value:"video",label:"🎬 Videos"},{value:"text",label:"📝 Text"}].map(mt=>(
-                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:archiveFilterMediaTypes.includes(mt.value)?"#ff450022":"#1a1a1a",borderRadius:"8px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#ff4500":"#2a2a2a",transition:"background 0.15s, color 0.15s, opacity 0.15s",minHeight:"36px"}}>
+                      <label key={mt.value} style={{display:"flex",alignItems:"center",gap:"5px",cursor:"pointer",padding:"7px 10px",background:archiveFilterMediaTypes.includes(mt.value)?"rgba(53,197,244,0.13)":"#161d2f",borderRadius:"3px",border:"1px solid",borderColor:archiveFilterMediaTypes.includes(mt.value)?"#35c5f4":"#243447",transition:"background 0.15s, color 0.15s, opacity 0.15s",minHeight:"36px"}}>
                         <input type="checkbox" checked={archiveFilterMediaTypes.includes(mt.value)} onChange={e=>{
                           const newTypes=e.target.checked?[...archiveFilterMediaTypes,mt.value]:archiveFilterMediaTypes.filter(t=>t!==mt.value)
                           setArchiveFilterMediaTypes(newTypes)
                           applyArchiveFilters({...archiveFiltersRef.current,mediaTypes:newTypes})
-                        }} style={{width:"14px",height:"14px",accentColor:"#ff4500"}}/>
-                        <span style={{fontSize:"12px",color:archiveFilterMediaTypes.includes(mt.value)?"#ff6a33":"#666"}}>{mt.label}</span>
+                        }} style={{width:"14px",height:"14px",accentColor:"#35c5f4"}}/>
+                        <span style={{fontSize:"12px",color:archiveFilterMediaTypes.includes(mt.value)?"#5fd4f8":"#5a7b9a"}}>{mt.label}</span>
                       </label>
                     ))}
                   </div>
@@ -2342,8 +2364,8 @@ export default function App(){
                     <input type="checkbox" checked={archiveShowNsfw} onChange={e=>{
                       const v=e.target.checked; setArchiveShowNsfw(v)
                       applyArchiveFilters({...archiveFiltersRef.current,nsfw:v})
-                    }} style={{width:"16px",height:"16px",accentColor:"#ff4500"}}/>
-                    <span style={{fontSize:"12px",color:archiveShowNsfw?"#ff6a33":"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
+                    }} style={{width:"16px",height:"16px",accentColor:"#35c5f4"}}/>
+                    <span style={{fontSize:"12px",color:archiveShowNsfw?"#5fd4f8":"#5a7b9a",textTransform:"uppercase",letterSpacing:"0.5px"}}>NSFW</span>
                   </label>
                 </div>
               </div>
@@ -2357,16 +2379,16 @@ export default function App(){
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"24px"}}>
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                   <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#888,#555)",borderRadius:"2px"}}/>
-                  <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#666",fontWeight:"400"}}>({archiveSearchResults.length})</span></h2>
+                  <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Search Results <span style={{color:"#5a7b9a",fontWeight:"400"}}>({archiveSearchResults.length})</span></h2>
                 </div>
-                <button onClick={()=>{setArchiveSearchResults(null);setArchiveSearch("")}} style={{padding:"10px 20px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
+                <button onClick={()=>{setArchiveSearchResults(null);setArchiveSearch("")}} style={{padding:"10px 20px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"14px"}}>Clear Search</button>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archiveSearchResults.map(p=>(
-                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"14px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease"}}>
-                    <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit?`r/${p.subreddit}`:""}</div>
-                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#e0e0e0"}}>{p.title}</div>
-                    {p.author && <div style={{fontSize:"12px",color:"#555"}}>u/{p.author}</div>}
+                  <div key={p.id} onClick={()=>{setGalleryIdx(0);setSelectedPost(p)}} className="post-card" style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"3px",cursor:"pointer",border:"1px solid #2a2a2a",transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease"}}>
+                    <div style={{fontSize:"11px",color:"#8aa4bd",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"6px"}}>{p.subreddit?`r/${p.subreddit}`:""}</div>
+                    <div style={{fontWeight:"500",marginBottom:"8px",lineHeight:"1.4",color:"#dfe6ed"}}>{p.title}</div>
+                    {p.author && <div style={{fontSize:"12px",color:"#5a7b9a"}}>u/{p.author}</div>}
                   </div>
                 ))}
               </div>
@@ -2376,7 +2398,7 @@ export default function App(){
           {!archiveSearchResults && (
             <>
               {archivePosts.length===0 && !archiveIsLoading && (
-                <div style={{padding:"60px",textAlign:"center",color:"#555",fontSize:"14px"}}>No hidden posts yet.</div>
+                <div style={{padding:"60px",textAlign:"center",color:"#5a7b9a",fontSize:"14px"}}>No hidden posts yet.</div>
               )}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archivePosts.map(p=>(
@@ -2385,7 +2407,7 @@ export default function App(){
                     onMouseEnter={()=>setHoveredCard(p.id)} onMouseLeave={()=>setHoveredCard(null)}
                     role="button" tabIndex={0} aria-label={p.title}
                     className="post-card"
-                    style={{background:"linear-gradient(145deg,#1a1a1a,#141414)",borderRadius:"16px",overflow:"hidden",cursor:"pointer",border:"1px solid #222",opacity:0.9}}>
+                    style={{background:"linear-gradient(145deg,#1a1a1a,#141414)",borderRadius:"3px",overflow:"hidden",cursor:"pointer",border:"1px solid #222",opacity:0.9}}>
                     {p.is_video ? (
                       <div style={{aspectRatio:"1",background:"#0a0a0a",position:"relative",overflow:"hidden"}}>
                         {hoveredCard===p.id && p.video_url && (p.video_url.includes("v.redd.it")||p.video_url.endsWith(".mp4")) ? (
@@ -2398,44 +2420,44 @@ export default function App(){
                             </div>
                           </div>
                         )}
-                        <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"3px 8px",display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",fontWeight:"700",color:"#888",letterSpacing:"0.5px",border:"1px solid rgba(255,255,255,0.08)"}}>
+                        <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"3px 8px",display:"flex",alignItems:"center",gap:"5px",fontSize:"10px",fontWeight:"700",color:"#8aa4bd",letterSpacing:"0.5px",border:"1px solid rgba(255,255,255,0.08)"}}>
                           <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #888"}}/>VIDEO
                         </div>
-                        <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",borderRadius:"4px",padding:"2px 6px",fontSize:"9px",color:"#666",fontWeight:"600"}}>ARCHIVED</div>
+                        <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",borderRadius:"3px",padding:"2px 6px",fontSize:"9px",color:"#5a7b9a",fontWeight:"600"}}>ARCHIVED</div>
                         <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
-                          <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                          <div style={{fontSize:"11px",color:"#8aa4bd",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                         </div>
                       </div>
                     ) : (p.url||p.image_urls?.[0]) ? (
-                      <div style={{aspectRatio:"1",background:"#141414",position:"relative",overflow:"hidden"}}>
+                      <div style={{aspectRatio:"1",background:"#131b2e",position:"relative",overflow:"hidden"}}>
                          <img src={p.url||p.image_urls?.[0]} alt={p.title} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:0.85}} onError={e=>e.target.style.display="none"}/>
                         {p.image_urls?.length>1 && (
-                          <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#fff"}}>1/{p.image_urls.length}</div>
+                          <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#f5f7fa"}}>1/{p.image_urls.length}</div>
                         )}
-                        <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",borderRadius:"4px",padding:"2px 6px",fontSize:"9px",color:"#666",fontWeight:"600"}}>ARCHIVED</div>
+                        <div style={{position:"absolute",top:"10px",left:"10px",background:"rgba(0,0,0,0.75)",borderRadius:"3px",padding:"2px 6px",fontSize:"9px",color:"#5a7b9a",fontWeight:"600"}}>ARCHIVED</div>
                         <div style={{position:"absolute",bottom:0,left:0,right:0,background:"linear-gradient(transparent,rgba(0,0,0,0.8))",padding:"40px 16px 16px"}}>
-                          <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
+                          <div style={{fontSize:"11px",color:"#8aa4bd",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600"}}>{p.subreddit||"reddit"}</div>
                         </div>
                       </div>
                     ) : (
                       <div style={{padding:"24px",background:"linear-gradient(135deg,#161616 0%,#1e1e1e 100%)",minHeight:"180px",display:"flex",flexDirection:"column"}}>
-                        <div style={{fontSize:"11px",color:"#888",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit||"reddit"}</div>
-                        <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#bbb"}}>{p.title}</div>
-                        {p.selftext && <div style={{fontSize:"13px",color:"#555",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
+                        <div style={{fontSize:"11px",color:"#8aa4bd",textTransform:"uppercase",letterSpacing:"1px",fontWeight:"600",marginBottom:"12px"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"16px",fontWeight:"600",marginBottom:"12px",lineHeight:"1.4",color:"#b0c4d4"}}>{p.title}</div>
+                        {p.selftext && <div style={{fontSize:"13px",color:"#5a7b9a",lineHeight:"1.6",flex:1}}>{truncateText(p.selftext)}</div>}
                       </div>
                     )}
                     <div style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:"8px"}}>
                       <div style={{minWidth:0,flex:1}}>
-                        <div style={{fontSize:"10px",color:"#555",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
-                        <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#888"}}>{p.title}</div>
+                        <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
+                        <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#8aa4bd"}}>{p.title}</div>
                       </div>
                       <div style={{display:"flex",gap:"4px",flexShrink:0}}>
                         <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} aria-label="Delete post"
-                           style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                           style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
                            <span aria-hidden="true">🗑</span>
                          </button>
                          <button onClick={e=>{e.stopPropagation();unhidePost(p.id)}} aria-label="Unhide post"
-                           style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#666",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                           style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
                            <span aria-hidden="true">👁</span>
                          </button>
                        </div>
@@ -2444,12 +2466,12 @@ export default function App(){
                  ))}
               </div>
               {archiveIsLoading && (
-                <div style={{padding:"40px",textAlign:"center",color:"#555",fontSize:"14px"}}>
-                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#888",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+                <div style={{padding:"40px",textAlign:"center",color:"#5a7b9a",fontSize:"14px"}}>
+                  <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#8aa4bd",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
                 </div>
               )}
-              <div ref={archiveLoader} style={{padding:"60px",textAlign:"center",color:"#333",fontSize:"14px"}}>
-                <span style={{width:"20px",height:"20px",border:"2px solid #222",borderTopColor:"#555",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+              <div ref={archiveLoader} style={{padding:"60px",textAlign:"center",color:"#2d4156",fontSize:"14px"}}>
+                <span style={{width:"20px",height:"20px",border:"2px solid #222",borderTopColor:"#5a7b9a",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
               </div>
             </>
           )}
@@ -2459,24 +2481,24 @@ export default function App(){
       {/* ── RESET MODAL ── */}
       {resetModal && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>!resetLoading&&setResetModal(false)}>
-          <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"480px",width:"100%",border:"1px solid #550000",boxShadow:"0 24px 80px rgba(200,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:"#1a2234",borderRadius:"3px",maxWidth:"480px",width:"100%",border:"1px solid #550000",boxShadow:"0 24px 80px rgba(200,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"28px 28px 0"}}>
               <div style={{fontSize:"28px",marginBottom:"12px"}}>⚠️</div>
               <h2 style={{margin:"0 0 12px",fontSize:"22px",color:"#ff4444"}}>Reset All Data</h2>
-              <p style={{margin:"0 0 8px",color:"#aaa",fontSize:"14px",lineHeight:"1.6"}}>This will permanently delete:</p>
-              <ul style={{margin:"0 0 20px",color:"#888",fontSize:"13px",lineHeight:"2",paddingLeft:"20px"}}>
+              <p style={{margin:"0 0 8px",color:"#a4b8c9",fontSize:"14px",lineHeight:"1.6"}}>This will permanently delete:</p>
+              <ul style={{margin:"0 0 20px",color:"#8aa4bd",fontSize:"13px",lineHeight:"2",paddingLeft:"20px"}}>
                 <li>All posts, comments, media records and tags from the database</li>
                 <li>All downloaded media files on disk</li>
                 <li>The entire Redis download queue</li>
               </ul>
               {!resetResult ? (<>
-                <p style={{margin:"0 0 12px",color:"#666",fontSize:"13px"}}>Type <strong style={{color:"#ff4444",fontFamily:"monospace"}}>RESET</strong> to confirm:</p>
+                <p style={{margin:"0 0 12px",color:"#5a7b9a",fontSize:"13px"}}>Type <strong style={{color:"#ff4444",fontFamily:"monospace"}}>RESET</strong> to confirm:</p>
                  <input type="text" aria-label='Type RESET to confirm' autoComplete="off" spellCheck={false} value={resetInput} onChange={e=>setResetInput(e.target.value)}
                    onKeyDown={e=>e.key==="Enter"&&resetInput==="RESET"&&!resetLoading&&doReset()}
                    placeholder="RESET"
-                   style={{width:"100%",boxSizing:"border-box",padding:"12px 16px",borderRadius:"10px",border:`1px solid ${resetInput==="RESET"?"#ff4444":"#333"}`,background:"#141414",color:"#fff",fontSize:"16px",fontFamily:"monospace",outline:"none",marginBottom:"20px",transition:"border-color 0.2s"}}/>
+                   style={{width:"100%",boxSizing:"border-box",padding:"12px 16px",borderRadius:"3px",border:`1px solid ${resetInput==="RESET"?"#ff4444":"#2d4156"}`,background:"#131b2e",color:"#f5f7fa",fontSize:"16px",fontFamily:"monospace",outline:"none",marginBottom:"20px",transition:"border-color 0.2s"}}/>
               </>) : (
-                <div style={{background:"#0a1a0a",border:"1px solid #1a4a1a",borderRadius:"10px",padding:"16px",marginBottom:"20px",fontSize:"13px",color:"#46d160"}}>
+                <div style={{background:"#0a1a0a",border:"1px solid #1a4a1a",borderRadius:"3px",padding:"16px",marginBottom:"20px",fontSize:"13px",color:"#46d160"}}>
                   {resetResult.error
                     ? <span style={{color:"#ff4444"}}>Error: {resetResult.error}</span>
                     : <>✓ Reset complete — deleted {resetResult.deleted_files} files ({resetResult.deleted_mb} MB){resetResult.errors?.length>0&&<div style={{color:"#f9c300",marginTop:"4px"}}>{resetResult.errors.length} warnings</div>}</>
@@ -2486,12 +2508,12 @@ export default function App(){
             </div>
             <div style={{padding:"0 28px 28px",display:"flex",gap:"10px",justifyContent:"flex-end"}}>
               <button onClick={()=>setResetModal(false)} disabled={resetLoading}
-                style={{padding:"12px 24px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"14px"}}>
+                style={{padding:"12px 24px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"14px"}}>
                 {resetResult?"Close":"Cancel"}
               </button>
               {!resetResult && (
                 <button onClick={doReset} disabled={resetInput!=="RESET"||resetLoading}
-                  style={{padding:"12px 24px",background:resetInput==="RESET"?"#cc0000":"#330000",border:"1px solid #550000",borderRadius:"10px",color:resetInput==="RESET"?"#fff":"#555",cursor:resetInput==="RESET"?"pointer":"not-allowed",fontSize:"14px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                  style={{padding:"12px 24px",background:resetInput==="RESET"?"#cc0000":"#330000",border:"1px solid #550000",borderRadius:"3px",color:resetInput==="RESET"?"#f5f7fa":"#5a7b9a",cursor:resetInput==="RESET"?"pointer":"not-allowed",fontSize:"14px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
                   {resetLoading?"Resetting…":"Confirm Reset"}
                 </button>
               )}
@@ -2503,20 +2525,20 @@ export default function App(){
       {/* ── DELETE POST MODAL ── */}
       {deleteModal && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:"20px",backdropFilter:"blur(8px)"}} onClick={()=>setDeleteModal(false)}>
-          <div style={{background:"#0d0d0d",borderRadius:"20px",maxWidth:"420px",width:"100%",border:"1px solid #550000",boxShadow:"0 24px 80px rgba(200,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:"#1a2234",borderRadius:"3px",maxWidth:"420px",width:"100%",border:"1px solid #550000",boxShadow:"0 24px 80px rgba(200,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"28px 28px 0"}}>
               <div style={{fontSize:"28px",marginBottom:"12px"}}>🗑️</div>
               <h2 style={{margin:"0 0 12px",fontSize:"22px",color:"#ff4444"}}>Delete Post</h2>
-              <p style={{margin:"0 0 20px",color:"#aaa",fontSize:"14px",lineHeight:"1.6"}}>This will permanently delete this post and all its downloaded media from the database and disk.</p>
-              <p style={{margin:"0 0 20px",color:"#666",fontSize:"13px"}}>The post may be re-hidden on the next scrape.</p>
+              <p style={{margin:"0 0 20px",color:"#a4b8c9",fontSize:"14px",lineHeight:"1.6"}}>This will permanently delete this post and all its downloaded media from the database and disk.</p>
+              <p style={{margin:"0 0 20px",color:"#5a7b9a",fontSize:"13px"}}>The post may be re-hidden on the next scrape.</p>
             </div>
             <div style={{padding:"0 28px 28px",display:"flex",gap:"10px",justifyContent:"flex-end"}}>
               <button onClick={()=>setDeleteModal(false)}
-                style={{padding:"12px 24px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"14px"}}>
+                style={{padding:"12px 24px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"14px"}}>
                 Cancel
               </button>
               <button onClick={confirmDeletePost}
-                style={{padding:"12px 24px",background:"#cc0000",border:"1px solid #550000",borderRadius:"10px",color:"#fff",cursor:"pointer",fontSize:"14px",fontWeight:"600"}}>
+                style={{padding:"12px 24px",background:"#cc0000",border:"1px solid #550000",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"14px",fontWeight:"600"}}>
                 Delete
               </button>
             </div>
@@ -2534,7 +2556,7 @@ export default function App(){
           <div 
             className="modal-enter"
             style={{
-              background:"#0d0d0d",
+              background:"#1a2234",
               borderRadius:"20px 20px 0 0",
               width:"100%",
               maxWidth:"760px",
@@ -2552,7 +2574,7 @@ export default function App(){
           >
             {/* Drag handle */}
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"12px 0 4px"}}>
-              <div style={{width:"40px",height:"4px",background:"#333",borderRadius:"2px"}}/>
+              <div style={{width:"40px",height:"4px",background:"#2d4156",borderRadius:"2px"}}/>
             </div>
 
             {(selectedPost.is_video || selectedPost.video_url) ? (
@@ -2575,18 +2597,18 @@ export default function App(){
                 ) : (
                   <div style={{minHeight:"200px",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"16px",padding:"40px"}}>
                     <div style={{width:"80px",height:"80px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                      <div style={{width:0,height:0,borderTop:"16px solid transparent",borderBottom:"16px solid transparent",borderLeft:"26px solid #ff4500",marginLeft:"6px"}}/>
+                      <div style={{width:0,height:0,borderTop:"16px solid transparent",borderBottom:"16px solid transparent",borderLeft:"26px solid #35c5f4",marginLeft:"6px"}}/>
                     </div>
-                    {(selectedPost.video_urls?.[0] || selectedPost.url) && <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{color:"#ff4500",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
+                    {(selectedPost.video_urls?.[0] || selectedPost.url) && <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{color:"#35c5f4",fontSize:"13px",textDecoration:"none"}}>↗ Open video source</a>}
                   </div>
                 )}
-                <div style={{position:"absolute",top:"12px",left:"12px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"6px",padding:"4px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",fontWeight:"700",color:"#fff",border:"1px solid rgba(255,255,255,0.1)"}}>
-                  <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #ff4500"}}/>
+                <div style={{position:"absolute",top:"12px",left:"12px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"4px 10px",display:"flex",alignItems:"center",gap:"6px",fontSize:"11px",fontWeight:"700",color:"#f5f7fa",border:"1px solid rgba(255,255,255,0.1)"}}>
+                  <div style={{width:0,height:0,borderTop:"5px solid transparent",borderBottom:"5px solid transparent",borderLeft:"8px solid #35c5f4"}}/>
                   VIDEO
                 </div>
                 {(selectedPost.video_urls?.[0] || selectedPost.url) && (
                   <div style={{position:"absolute",top:"12px",right:"12px"}}>
-                    <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px",border:"1px solid rgba(255,255,255,0.1)"}}>↗ Open</a>
+                    <a href={selectedPost.video_urls?.[0] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",color:"#f5f7fa",padding:"8px 14px",borderRadius:"3px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px",border:"1px solid rgba(255,255,255,0.1)"}}>↗ Open</a>
                   </div>
                 )}
               </div>
@@ -2606,46 +2628,46 @@ export default function App(){
                        aria-label="Previous image"
                        onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.max(0,i-1))}} 
                        disabled={galleryIdx===0}
-                       style={{position:"absolute",top:"50%",left:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===0?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s",WebkitTapHighlightColor:"transparent"}}>
+                       style={{position:"absolute",top:"50%",left:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===0?"rgba(255,255,255,0.2)":"#f5f7fa",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s",WebkitTapHighlightColor:"transparent"}}>
                        <span aria-hidden="true">‹</span>
                      </button>
                      <button 
                        aria-label="Next image"
                        onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.min(selectedPost.image_urls.length-1,i+1))}} 
                        disabled={galleryIdx===selectedPost.image_urls.length-1}
-                       style={{position:"absolute",top:"50%",right:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===selectedPost.image_urls.length-1?"rgba(255,255,255,0.2)":"#fff",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s",WebkitTapHighlightColor:"transparent"}}>
+                       style={{position:"absolute",top:"50%",right:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===selectedPost.image_urls.length-1?"rgba(255,255,255,0.2)":"#f5f7fa",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s",WebkitTapHighlightColor:"transparent"}}>
                        <span aria-hidden="true">›</span>
                      </button>
                      {/* Dot indicators */}
                      <div style={{position:"absolute",bottom:"12px",left:"50%",transform:"translateX(-50%)",display:"flex",gap:"5px",zIndex:10}}>
                        {selectedPost.image_urls.slice(0, Math.min(selectedPost.image_urls.length, 10)).map((_,i)=>(
                          <button key={i} aria-label={`Go to image ${i+1}`} aria-current={i===galleryIdx?"true":undefined} onClick={e=>{e.stopPropagation();setGalleryIdx(i)}}
-                           style={{width:i===galleryIdx?"20px":"7px",height:"7px",borderRadius:"4px",border:"none",background:i===galleryIdx?"#ff4500":"rgba(255,255,255,0.4)",cursor:"pointer",padding:0,transition:"width 0.25s ease, background 0.25s ease",WebkitTapHighlightColor:"transparent"}}/>
+                           style={{width:i===galleryIdx?"20px":"7px",height:"7px",borderRadius:"3px",border:"none",background:i===galleryIdx?"#35c5f4":"rgba(255,255,255,0.4)",cursor:"pointer",padding:0,transition:"width 0.25s ease, background 0.25s ease",WebkitTapHighlightColor:"transparent"}}/>
                        ))}
                       {selectedPost.image_urls.length > 10 && <span style={{color:"rgba(255,255,255,0.5)",fontSize:"10px",lineHeight:"7px"}}>+{selectedPost.image_urls.length-10}</span>}
                     </div>
                     {/* Counter badge */}
-                    <div style={{position:"absolute",top:"12px",left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.8)",backdropFilter:"blur(4px)",borderRadius:"10px",padding:"4px 12px",fontSize:"12px",color:"#fff",fontVariantNumeric:"tabular-nums",border:"1px solid rgba(255,255,255,0.1)"}}>
+                    <div style={{position:"absolute",top:"12px",left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,0.8)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"4px 12px",fontSize:"12px",color:"#f5f7fa",fontVariantNumeric:"tabular-nums",border:"1px solid rgba(255,255,255,0.1)"}}>
                       {galleryIdx + 1} / {selectedPost.image_urls.length}
                     </div>
                   </>
                 )}
                 <div style={{position:"absolute",top:"12px",right:"12px"}}>
-                  <a href={selectedPost.image_urls?.[galleryIdx] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",color:"#fff",padding:"8px 14px",borderRadius:"8px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px",border:"1px solid rgba(255,255,255,0.1)"}}>↗ Open</a>
+                  <a href={selectedPost.image_urls?.[galleryIdx] || selectedPost.url} target="_blank" rel="noopener noreferrer" style={{background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",color:"#f5f7fa",padding:"8px 14px",borderRadius:"3px",textDecoration:"none",fontSize:"12px",display:"flex",alignItems:"center",gap:"4px",border:"1px solid rgba(255,255,255,0.1)"}}>↗ Open</a>
                 </div>
               </div>
             ) : null}
 
             <div style={{padding:"20px 24px"}}>
-              <div style={{display:"flex",gap:"12px",fontSize:"13px",color:"#666",marginBottom:"16px",flexWrap:"wrap",alignItems:"center"}}>
-                <span style={{color:"#ff4500",fontWeight:"600",background:"rgba(255,69,0,0.12)",padding:"4px 10px",borderRadius:"6px",fontSize:"12px"}}>r/{selectedPost.subreddit||"reddit"}</span>
-                <span style={{color:"#888",fontSize:"12px"}}>u/{selectedPost.author||"unknown"}</span>
-                {selectedPost.created_utc && <span style={{color:"#444",fontSize:"11px"}}>{formatTime(selectedPost.created_utc)}</span>}
+              <div style={{display:"flex",gap:"12px",fontSize:"13px",color:"#5a7b9a",marginBottom:"16px",flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{color:"#35c5f4",fontWeight:"600",background:"rgba(255,69,0,0.12)",padding:"4px 10px",borderRadius:"3px",fontSize:"12px"}}>r/{selectedPost.subreddit||"reddit"}</span>
+                <span style={{color:"#8aa4bd",fontSize:"12px"}}>u/{selectedPost.author||"unknown"}</span>
+                {selectedPost.created_utc && <span style={{color:"#3a5068",fontSize:"11px"}}>{formatTime(selectedPost.created_utc)}</span>}
               </div>
-              <h2 style={{margin:"0 0 20px",fontSize:"20px",lineHeight:"1.4",fontWeight:"600",color:"#fff"}}>{selectedPost.title}</h2>
+              <h2 style={{margin:"0 0 20px",fontSize:"20px",lineHeight:"1.4",fontWeight:"600",color:"#f5f7fa"}}>{selectedPost.title}</h2>
 
               {selectedPost.selftext && (
-                <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"20px",borderRadius:"12px",marginBottom:"20px",fontSize:"14px",lineHeight:"1.8",color:"#bbb",whiteSpace:"pre-wrap",border:"1px solid #222",maxHeight:"240px",overflow:"auto",WebkitOverflowScrolling:"touch"}}>
+                <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"20px",borderRadius:"3px",marginBottom:"20px",fontSize:"14px",lineHeight:"1.8",color:"#b0c4d4",whiteSpace:"pre-wrap",border:"1px solid #222",maxHeight:"240px",overflow:"auto",WebkitOverflowScrolling:"touch"}}>
                   {selectedPost.selftext}
                 </div>
               )}
@@ -2653,53 +2675,53 @@ export default function App(){
               {/* Actions row */}
               <div style={{marginBottom:"20px",display:"flex",gap:"8px",flexWrap:"wrap"}}>
                  <button onClick={()=>deletePost(selectedPost.id)}
-                   style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"10px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                   style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"3px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
                    <span aria-hidden="true">🗑</span> Delete
                  </button>
                  {selectedPost.hidden ? (
                    <button onClick={()=>unhidePost(selectedPost.id)}
-                     style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"10px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                     style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
                      ↩ Unhide
                    </button>
                  ) : (
                    <button onClick={()=>hidePost(selectedPost.id)}
-                     style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"10px",color:"#888",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
+                     style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>
                      <span aria-hidden="true">👁</span> Hide
                    </button>
                  )}
                  <button onClick={()=>setSelectedPost(null)} aria-label="Close post"
-                   style={{padding:"11px 18px",background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:"10px",color:"#555",cursor:"pointer",fontSize:"13px",marginLeft:"auto",minHeight:"44px"}}>
+                   style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"13px",marginLeft:"auto",minHeight:"44px"}}>
                    ✕ Close
                  </button>
               </div>
 
               {/* Comments */}
               {selectedPost.comments === undefined && (
-                <div style={{color:"#444",fontSize:"13px",padding:"8px 0",display:"flex",alignItems:"center",gap:"8px"}}>
-                  <span style={{width:"14px",height:"14px",border:"2px solid #333",borderTopColor:"#555",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+                <div style={{color:"#3a5068",fontSize:"13px",padding:"8px 0",display:"flex",alignItems:"center",gap:"8px"}}>
+                  <span style={{width:"14px",height:"14px",border:"2px solid #333",borderTopColor:"#5a7b9a",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
                   Loading comments…
                 </div>
               )}
               {selectedPost.comments && selectedPost.comments.length > 0 && (
                 <div>
-                  <div style={{fontSize:"12px",color:"#555",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"12px"}}>
+                  <div style={{fontSize:"12px",color:"#5a7b9a",fontWeight:"600",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:"12px"}}>
                     Comments ({selectedPost.comments.length})
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:"8px",maxHeight:"300px",overflow:"auto",WebkitOverflowScrolling:"touch",paddingRight:"2px"}}>
                     {selectedPost.comments.map(c=>(
-                      <div key={c.id} style={{background:"#141414",borderRadius:"10px",padding:"12px",border:"1px solid #1e1e1e"}}>
+                      <div key={c.id} style={{background:"#131b2e",borderRadius:"3px",padding:"12px",border:"1px solid #1e1e1e"}}>
                         <div style={{display:"flex",gap:"8px",alignItems:"center",marginBottom:"6px"}}>
-                          <span style={{color:"#ff4500",fontSize:"12px",fontWeight:"600"}}>u/{c.author||"[deleted]"}</span>
-                          {c.created_utc && <span style={{color:"#444",fontSize:"11px"}}>{formatTime(c.created_utc)}</span>}
+                          <span style={{color:"#35c5f4",fontSize:"12px",fontWeight:"600"}}>u/{c.author||"[deleted]"}</span>
+                          {c.created_utc && <span style={{color:"#3a5068",fontSize:"11px"}}>{formatTime(c.created_utc)}</span>}
                         </div>
-                        <div style={{color:"#bbb",fontSize:"14px",lineHeight:"1.6",whiteSpace:"pre-wrap"}}>{c.body}</div>
+                        <div style={{color:"#b0c4d4",fontSize:"14px",lineHeight:"1.6",whiteSpace:"pre-wrap"}}>{c.body}</div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
               {selectedPost.comments && selectedPost.comments.length === 0 && (
-                <div style={{color:"#444",fontSize:"13px",padding:"8px 0"}}>No comments hidden.</div>
+                <div style={{color:"#3a5068",fontSize:"13px",padding:"8px 0"}}>No comments hidden.</div>
               )}
             </div>
           </div>
@@ -2710,11 +2732,11 @@ export default function App(){
       <div role="status" aria-live="polite" aria-atomic="false" style={{position:"fixed",bottom:"max(24px, env(safe-area-inset-bottom, 24px))",left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",gap:"8px",zIndex:1000,pointerEvents:"none",width:"min(400px, calc(100vw - 32px))"}}>
         {toasts.map(t=>(
           <div key={t.id} style={{
-            background:t.type==="success"?"linear-gradient(135deg,#0d2818,#1a1a1a)":t.type==="error"?"linear-gradient(135deg,#2d0a00,#1a1a1a)":"#1e1e1e",
-            border:`1px solid ${t.type==="success"?"#46d16066":t.type==="error"?"#ff450066":"#333"}`,
-            color:t.type==="success"?"#46d160":t.type==="error"?"#ff6a33":"#ccc",
+            background:t.type==="success"?"linear-gradient(135deg,#0d2818,#1a1a1a)":t.type==="error"?"linear-gradient(135deg,#2d0a00,#1a1a1a)":"#1c2a3f",
+            border:`1px solid ${t.type==="success"?"#46d16066":t.type==="error"?"#35c5f466":"#2d4156"}`,
+            color:t.type==="success"?"#46d160":t.type==="error"?"#5fd4f8":"#c8d6e0",
             padding:"12px 20px",
-            borderRadius:"12px",
+            borderRadius:"3px",
             fontSize:"14px",
             boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
             backdropFilter:"blur(8px)",
@@ -2737,8 +2759,8 @@ export default function App(){
           bottom:"max(80px, calc(env(safe-area-inset-bottom, 0px) + 80px))",
           right:"16px",
           background:"linear-gradient(135deg,#1e1e1e,#141414)",
-          border:"1px solid #ff450044",
-          borderRadius:"14px",
+          border:"1px solid #35c5f444",
+          borderRadius:"3px",
           padding:"14px 16px",
           display:"flex",
           alignItems:"center",
@@ -2748,10 +2770,10 @@ export default function App(){
           maxWidth:"280px",
           animation:"slideUp 0.3s ease"
         }}>
-          <img src="/icon.png" style={{width:"36px",height:"36px",borderRadius:"8px"}} alt=""/>
+          <img src="/icon.png" style={{width:"36px",height:"36px",borderRadius:"3px"}} alt=""/>
           <div style={{flex:1}}>
-            <div style={{fontSize:"13px",fontWeight:"600",color:"#fff",marginBottom:"2px"}}>Install App</div>
-            <div style={{fontSize:"11px",color:"#666"}}>Add to home screen</div>
+            <div style={{fontSize:"13px",fontWeight:"600",color:"#f5f7fa",marginBottom:"2px"}}>Install App</div>
+            <div style={{fontSize:"11px",color:"#5a7b9a"}}>Add to home screen</div>
           </div>
           <div style={{display:"flex",gap:"6px"}}>
             <button
@@ -2761,18 +2783,19 @@ export default function App(){
                 setShowInstallBanner(false)
                 setInstallPrompt(null)
               }}
-              style={{padding:"7px 14px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
+              style={{padding:"7px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
               Install
             </button>
             <button
               onClick={()=>setShowInstallBanner(false)}
               aria-label="Dismiss install prompt"
-              style={{padding:"7px 10px",background:"#1a1a1a",border:"1px solid #333",borderRadius:"8px",color:"#555",cursor:"pointer",fontSize:"12px"}}>
+              style={{padding:"7px 10px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"12px"}}>
               <span aria-hidden="true">✕</span>
             </button>
           </div>
         </div>
       )}
     </div>
+      </div>
   )
 }

@@ -1,11 +1,11 @@
 {
-  "name": "Reddit Archive",
-  "short_name": "RedditArchive",
-  "description": "Archive and browse Reddit posts with media",
+  "name": "Reddarr",
+  "short_name": "Reddarr",
+  "description": "PVR for Reddit – monitor, archive, and manage your saved content",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d0d0d",
-  "theme_color": "#ff4500",
+  "background_color": "#0b1728",
+  "theme_color": "#35c5f4",
   "orientation": "any",
   "icons": [
     {
