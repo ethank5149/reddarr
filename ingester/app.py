@@ -168,12 +168,22 @@ def _is_direct_media_url(url: str) -> bool:
 
 
 def extract_media_urls(post):
+    """Extract all media URLs from a Reddit post.
+
+    Covers:
+    - media_metadata (gallery posts, uploaded images)
+    - gallery_data (gallery post metadata)
+    - Direct URL (i.redd.it, v.redd.it, external images)
+    - preview images (fallback)
+    - crosspost media_metadata and preview
+    - rich_video_json (embedded video in selftext)
+    - poll images
+    """
     urls = []
     data = post.__dict__
 
-    has_media_metadata = bool(data.get("media_metadata"))
-
-    if has_media_metadata:
+    # 1. media_metadata - Reddit's primary storage for uploaded images/galleries
+    if "media_metadata" in data:
         for img_id, img_data in data["media_metadata"].items():
             if "s" in img_data:
                 u = img_data["s"].get("u")
@@ -183,37 +193,127 @@ def extract_media_urls(post):
                 u = None
             if u:
                 urls.append(u)
-    else:
-        post_url = getattr(post, "url", None)
-        if post_url and _is_direct_media_url(post_url):
-            urls.append(post_url)
 
-        if not urls and "preview" in data:
-            imgs = data["preview"].get("images", [])
-            for img in imgs:
-                u = img.get("source", {}).get("url")
-                if u:
-                    urls.append(u)
-                # Also get variants (nsfw, gif, etc)
-                for var_type, var_imgs in img.get("variants", {}).items():
-                    if isinstance(var_imgs, dict):
-                        vu = var_imgs.get("url")
+    # 2. gallery_data - Gallery posts reference media_metadata by ID
+    if "gallery_data" in data:
+        for item in data["gallery_data"].get("items", []):
+            media_id = item.get("media_id")
+            if media_id and "media_metadata" in data:
+                img_data = data["media_metadata"].get(media_id)
+                if img_data:
+                    if "s" in img_data:
+                        u = img_data["s"].get("u")
+                    elif img_data.get("p"):
+                        u = img_data["p"][-1].get("u")
+                    else:
+                        u = None
+                    if u:
+                        urls.append(u)
+
+    # 3. Direct post URL (i.redd.it images, v.redd.it videos, external links)
+    post_url = getattr(post, "url", None)
+    if post_url and _is_direct_media_url(post_url):
+        urls.append(post_url)
+
+    # 4. Preview images (fallback when no media_metadata)
+    if "preview" in data:
+        imgs = data["preview"].get("images", [])
+        for img in imgs:
+            # Source resolution
+            u = img.get("source", {}).get("url")
+            if u:
+                urls.append(u)
+            # Also get variants (nsfw, gif, encrypt, etc)
+            for var_type, var_imgs in img.get("variants", {}).items():
+                if isinstance(var_imgs, dict):
+                    vu = var_imgs.get("url")
+                    if vu:
+                        urls.append(vu)
+                elif isinstance(var_imgs, list):
+                    for vi in var_imgs:
+                        vu = vi.get("url")
                         if vu:
                             urls.append(vu)
-                    elif isinstance(var_imgs, list):
-                        for vi in var_imgs:
-                            vu = vi.get("url")
-                            if vu:
-                                urls.append(vu)
 
+        # 5. rich_video_json - Embedded video in selftext/posts
+        rich_video = data["preview"].get("rich_video_json")
+        if rich_video:
+            # Reddit embeds often have fallback URLs
+            fallback = rich_video.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
+            # Check for dash playlist for videos
+            dash_url = rich_video.get("dash_url")
+            if dash_url:
+                urls.append(dash_url)
+
+    # 6. Poll images (poll attachments)
+    if "poll_data" in data:
+        for option in data["poll_data"].get("options", []):
+            img = option.get("image")
+            if img and isinstance(img, dict):
+                u = img.get("url")
+                if u:
+                    urls.append(u)
+
+    # 7. Crosspost media (both media_metadata and preview)
     if "crosspost_parent_list" in data:
         for cp in data.get("crosspost_parent_list", []):
+            # crosspost media_metadata
             for img_id, img_data in cp.get("media_metadata", {}).items():
                 if "s" in img_data:
                     u = img_data["s"].get("u")
                     if u:
                         urls.append(u)
+                elif img_data.get("p"):
+                    u = img_data["p"][-1].get("u")
+                    if u:
+                        urls.append(u)
+            # crosspost preview images
+            if "preview" in cp:
+                for img in cp["preview"].get("images", []):
+                    u = img.get("source", {}).get("url")
+                    if u:
+                        urls.append(u)
+                    for var_type, var_imgs in img.get("variants", {}).items():
+                        if isinstance(var_imgs, dict):
+                            vu = var_imgs.get("url")
+                            if vu:
+                                urls.append(vu)
+                        elif isinstance(var_imgs, list):
+                            for vi in var_imgs:
+                                vu = vi.get("url")
+                                if vu:
+                                    urls.append(vu)
 
+    # 8. Secure media URL (Reddit's secure_media field)
+    if "secure_media" in data:
+        secure = data["secure_media"]
+        if isinstance(secure, dict):
+            # Reddit video embed
+            if "reddit_video" in secure:
+                rv = secure["reddit_video"]
+                fallback = rv.get("fallback_url")
+                if fallback:
+                    urls.append(fallback)
+            # External video embed
+            elif "oembed" in secure:
+                oembed = secure["oembed"]
+                thumbnail = oembed.get("thumbnail_url")
+                if thumbnail:
+                    urls.append(thumbnail)
+
+    # 9. Media object (legacy field)
+    if "media" in data:
+        media = data["media"]
+        if isinstance(media, dict):
+            if "reddit_video" in media:
+                rv = media["reddit_video"]
+                fallback = rv.get("fallback_url")
+                if fallback:
+                    urls.append(fallback)
+
+    # Deduplicate
     seen: set = set()
     unique_urls = []
     for u in urls:
@@ -421,7 +521,7 @@ def ingest_post(db, p):
     return True
 
 
-def scrape_target(ttype, name, sort_method="new"):
+def fetch_target_posts(ttype, name, sort_method="new"):
     """Scrape a single target with the specified sort method."""
     db = get_db()
     new_posts_found = 0
@@ -484,7 +584,7 @@ def scrape_target(ttype, name, sort_method="new"):
             logger.warning(f"Rate limited on {ttype}:{name} ({sort_method}): {e}")
         else:
             logger.error(f"Error scraping {ttype}:{name} ({sort_method}): {e}")
-        ingester_errors_total.labels(error_type="scrape_target").inc()
+        ingester_errors_total.labels(error_type="fetch_target_posts").inc()
 
     return new_posts_found, posts_processed, rate_limited
 
@@ -506,7 +606,7 @@ def run_backfill_parallel(targets, passes=None, workers=None):
         """Submit a scrape task with exponential backoff on rate limit."""
         if retry_count > 2:
             return None
-        future = executor.submit(scrape_target, ttype, name, sort_method)
+        future = executor.submit(fetch_target_posts, ttype, name, sort_method)
         return future
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -514,7 +614,7 @@ def run_backfill_parallel(targets, passes=None, workers=None):
         for ttype, name, last in targets:
             for pass_num in range(passes):
                 sort_method = "top_all" if pass_num == 0 else "new"
-                future = executor.submit(scrape_target, ttype, name, sort_method)
+                future = executor.submit(fetch_target_posts, ttype, name, sort_method)
                 futures[future] = (ttype, name, sort_method, 0)
 
         completed_targets: set = set()
@@ -534,7 +634,7 @@ def run_backfill_parallel(targets, passes=None, workers=None):
                             f"Retrying {ttype}:{name} after rate limit (retry {retries + 1})"
                         )
                         new_future = executor.submit(
-                            scrape_target, ttype, name, sort_method
+                            fetch_target_posts, ttype, name, sort_method
                         )
                         futures[new_future] = (ttype, name, sort_method, retries + 1)
             except Exception as e:
@@ -641,7 +741,7 @@ def run_cycle(
         run_backfill_parallel(targets, passes, workers)
     else:
         for ttype, name, last in targets:
-            new_found, processed, _ = scrape_target(ttype, name, "new")
+            new_found, processed, _ = fetch_target_posts(ttype, name, "new")
 
             try:
                 db = get_db()

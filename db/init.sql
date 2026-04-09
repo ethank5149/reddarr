@@ -35,14 +35,25 @@ CREATE TABLE IF NOT EXISTS posts (
     raw JSONB,
     tsv tsvector,
     ingested_at TIMESTAMP DEFAULT now(),
-    archived BOOLEAN DEFAULT FALSE NOT NULL,
-    archived_at TIMESTAMP
+    hidden BOOLEAN DEFAULT FALSE NOT NULL,
+    hidden_at TIMESTAMP
 );
 
 -- Add columns to existing installations
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP DEFAULT now();
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE NOT NULL;
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMP;
+
+-- Migrate legacy 'archived' column if it exists
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'posts' AND column_name = 'archived'
+    ) THEN
+        UPDATE posts SET hidden = archived WHERE hidden IS NULL;
+    END IF;
+END $$;
 
 -- COMMENTS table
 CREATE TABLE IF NOT EXISTS comments (
@@ -78,7 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
 CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at);
 CREATE INDEX IF NOT EXISTS idx_posts_created_utc ON posts(created_utc);
 CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets(enabled);
-CREATE INDEX IF NOT EXISTS idx_posts_archived ON posts(archived);
+CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden);
 
 -- Full-text search triggers
 CREATE OR REPLACE FUNCTION posts_tsv_trigger() RETURNS trigger AS $$
