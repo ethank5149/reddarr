@@ -268,7 +268,7 @@ def get_post_dir(post_id, subreddit=None, author=None):
     return MEDIA_DIR
 
 
-def process_item(item):
+def process_item(item, session=None):
     post_id = item.get("post_id")
     url = item.get("url")
     q_subreddit = item.get("subreddit")
@@ -296,10 +296,13 @@ def process_item(item):
         time.sleep(1)
         return
 
-    session = requests.Session()
-    session.headers.update(
-        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    )
+    if session is None:
+        session = requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+        )
 
     _t_start = time.monotonic()
     try:
@@ -689,25 +692,57 @@ def process_item(item):
                 logger.error(f"Failed to record error in DB: {db_err}")
 
 
-def worker():
+def worker(worker_id):
+    processing_queue = f"media_processing_{worker_id}"
     while True:
-        logger.info("Waiting for media in queue...")
+        # Clean up any stuck item from previous crash
+        stuck = rd.lrange(processing_queue, 0, -1)
+        for item_data in stuck:
+            logger.info(f"Recovering stuck item for worker {worker_id}")
+            process_item(json.loads(item_data))
+            rd.lrem(processing_queue, 0, item_data)
+
+        logger.info(f"Worker {worker_id} waiting for media...")
         _dequeue_start = time.monotonic()
-        result = rd.blpop("media_queue", timeout=5)
-        if result is None:
-            result = rd.blpop("media_queue_retry", timeout=5)
-        if result is None:
+
+        # Use BLMOVE to atomically move item to processing queue
+        # This prevents message loss if worker crashes
+        data = rd.blmove(
+            "media_queue",
+            processing_queue,
+            src_free="RIGHT",
+            dst_free="LEFT",
+            timeout=5,
+        )
+        if data is None:
+            data = rd.blmove(
+                "media_queue_retry",
+                processing_queue,
+                src_free="RIGHT",
+                dst_free="LEFT",
+                timeout=5,
+            )
+
+        if data is None:
             continue
-        _, data = result
+
         queue_wait_seconds.observe(time.monotonic() - _dequeue_start)
-        item = json.loads(data)
-        process_item(item)
+        try:
+            item = json.loads(data)
+            process_item(item)
+            # Remove from processing queue once done
+            rd.lrem(processing_queue, 0, data)
+        except Exception as e:
+            logger.error(f"Worker {worker_id} error: {e}")
+            # If it failed, it might have been re-queued by process_item's retry logic
+            # but we should still clean up the processing queue
+            rd.lrem(processing_queue, 0, data)
 
 
 def main():
     logger.info(f"Starting {CONCURRENCY} concurrent workers...")
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-        futures = [executor.submit(worker) for _ in range(CONCURRENCY)]
+        futures = [executor.submit(worker, i) for i in range(CONCURRENCY)]
         for future in as_completed(futures):
             try:
                 future.result()

@@ -74,11 +74,14 @@ CREATE TABLE IF NOT EXISTS media (
     url TEXT,
     file_path TEXT,
     thumb_path TEXT,
-    sha256 TEXT UNIQUE,
+    sha256 TEXT, -- Removed UNIQUE here, adding it as a combined index or keeping it separate
     downloaded_at TIMESTAMP,
     status TEXT,
-    retries INT DEFAULT 0
+    retries INT DEFAULT 0,
+    UNIQUE(post_id, url)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_sha256 ON media(sha256) WHERE sha256 IS NOT NULL;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_posts_tsv ON posts USING GIN(tsv);

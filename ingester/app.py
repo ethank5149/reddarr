@@ -449,6 +449,14 @@ def ingest_post(db, p):
         f"{title or ''}|{selftext or ''}|{url or ''}".encode()
     ).hexdigest()
 
+    media_urls = extract_media_urls(p)
+
+    # If post has media, we set ingested_at to NULL so downloader can set it when done
+    # If no media, we set it to now()
+    ingested_at = (
+        None if media_urls else datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
     try:
         cur.execute(
             "SELECT version, version_hash FROM posts_history WHERE post_id=%s ORDER BY version DESC LIMIT 1",
@@ -485,13 +493,14 @@ def ingest_post(db, p):
         )
 
         cur.execute(
-            """INSERT INTO posts(id, subreddit, author, created_utc, title, selftext, url, media_url, raw)
-               VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO posts(id, subreddit, author, created_utc, title, selftext, url, media_url, raw, ingested_at)
+               VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
                  title = EXCLUDED.title,
                  selftext = EXCLUDED.selftext,
                  url = EXCLUDED.url,
-                 raw = EXCLUDED.raw""",
+                 raw = EXCLUDED.raw,
+                 ingested_at = COALESCE(posts.ingested_at, EXCLUDED.ingested_at)""",
             (
                 p.id,
                 subreddit,
@@ -502,6 +511,7 @@ def ingest_post(db, p):
                 url,
                 url,
                 json.dumps(p.__dict__, default=str),
+                ingested_at,
             ),
         )
         db.commit()
@@ -522,10 +532,19 @@ def ingest_post(db, p):
         cur.close()
         raise
 
-    media_urls = extract_media_urls(p)
+    # media_urls already extracted at start of function for ingested_at logic
     urls_queued = 0
+    cur = db.cursor()
     for med_url in media_urls:
         if med_url:
+            # Check if this media URL is already known for this post
+            cur.execute(
+                "SELECT 1 FROM media WHERE post_id = %s AND url = %s",
+                (p.id, med_url),
+            )
+            if cur.fetchone():
+                continue
+
             rd.lpush(
                 "media_queue",
                 json.dumps(
@@ -540,6 +559,7 @@ def ingest_post(db, p):
             )
             urls_queued += 1
             media_queued.inc()
+    cur.close()
     if urls_queued > 0:
         logger.info(f"Queued {urls_queued} media URLs for post {p.id}")
 

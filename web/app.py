@@ -166,6 +166,9 @@ _MIGRATIONS = [
     "ALTER TABLE targets ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
     # v7: targets.icon_url for subreddit/user avatars
     "ALTER TABLE targets ADD COLUMN IF NOT EXISTS icon_url TEXT",
+    # v8: media unique constraint on (post_id, url)
+    "DELETE FROM media WHERE id NOT IN (SELECT MIN(id) FROM media GROUP BY post_id, url)",
+    "ALTER TABLE media ADD CONSTRAINT media_post_id_url_key UNIQUE (post_id, url)",
 ]
 
 
@@ -249,7 +252,9 @@ def _refresh_target_icons():
     try:
         conn = connection_pool.getconn()
         cur = conn.cursor()
-        cur.execute("SELECT type, name FROM targets WHERE enabled = true AND (icon_url IS NULL OR icon_url = '')")
+        cur.execute(
+            "SELECT type, name FROM targets WHERE enabled = true AND (icon_url IS NULL OR icon_url = '')"
+        )
         rows = cur.fetchall()
         cur.close()
     except Exception as e:
@@ -281,9 +286,13 @@ def _refresh_target_icons():
             about = data.get("data", {})
             icon_remote = None
             if ttype == "subreddit":
-                icon_remote = about.get("community_icon") or about.get("icon_img") or None
+                icon_remote = (
+                    about.get("community_icon") or about.get("icon_img") or None
+                )
             else:
-                icon_remote = about.get("icon_img") or about.get("snoovatar_img") or None
+                icon_remote = (
+                    about.get("icon_img") or about.get("snoovatar_img") or None
+                )
 
             if icon_remote:
                 # Strip query params (Reddit appends cache-busters)
@@ -519,7 +528,9 @@ def posts(
 
     with get_db_cursor() as cur:
         query = """
-            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,
+                   p.raw->>'selftext' as selftext,
+                   p.raw->>'created_utc' as raw_created_utc
             FROM posts p
             WHERE 1=1
         """
@@ -619,17 +630,17 @@ def posts(
                 author,
                 created_utc,
                 is_hidden,
+                selftext,
+                raw_created_ts,
             ) = row
-            selftext = None
-            created_ts = None
+            created_ts = raw_created_ts
             is_video = _is_video_url(url)
 
             # Check raw JSONB for embedded media that wasn't captured in url field
             if raw:
                 try:
-                    data = raw if isinstance(raw, dict) else json.loads(raw)
                     # If raw has reddit_video, this is a video post even if URL doesn't match patterns
-                    if data.get("media") and data["media"].get("reddit_video"):
+                    if raw.get("media") and raw["media"].get("reddit_video"):
                         is_video = True
                 except Exception:
                     pass
@@ -643,7 +654,8 @@ def posts(
             thumb_url = None
 
             for m_id, m_file_path, m_thumb_path in media_rows:
-                if m_file_path and os.path.exists(m_file_path):
+                # Optimized: trust status and avoid disk I/O
+                if m_file_path:
                     local_url = _build_media_url(m_file_path)
                     if local_url:
                         if m_file_path.lower().endswith(
@@ -652,17 +664,14 @@ def posts(
                             video_urls.append(local_url)
                         else:
                             image_urls.append(local_url)
-                if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
+                if m_thumb_path and not thumb_url:
                     thumb_url = _build_thumb_url(m_thumb_path)
 
             preview_url = None
             # Only use remote URLs as fallback when no local files
             if raw:
                 try:
-                    data = raw if isinstance(raw, dict) else json.loads(raw)
-                    selftext = data.get("selftext")
-                    created_ts = data.get("created_utc")
-
+                    data = raw
                     # Extract preview thumbnail (works for both videos and images)
                     if not thumb_url and "preview" in data:
                         for img in data.get("preview", {}).get("images", []):
@@ -1069,7 +1078,7 @@ def hide_post(post_id: str):
             return {"status": "already_hidden", "post_id": post_id}
 
     # Move media files
-    files_moved, errors = _move_post_media(post_id, hide=True)
+    files_moved, errors = _move_post_media(post_id, archive=True)
 
     # Update post hidden flag
     with get_db_cursor() as cur:
@@ -1098,7 +1107,7 @@ def unhide_post(post_id: str):
             return {"status": "not_hidden", "post_id": post_id}
 
     # Move media files back
-    files_moved, errors = _move_post_media(post_id, hide=False)
+    files_moved, errors = _move_post_media(post_id, archive=False)
 
     # Update post hidden flag
     with get_db_cursor() as cur:
@@ -1269,7 +1278,7 @@ def search(
             thumb_url = None
 
             for m_file_path, m_thumb_path in media_rows:
-                if m_file_path and os.path.exists(m_file_path):
+                if m_file_path:
                     local_url = _build_media_url(m_file_path)
                     if local_url:
                         if m_file_path.lower().endswith(
@@ -1278,7 +1287,7 @@ def search(
                             video_url = local_url
                         else:
                             image_url = local_url
-                if m_thumb_path and os.path.exists(m_thumb_path) and not thumb_url:
+                if m_thumb_path and not thumb_url:
                     thumb_url = _build_thumb_url(m_thumb_path)
 
             if raw and not image_url and not video_url:
@@ -3700,7 +3709,17 @@ def posts_by_date(
 # MUST be the last route so it doesn't shadow /api/* handlers
 @app.get("/{full_path:path}")
 def spa_catchall(full_path: str):
-    if full_path.startswith(("api/", "media/", "hidden-media/", "thumb/", "hidden-thumb/", "static/", "icon.png")):
+    if full_path.startswith(
+        (
+            "api/",
+            "media/",
+            "hidden-media/",
+            "thumb/",
+            "hidden-thumb/",
+            "static/",
+            "icon.png",
+        )
+    ):
         raise HTTPException(status_code=404, detail="Not Found")
     idx = DIST_DIR / "index.html"
     if idx.exists():
