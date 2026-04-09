@@ -1914,17 +1914,17 @@ export default function App(){
       {/* ── POST DETAIL MODAL ── */}
       {selectedPost && (
         <div role="dialog" aria-modal="true" aria-label={selectedPost.title}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:200,backdropFilter:"blur(12px)"}}
+          className="post-modal-container"
           onClick={()=>setSelectedPost(null)}>
-          <div className="modal-enter" style={{background:"#1a2234",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:"760px",maxHeight:"93vh",overflow:"auto",border:"1px solid #222",borderBottom:"none",boxShadow:"0 -8px 60px rgba(0,0,0,0.7)",paddingBottom:"env(safe-area-inset-bottom, 0)"}}
+          <div className={`modal-enter post-modal-content ${(!selectedPost.is_video && !selectedPost.video_url && !selectedPost.url && !selectedPost.image_urls?.[0]) ? 'no-media' : ''}`}
             onClick={e=>e.stopPropagation()} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"12px 0 4px"}}>
+            <div className="mobile-only-drag-handle" style={{display:"flex",alignItems:"center",justifyContent:"center",padding:"12px 0 4px"}}>
               <div style={{width:"40px",height:"4px",background:"#2d4156",borderRadius:"2px"}}/>
             </div>
             {(selectedPost.is_video || selectedPost.video_url) ? (
-              <div style={{background:"#000",position:"relative",overflow:"hidden"}}>
+              <div className="post-modal-media">
                 {selectedPost.video_url && (selectedPost.video_url.includes("v.redd.it")||selectedPost.video_url.endsWith(".mp4")) ? (
-                  <video src={selectedPost.video_url} controls autoPlay muted loop playsInline style={{width:"100%",maxHeight:"480px",display:"block",background:"#000"}}/>
+                  <video src={selectedPost.video_url} controls autoPlay muted loop playsInline style={{display:"block",background:"#000"}}/>
                 ) : (
                   <div style={{minHeight:"200px",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:"16px",padding:"40px"}}>
                     <div style={{width:"80px",height:"80px",borderRadius:"50%",background:"rgba(255,69,0,0.15)",border:"2px solid rgba(255,69,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -1935,9 +1935,9 @@ export default function App(){
                 )}
               </div>
             ) : (selectedPost.url || selectedPost.image_urls?.[0]) ? (
-              <div style={{background:"#000",position:"relative",userSelect:"none"}}>
+              <div className="post-modal-media" style={{userSelect:"none"}}>
                 <img src={selectedPost.image_urls?.[galleryIdx] || selectedPost.url || selectedPost.image_urls?.[0]} alt={selectedPost.title}
-                  style={{width:"100%",maxHeight:"460px",objectFit:"contain",display:"block"}} onError={e=>e.target.style.display="none"} draggable={false}/>
+                  style={{display:"block"}} onError={e=>e.target.style.display="none"} draggable={false}/>
                 {selectedPost.image_urls?.length > 1 && (<>
                   <button aria-label="Previous" onClick={e=>{e.stopPropagation();setGalleryIdx(i=>Math.max(0,i-1))}} disabled={galleryIdx===0}
                     style={{position:"absolute",top:"50%",left:"8px",transform:"translateY(-50%)",zIndex:10,background:"rgba(0,0,0,0.7)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:"50%",width:"48px",height:"48px",cursor:"pointer",fontSize:"24px",color:galleryIdx===0?"rgba(255,255,255,0.2)":"#f5f7fa",display:"flex",alignItems:"center",justifyContent:"center"}}>‹</button>
@@ -1957,7 +1957,7 @@ export default function App(){
               </div>
             ) : null}
 
-            <div style={{padding:"20px 24px"}}>
+            <div className="post-modal-info" style={{padding:"20px 24px"}}>
               <div style={{display:"flex",gap:"12px",fontSize:"13px",color:"#5a7b9a",marginBottom:"16px",flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{color:"#35c5f4",fontWeight:"600",background:"rgba(255,69,0,0.12)",padding:"4px 10px",borderRadius:"3px",fontSize:"12px"}}>r/{selectedPost.subreddit||"reddit"}</span>
                 <span style={{color:"#8aa4bd",fontSize:"12px"}}>u/{selectedPost.author||"unknown"}</span>
@@ -1984,7 +1984,7 @@ export default function App(){
               {selectedPost.comments && selectedPost.comments.length > 0 && (
                 <div>
                   <div style={{fontSize:"12px",color:"#5a7b9a",fontWeight:"600",textTransform:"uppercase",marginBottom:"12px"}}>Comments ({selectedPost.comments.length})</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:"8px",maxHeight:"300px",overflow:"auto"}}>
+                  <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
                     {selectedPost.comments.map(c=>(
                       <div key={c.id} style={{background:"#131b2e",borderRadius:"3px",padding:"12px",border:"1px solid #1e1e1e"}}>
                         <div style={{display:"flex",gap:"8px",alignItems:"center",marginBottom:"6px"}}>
