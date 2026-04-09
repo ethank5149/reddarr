@@ -98,10 +98,13 @@ def main():
         WHERE p.raw IS NOT NULL
           AND (
             -- media_metadata entries with gif/mp4 URLs in "s"
-            EXISTS (
-              SELECT 1 FROM jsonb_each(p.raw->'media_metadata') AS mm(k,v)
-              WHERE v->'s'->>'gif' IS NOT NULL
-                 OR v->'s'->>'mp4' IS NOT NULL
+            (
+              jsonb_typeof(p.raw->'media_metadata') = 'object'
+              AND EXISTS (
+                SELECT 1 FROM jsonb_each(p.raw->'media_metadata') AS mm(k,v)
+                WHERE v->'s'->>'gif' IS NOT NULL
+                   OR v->'s'->>'mp4' IS NOT NULL
+              )
             )
             -- or preview variants containing a "gif" or "mp4" key
             OR p.raw->'preview'->'images'->0->'variants'->>'gif' IS NOT NULL
