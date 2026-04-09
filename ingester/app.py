@@ -1,5 +1,6 @@
-import os, time, json, threading, hashlib
+import os, time, json, threading, hashlib, re
 import praw, psycopg2, redis
+import requests
 from datetime import datetime, timezone
 import logging
 from prometheus_client import (
@@ -160,6 +161,60 @@ _DIRECT_MEDIA_HOSTS = (
 )
 
 
+def _extract_redgifs_video_id(url_or_html: str) -> str | None:
+    """Extract RedGifs video ID from iframe HTML or URL."""
+    patterns = [
+        r"redgifs\.com/ifr/([a-zA-Z0-9]+)",
+        r"redgifs\.com/watch/([a-zA-Z0-9]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url_or_html)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
+    """Fetch HD/SD video URLs from RedGifs API."""
+    urls = []
+    try:
+        resp = requests.get(
+            f"https://api.redgifs.com/v2/gifs/{video_id}",
+            timeout=10,
+            headers={"User-Agent": "reddit-archive/1.0"},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if "gif" in data:
+                gif = data["gif"]
+                hd = gif.get("urls", {}).get("hd")
+                sd = gif.get("urls", {}).get("sd")
+                if hd:
+                    urls.append(hd)
+                if sd:
+                    urls.append(sd)
+    except Exception as e:
+        logger.warning(f"Failed to fetch RedGifs video URLs for {video_id}: {e}")
+    return urls
+
+
+def _fetch_youtube_video_url(post_url: str) -> str | None:
+    """Fetch best quality YouTube video URL using oembed API."""
+    try:
+        match = re.search(
+            r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})", post_url
+        )
+        if match:
+            video_id = match.group(1)
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            resp = requests.get(oembed_url, timeout=10)
+            if resp.status_code == 200:
+                return f"https://www.youtube.com/watch?v={video_id}"
+    except Exception as e:
+        logger.warning(f"Failed to get YouTube info for {post_url}: {e}")
+    return None
+
+
 def _is_direct_media_url(url: str) -> bool:
     lower = url.lower().split("?")[0]
     if any(lower.endswith(ext) for ext in _DIRECT_IMAGE_EXTS):
@@ -212,8 +267,14 @@ def extract_media_urls(post):
 
     # 3. Direct post URL (i.redd.it images, v.redd.it videos, external links)
     post_url = getattr(post, "url", None)
-    if post_url and _is_direct_media_url(post_url):
-        urls.append(post_url)
+    if post_url:
+        # YouTube: if post URL is directly a YouTube link, queue it for best quality
+        if _is_direct_media_url(post_url):
+            urls.append(post_url)
+        elif "youtube.com" in post_url.lower() or "youtu.be" in post_url.lower():
+            yt_url = _fetch_youtube_video_url(post_url)
+            if yt_url:
+                urls.append(yt_url)
 
     # 4. Preview images (fallback when no media_metadata)
     if "preview" in data:
@@ -290,18 +351,46 @@ def extract_media_urls(post):
     if "secure_media" in data:
         secure = data["secure_media"]
         if isinstance(secure, dict):
+            secure_type = secure.get("type", "")
             # Reddit video embed
             if "reddit_video" in secure:
                 rv = secure["reddit_video"]
                 fallback = rv.get("fallback_url")
                 if fallback:
                     urls.append(fallback)
-            # External video embed
+            # External video embed (RedGifs, YouTube, etc.)
             elif "oembed" in secure:
                 oembed = secure["oembed"]
-                thumbnail = oembed.get("thumbnail_url")
-                if thumbnail:
-                    urls.append(thumbnail)
+                # RedGifs: fetch actual video URLs from API
+                if "redgifs" in secure_type.lower() or "redgifs" in str(oembed).lower():
+                    html = oembed.get("html", "")
+                    video_id = _extract_redgifs_video_id(html)
+                    if video_id:
+                        video_urls = _fetch_redgifs_video_urls(video_id)
+                        urls.extend(video_urls)
+                    else:
+                        thumbnail = oembed.get("thumbnail_url")
+                        if thumbnail:
+                            urls.append(thumbnail)
+                # YouTube: get the watch URL for best quality
+                elif (
+                    "youtube" in secure_type.lower()
+                    or "youtube" in str(oembed.get("provider_name", "")).lower()
+                ):
+                    yt_url = _fetch_youtube_video_url(
+                        post.url if hasattr(post, "url") else data.get("url", "")
+                    )
+                    if yt_url:
+                        urls.append(yt_url)
+                    else:
+                        thumbnail = oembed.get("thumbnail_url")
+                        if thumbnail:
+                            urls.append(thumbnail)
+                else:
+                    # Generic external embed - just get thumbnail
+                    thumbnail = oembed.get("thumbnail_url")
+                    if thumbnail:
+                        urls.append(thumbnail)
 
     # 9. Media object (legacy field)
     if "media" in data:

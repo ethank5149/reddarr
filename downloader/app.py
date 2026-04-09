@@ -423,7 +423,22 @@ def process_item(item):
                 if result.returncode == 0:
                     logger.info(f"Video downloaded: {url}")
                 else:
-                    logger.error(f"Video download failed: {result.stderr.decode()}")
+                    err_msg = result.stderr.decode()
+                    logger.error(f"Video download failed for {url}: {err_msg}")
+                    try:
+                        rd.lpush(
+                            "failed_video_downloads",
+                            json.dumps(
+                                {
+                                    "url": url,
+                                    "post_id": post_id,
+                                    "error": err_msg[:500],
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log failed video to Redis: {e}")
 
                 matches = list(Path(post_dir).glob(f"{video_stem}.*"))
                 matches = [
@@ -475,6 +490,20 @@ def process_item(item):
                     logger.warning(
                         f"Could not find downloaded video file for stem: {post_dir}/{video_stem}"
                     )
+                    try:
+                        rd.lpush(
+                            "failed_video_downloads",
+                            json.dumps(
+                                {
+                                    "url": url,
+                                    "post_id": post_id,
+                                    "error": "Video file not found after download",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log failed video to Redis: {e}")
                 break
 
             elif url.startswith("https://preview.redd.it/") or url.startswith(
