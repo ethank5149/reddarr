@@ -13,6 +13,7 @@ node_modules/
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 targets.txt
 git-purge-ignored.sh

@@ -241,7 +241,8 @@ def extract_media_urls(post):
     if "media_metadata" in data:
         for img_id, img_data in data["media_metadata"].items():
             if "s" in img_data:
-                u = img_data["s"].get("u")
+                s = img_data["s"]
+                u = s.get("gif") or s.get("mp4") or s.get("u")
             elif img_data.get("p"):
                 u = img_data["p"][-1].get("u")
             else:
@@ -257,7 +258,8 @@ def extract_media_urls(post):
                 img_data = data["media_metadata"].get(media_id)
                 if img_data:
                     if "s" in img_data:
-                        u = img_data["s"].get("u")
+                        s = img_data["s"]
+                        u = s.get("gif") or s.get("mp4") or s.get("u")
                     elif img_data.get("p"):
                         u = img_data["p"][-1].get("u")
                     else:
@@ -287,12 +289,12 @@ def extract_media_urls(post):
             # Also get variants (nsfw, gif, encrypt, etc)
             for var_type, var_imgs in img.get("variants", {}).items():
                 if isinstance(var_imgs, dict):
-                    vu = var_imgs.get("url")
+                    vu = var_imgs.get("source", {}).get("url")
                     if vu:
                         urls.append(vu)
                 elif isinstance(var_imgs, list):
                     for vi in var_imgs:
-                        vu = vi.get("url")
+                        vu = vi.get("source", {}).get("url")
                         if vu:
                             urls.append(vu)
 
@@ -323,7 +325,8 @@ def extract_media_urls(post):
             # crosspost media_metadata
             for img_id, img_data in cp.get("media_metadata", {}).items():
                 if "s" in img_data:
-                    u = img_data["s"].get("u")
+                    s = img_data["s"]
+                    u = s.get("gif") or s.get("mp4") or s.get("u")
                     if u:
                         urls.append(u)
                 elif img_data.get("p"):
@@ -338,12 +341,12 @@ def extract_media_urls(post):
                         urls.append(u)
                     for var_type, var_imgs in img.get("variants", {}).items():
                         if isinstance(var_imgs, dict):
-                            vu = var_imgs.get("url")
+                            vu = var_imgs.get("source", {}).get("url")
                             if vu:
                                 urls.append(vu)
                         elif isinstance(var_imgs, list):
                             for vi in var_imgs:
-                                vu = vi.get("url")
+                                vu = vi.get("source", {}).get("url")
                                 if vu:
                                     urls.append(vu)
 

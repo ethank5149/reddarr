@@ -311,7 +311,7 @@ def process_item(item):
         is_corrupted = False
 
         while retries < MAX_RETRIES:
-            if "i.redd.it" in url:
+            if "i.redd.it" in url and not url.lower().split("?")[0].endswith(".gif"):
                 url = get_best_image_url(url, session)
                 logger.info(f"High-res URL: {url[:60]}...")
 
@@ -509,7 +509,8 @@ def process_item(item):
             elif url.startswith("https://preview.redd.it/") or url.startswith(
                 "https://external-preview"
             ):
-                url = get_best_image_url(url, session)
+                if not url.lower().split("?")[0].endswith(".gif"):
+                    url = get_best_image_url(url, session)
                 logger.info(f"Following preview to: {url[:60]}...")
                 r = session.get(url, stream=True, timeout=60)
 
