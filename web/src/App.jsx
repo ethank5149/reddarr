@@ -19,17 +19,19 @@ export default function App(){
   const location = useLocation()
   const navigate = useNavigate()
 
-  // Parse route
+  // Parse route — default landing is subreddits (Sonarr-style)
   const pathParts = location.pathname.split('/').filter(Boolean)
-  let activeTab = "library"
+  let activeTab = "subreddits"
   let targetDetailType = null
   let targetDetailName = null
-  if(pathParts[0] === "subreddits") {
+  if(pathParts[0] === "subreddits" || pathParts.length === 0) {
     activeTab = "subreddits"
-    if(pathParts[1]) { targetDetailType = "subreddit"; targetDetailName = decodeURIComponent(pathParts[1]) }
+    if(pathParts[0] === "subreddits" && pathParts[1]) { targetDetailType = "subreddit"; targetDetailName = decodeURIComponent(pathParts[1]) }
   } else if(pathParts[0] === "users") {
     activeTab = "users"
     if(pathParts[1]) { targetDetailType = "user"; targetDetailName = decodeURIComponent(pathParts[1]) }
+  } else if(pathParts[0] === "library") {
+    activeTab = "library"
   } else if(pathParts[0] === "archive") {
     activeTab = "archive"
   } else if(pathParts[0] === "wanted") {
@@ -37,6 +39,11 @@ export default function App(){
   } else if(pathParts[0] === "system") {
     activeTab = "system"
   }
+
+  // Redirect bare / to /subreddits
+  useEffect(() => {
+    if(location.pathname === "/") navigate("/subreddits", {replace: true})
+  }, [location.pathname])
 
   // View mode for index pages
   const [viewMode, setViewMode] = useState(() => localStorage.getItem("viewMode") || "grid")
@@ -296,7 +303,10 @@ export default function App(){
     return () => { if(esRef.current) esRef.current.close() }
   },[])
 
-  useEffect(()=>{ load() },[])
+  useEffect(()=>{
+    // Load targets on startup so sidebar counts populate
+    loadAdmin()
+  },[])
 
   useEffect(()=>{
     if(activeTab === "system"){
@@ -307,7 +317,10 @@ export default function App(){
       loadAuditSummary()
       loadAuditPosts()
     }
-    if((activeTab === "subreddits" || activeTab === "users") && !adminData){
+    if(activeTab === "library" && posts.length === 0 && offsetRef.current === 0){
+      load()
+    }
+    if((activeTab === "subreddits" || activeTab === "users") && !adminData?.targets){
       loadAdmin()
     }
   },[activeTab])
@@ -980,9 +993,9 @@ export default function App(){
   // Sidebar nav items (Sonarr/Radarr style)
   const sidebarWidth = sidebarCollapsed ? 60 : 200
   const navItems = [
-    {to:"/",label:"Library",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>)},
     {to:"/subreddits",label:"Subreddits",match:"subreddits",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>),count:subredditTargets.length},
     {to:"/users",label:"Users",match:"users",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>),count:userTargets.length},
+    {to:"/library",label:"All Posts",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>)},
     {to:"/archive",label:"Hidden",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>)},
     {to:"/wanted",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
     {to:"/system",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
@@ -1144,7 +1157,7 @@ export default function App(){
   function pageTitle(){
     if(targetDetailType && targetDetailName) return `${targetDetailType==="subreddit"?"r/":"u/"}${targetDetailName}`
     switch(activeTab){
-      case "library": return "Library"
+      case "library": return "All Posts"
       case "subreddits": return "Subreddits"
       case "users": return "Users"
       case "archive": return "Hidden"
@@ -1179,9 +1192,9 @@ export default function App(){
         {/* Nav links */}
         <div style={{display:"flex",flexDirection:"column",gap:"2px",padding:"12px 8px",flex:1}}>
           {navItems.map(item=>{
-            const isActive = item.match ? activeTab === item.match : (item.to === "/" ? activeTab === "library" : location.pathname === item.to)
+            const isActive = item.match ? activeTab === item.match : activeTab === item.to.slice(1)
             return (
-              <NavLink key={item.to} to={item.to} end={item.to==="/"} style={()=>({
+              <NavLink key={item.to} to={item.to} style={()=>({
                 height:"40px",
                 borderRadius:"3px",
                 display:"flex",alignItems:"center",gap:"12px",
