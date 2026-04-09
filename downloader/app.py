@@ -229,10 +229,12 @@ def make_filename(subreddit, author, title, post_id, url):
     title_part = sanitize_name(title, 80) if title else ""
     ext = Path(url.split("?")[0]).suffix
 
+    url_hash = hashlib.md5(url.encode()).hexdigest()[:8]
+
     if title_part:
-        name = f"{prefix}_{title_part}_{post_id}{ext}"
+        name = f"{prefix}_{title_part}_{post_id}_{url_hash}{ext}"
     else:
-        name = f"{prefix}_{post_id}{ext}"
+        name = f"{prefix}_{post_id}_{url_hash}{ext}"
 
     stem = Path(name).stem[:195]
     return stem + ext

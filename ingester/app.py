@@ -317,9 +317,11 @@ def extract_media_urls(post):
     seen: set = set()
     unique_urls = []
     for u in urls:
-        if u and u not in seen:
-            seen.add(u)
-            unique_urls.append(u)
+        if u:
+            u = u.replace("&amp;", "&")
+            if u not in seen:
+                seen.add(u)
+                unique_urls.append(u)
 
     return unique_urls
 

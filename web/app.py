@@ -613,8 +613,12 @@ def posts(
                     logger.error(f"ERROR parsing raw for {post_id}: {e}")
 
             # Remove None values and deduplicate
-            video_urls = list(dict.fromkeys([v for v in video_urls if v]))
-            image_urls = list(dict.fromkeys([i for i in image_urls if i]))
+            video_urls = list(
+                dict.fromkeys([v.replace("&amp;", "&") for v in video_urls if v])
+            )
+            image_urls = list(
+                dict.fromkeys([i.replace("&amp;", "&") for i in image_urls if i])
+            )
 
             results.append(
                 {
@@ -766,9 +770,13 @@ def get_post(post_id: str):
             except Exception as e:
                 logger.error(f"ERROR parsing raw for {post_id}: {e}")
 
-        # Remove None values and deduplicate
-        video_urls = list(dict.fromkeys([v for v in video_urls if v]))
-        image_urls = list(dict.fromkeys([i for i in image_urls if i]))
+            # Remove None values and deduplicate
+            video_urls = list(
+                dict.fromkeys([v.replace("&amp;", "&") for v in video_urls if v])
+            )
+            image_urls = list(
+                dict.fromkeys([i.replace("&amp;", "&") for i in image_urls if i])
+            )
 
         return {
             "id": post_id,

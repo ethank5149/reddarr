@@ -337,6 +337,8 @@ export default function App(){
           is_video: r.data.is_video ?? prev?.is_video,
           url: r.data.image_url ?? prev?.url,
           hidden: r.data.hidden ?? prev?.hidden,
+          image_urls: r.data.image_urls ?? prev?.image_urls,
+          video_urls: r.data.video_urls ?? prev?.video_urls,
         } : prev)
       })
       .catch(()=>{})
