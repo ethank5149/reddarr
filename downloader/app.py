@@ -345,8 +345,9 @@ def process_item(item):
                 bytes_written = 0
                 with open(path, "wb") as f:
                     for chunk in r.iter_content(8192):
-                        f.write(chunk)
-                        bytes_written += len(chunk)
+                        if chunk:
+                            f.write(chunk)
+                            bytes_written += len(chunk)
                 media_download_bytes.inc(bytes_written)
                 logger.info(f"Downloaded {bytes_written} bytes to {path}")
 
@@ -497,8 +498,9 @@ def process_item(item):
                     bytes_written = 0
                     with open(path, "wb") as f:
                         for chunk in r.iter_content(8192):
-                            f.write(chunk)
-                            bytes_written += len(chunk)
+                            if chunk:
+                                f.write(chunk)
+                                bytes_written += len(chunk)
                     media_download_bytes.inc(bytes_written)
 
                     is_corrupted = detect_image_corruption(path)
