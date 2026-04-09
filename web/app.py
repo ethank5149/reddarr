@@ -504,7 +504,13 @@ def debug_post(post_id: str):
         return {"id": row[0], "raw": row[1]}
 
 
-_VIDEO_URL_PATTERNS = ("v.redd.it", "youtube.com", "youtu.be", "streamable.com")
+_VIDEO_URL_PATTERNS = (
+    "v.redd.it",
+    "youtube.com",
+    "youtu.be",
+    "streamable.com",
+    "redgifs.com",
+)
 
 
 def _is_video_url(url: Optional[str]) -> bool:
@@ -646,9 +652,13 @@ def posts(
             if media_conditions:
                 where_clauses.append("(" + " OR ".join(media_conditions) + ")")
         elif has_media is True:
-            where_clauses.append("(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND m.file_path IS NOT NULL) OR url IS NOT NULL)")
+            where_clauses.append(
+                "(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND m.file_path IS NOT NULL) OR url IS NOT NULL)"
+            )
         elif has_media is False:
-            where_clauses.append("NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND (url IS NULL OR url = '')")
+            where_clauses.append(
+                "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND (url IS NULL OR url = '')"
+            )
 
         # NSFW filter - use native JSONB operator for correctness and performance
         if nsfw == "exclude":
