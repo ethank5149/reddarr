@@ -8,9 +8,12 @@ A self-hosted Reddit data archiving platform that collects posts, comments, and 
 - **redis** (Redis 7) - Message queue for media download tasks
 - **ingester** - Polls Reddit API and ingests posts into the database
 - **downloader** - Downloads media (images, videos) from queued URLs
-- **api** (FastAPI) - REST API for querying and tagging archived content
+- **api** (FastAPI + React) - REST API and web UI for querying and tagging archived content
 - **prometheus** - Metrics collection
 - **grafana** - Visualization and monitoring dashboards
+- **postgres-exporter** - PostgreSQL metrics for Prometheus
+- **redis-exporter** - Redis metrics for Prometheus
+- **node-exporter** - System metrics for Prometheus
 
 ## Quick Start
 
@@ -19,10 +22,11 @@ A self-hosted Reddit data archiving platform that collects posts, comments, and 
    secrets/
    ├── postgres_password      # PostgreSQL password
    ├── reddit_client_id       # Reddit API client ID
-   └── reddit_client_secret   # Reddit API client secret
+   ├── reddit_client_secret   # Reddit API client secret
+   └── api_key               # API authentication key (optional)
    ```
 
-2. Configure environment in `.env` (non-sensitive settings):
+2. Configure environment in `.env`:
    ```bash
    cp .env.example .env
    # Edit .env with your preferences
@@ -33,13 +37,18 @@ A self-hosted Reddit data archiving platform that collects posts, comments, and 
    docker-compose up -d
    ```
 
+Or use the one-shot script for automated build and deploy:
+   ```bash
+   ./one-shot.sh
+   ```
+
 ## Accessing Services
 
 Once running, access the following services:
 
 | Service | URL | Default Credentials |
 |---------|-----|---------------------|
-| **API** | http://localhost:8011 | N/A |
+| **Web UI/API** | http://localhost:8011 | N/A |
 | **Prometheus** | http://localhost:9011 | N/A |
 | **Grafana** | http://localhost:3011 | admin / admin |
 | **PostgreSQL** | localhost:5432 | reddit / (see secrets/postgres_password) |
@@ -49,30 +58,40 @@ Once running, access the following services:
 
 1. Login to Grafana at http://localhost:3011
 2. Default credentials: `admin` / `admin`
-3. Add Prometheus as a data source:
-   - URL: `http://prometheus:9090`
-   - Access: Server (default)
+3. Prometheus is already configured as a data source via provisioning
 
 ## Configuration
 
-| Variable | Description |
-|----------|-------------|
-| `DB_URL` | PostgreSQL connection string |
-| `REDIS_HOST` | Redis hostname |
-| `REDDIT_CLIENT_ID` | Reddit API client ID |
-| `REDDIT_CLIENT_SECRET` | Reddit API client secret |
-| `TARGETS_FILE` | Path to targets file (required) |
-| `ARCHIVE_PATH` | Directory for downloaded media |
+Create a `.env` file with the following variables:
 
-### Targets File Format
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `POSTGRES_PASSWORD` | PostgreSQL password | (required) |
+| `REDDIT_USER_AGENT` | User agent for Reddit API requests | (required) |
+| `REDDIT_TARGET_SUBREDDITS` | Comma-separated list of subreddits to archive | (none) |
+| `REDDIT_TARGET_USERS` | Comma-separated list of Reddit users to archive | (none) |
+| `ARCHIVE_PATH` | Directory for downloaded media | /mnt/user/Archive/reddit |
+| `THUMB_PATH` | Directory for thumbnails | /mnt/user/Archive/reddit/.thumbs |
+| `ARCHIVE_MEDIA_PATH` | Directory for archived media | /mnt/user/Archive/reddit/.archive |
+| `POLL_INTERVAL` | Seconds between Reddit API polls | 300 |
+| `REDDIT_ARCHIVE_API_PORT` | API/Web UI port | 8011 |
+| `REDDIT_ARCHIVE_PROMETHEUS_PORT` | Prometheus port | 9011 |
+| `REDDIT_ARCHIVE_GRAFANA_PORT` | Grafana port | 3011 |
 
-Targets are loaded from the file specified by `TARGETS_FILE`. Format is one target per line:
+### Example .env
 
 ```
-# Lines starting with # are comments
-subreddit:python
-subreddit:learnprogramming
-user:spez
+POSTGRES_PASSWORD=changeme
+REDDIT_USER_AGENT=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36
+REDDIT_TARGET_SUBREDDITS=python,learnprogramming
+REDDIT_TARGET_USERS=spez
+ARCHIVE_PATH=/mnt/user/Archive/reddit
+THUMB_PATH=/mnt/user/Archive/reddit/.thumbs
+ARCHIVE_MEDIA_PATH=/mnt/user/Archive/reddit/.archive
+POLL_INTERVAL=300
+REDDIT_ARCHIVE_API_PORT=8011
+REDDIT_ARCHIVE_PROMETHEUS_PORT=9011
+REDDIT_ARCHIVE_GRAFANA_PORT=3011
 ```
 
 ## API Endpoints
@@ -80,3 +99,5 @@ user:spez
 - `GET /api/posts` - List posts with pagination
 - `GET /api/search?q=<query>` - Full-text search posts
 - `POST /api/tag?post_id=<id>&tag=<name>` - Tag a post
+
+The web UI is available at the API port and provides a graphical interface for browsing and searching archived content.
