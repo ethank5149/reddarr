@@ -496,7 +496,12 @@ export default function App(){
 
   function hasActiveFilters(){
     const f = filtersRef.current
-    return f.subreddit || f.author || (f.mediaTypes && f.mediaTypes.length > 0) || f.sort !== "last_added"
+    return f.subreddit || f.author || (f.mediaTypes && f.mediaTypes.length > 0) || f.sort !== "last_added" || f.nsfw !== true
+  }
+
+  function hasActiveArchiveFilters(){
+    const f = archiveFiltersRef.current
+    return f.subreddit || f.author || (f.mediaTypes && f.mediaTypes.length > 0) || f.sort !== "last_added" || f.nsfw !== true
   }
 
   function clearFilters(){
@@ -535,11 +540,6 @@ export default function App(){
     const d={subreddit:"",author:"",mediaTypes:[],sort:"last_added",nsfw:true}
     setArchiveFilterSubreddit(""); setArchiveFilterAuthor(""); setArchiveFilterMediaTypes([]); setArchiveSortBy("last_added")
     applyArchiveFilters(d)
-  }
-
-  function hasActiveArchiveFilters(){
-    const f=archiveFiltersRef.current
-    return f.subreddit||f.author||(f.mediaTypes&&f.mediaTypes.length>0)||f.sort!=="last_added"
   }
 
   function hidePost(postId){
@@ -1422,11 +1422,21 @@ export default function App(){
                       <button onClick={()=>toggleTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:currentTarget.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"3px",color:currentTarget.enabled?"#000":"#5a7b9a",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
                         {currentTarget.enabled?"Enabled":"Disabled"}
                       </button>
-                      <button onClick={()=>scrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Scrape</button>
-                      <button onClick={()=>backfillTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📜 Backfill</button>
-                      <button onClick={()=>rescanTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Re-download All</button>
-                      <button onClick={()=>rescrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2d2000",border:"1px solid #4a3a00",borderRadius:"3px",color:"#f9c300",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Retry Failed</button>
-                      <button onClick={()=>{if(window.confirm(`Archive all posts from ${targetDetailType==="subreddit"?"r/":"u/"}${currentTarget.name}?`))runArchiveTarget(currentTarget.type,currentTarget.name)}} style={{padding:"6px 14px",background:"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📦 Archive All</button>
+                      <div style={{position:"relative",display:"inline-block"}}>
+                        <button onClick={()=>{const m=document.getElementById(`sync-menu-${currentTarget.name}`);m.style.display=m.style.display==="none"?"block":"none"}} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Sync ▼</button>
+                        <div id={`sync-menu-${currentTarget.name}`} style={{display:"none",position:"absolute",top:"100%",left:0,zIndex:100,background:"#1a2234",border:"1px solid #333",borderRadius:"3px",minWidth:"140px",marginTop:"4px",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}>
+                          <div onClick={()=>{document.getElementById(`sync-menu-${currentTarget.name}`).style.display="none";scrapeTargetNow(currentTarget.type,currentTarget.name)}} style={{padding:"10px 14px",cursor:"pointer",color:"#f5f7fa",fontSize:"12px",borderBottom:"1px solid #222"}}>Get Latest</div>
+                          <div onClick={()=>{document.getElementById(`sync-menu-${currentTarget.name}`).style.display="none";backfillTargetNow(currentTarget.type,currentTarget.name)}} style={{padding:"10px 14px",cursor:"pointer",color:"#7ab3e0",fontSize:"12px"}}>Get History</div>
+                        </div>
+                      </div>
+                      <div style={{position:"relative",display:"inline-block"}}>
+                        <button onClick={()=>{const m=document.getElementById(`dl-menu-${currentTarget.name}`);m.style.display=m.style.display==="none"?"block":"none"}} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Download ▼</button>
+                        <div id={`dl-menu-${currentTarget.name}`} style={{display:"none",position:"absolute",top:"100%",left:0,zIndex:100,background:"#1a2234",border:"1px solid #333",borderRadius:"3px",minWidth:"140px",marginTop:"4px",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}>
+                          <div onClick={()=>{document.getElementById(`dl-menu-${currentTarget.name}`).style.display="none";rescanTarget(currentTarget.type,currentTarget.name)}} style={{padding:"10px 14px",cursor:"pointer",color:"#46d160",fontSize:"12px",borderBottom:"1px solid #222"}}>All Media</div>
+                          <div onClick={()=>{document.getElementById(`dl-menu-${currentTarget.name}`).style.display="none";rescrapeTargetNow(currentTarget.type,currentTarget.name)}} style={{padding:"10px 14px",cursor:"pointer",color:"#f9c300",fontSize:"12px"}}>Failed Only</div>
+                        </div>
+                      </div>
+                      <button onClick={()=>{if(window.confirm(`Archive all posts from ${targetDetailType==="subreddit"?"r/":"u/"}${currentTarget.name}?`))runArchiveTarget(currentTarget.type,currentTarget.name)}} style={{padding:"6px 14px",background:"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📦 Archive</button>
                       <button onClick={()=>deleteTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>✕ Remove</button>
                     </div>
                   )}
@@ -1622,12 +1632,15 @@ export default function App(){
                 <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Actions</h3>
               </div>
               <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                <button onClick={scrapeNow} style={{padding:"8px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:scrapeTriggered?"#000":"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
-                  {scrapeTriggered ? "✓ Sent" : "⚡ Scrape All"}
-                </button>
-                <button onClick={triggerBackfill} style={{padding:"8px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
-                  {backfillTriggered ? "✓ Sent" : "📜 Backfill All"}
-                </button>
+                <div style={{position:"relative",display:"inline-block"}}>
+                  <button onClick={()=>{const m=document.getElementById("global-sync-menu");m.style.display=m.style.display==="none"?"block":"none"}} style={{padding:"8px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:scrapeTriggered?"#000":"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
+                    {scrapeTriggered ? "✓ Syncing…" : "⚡ Sync All ▼"}
+                  </button>
+                  <div id="global-sync-menu" style={{display:"none",position:"absolute",top:"100%",left:0,zIndex:100,background:"#1a2234",border:"1px solid #333",borderRadius:"3px",minWidth:"140px",marginTop:"4px",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}>
+                    <div onClick={()=>{document.getElementById("global-sync-menu").style.display="none";scrapeNow()}} style={{padding:"10px 14px",cursor:"pointer",color:"#f5f7fa",fontSize:"12px",borderBottom:"1px solid #222"}}>Get Latest</div>
+                    <div onClick={()=>{document.getElementById("global-sync-menu").style.display="none";triggerBackfill()}} style={{padding:"10px 14px",cursor:"pointer",color:"#7ab3e0",fontSize:"12px"}}>Get History</div>
+                  </div>
+                </div>
                 <button onClick={runArchiveAll} disabled={!!archiveJob} style={{padding:"8px 14px",background:archiveJob?"#243447":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"3px",color:archiveJob?"#5a7b9a":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"700"}}>
                   {archiveJob ? "⏳ Archiving…" : "📦 Archive All"}
                 </button>
