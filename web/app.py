@@ -162,6 +162,8 @@ _MIGRATIONS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_comments_history_comment_id ON comments_history(comment_id)",
     "CREATE INDEX IF NOT EXISTS idx_comments_history_version ON comments_history(comment_id, version DESC)",
+    # v6: targets.status column for tracking banned/deleted subreddits
+    "ALTER TABLE targets ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
 ]
 
 
