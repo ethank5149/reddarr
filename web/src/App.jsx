@@ -1687,10 +1687,10 @@ export default function App(){
               </div>
               {adminSections.media && (
                 <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
-                  <button onClick={()=>{if(!window.confirm("Re-scan ALL posts for missing media?"))return;axios.post("/api/admin/media/rescan").then(r=>toastSuccess(`Scanned ${r.data.posts_scanned} posts, queued ${r.data.newly_queued} new`)).catch(err=>toastError("Rescan failed"))}}
-                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔍 Re-scan All Posts</button>
-                  <button onClick={()=>{if(!window.confirm("Retry ALL failed downloads?"))return;axios.post("/api/admin/media/rescrape").then(r=>toastSuccess(`Requeued ${r.data.requeued} items`)).catch(err=>toastError("Rescrape failed"))}}
-                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#f9c300,#e6b200)",border:"none",borderRadius:"3px",color:"#000",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>↻ Rescrape Failed</button>
+                  <button onClick={()=>{if(!window.confirm("Scan ALL posts for missing media?"))return;axios.post("/api/admin/media/rescan").then(r=>toastSuccess(`Scanned ${r.data.posts_scanned} posts, queued ${r.data.newly_queued} new`)).catch(err=>toastError("Scan failed"))}}
+                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔍 Find New Media</button>
+                  <button onClick={()=>{if(!window.confirm("Retry ALL failed downloads?"))return;axios.post("/api/admin/media/rescrape").then(r=>toastSuccess(`Requeued ${r.data.requeued} items`)).catch(err=>toastError("Retry failed"))}}
+                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#f9c300,#e6b200)",border:"none",borderRadius:"3px",color:"#000",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔄 Retry Failed</button>
                 </div>
               )}
             </div>
