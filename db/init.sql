@@ -96,6 +96,10 @@ CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets(enabled);
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit_lower ON posts(LOWER(subreddit));
 CREATE INDEX IF NOT EXISTS idx_posts_author_lower ON posts(LOWER(author));
 CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden);
+CREATE INDEX IF NOT EXISTS idx_media_status ON media(status);
+CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author, created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_hidden_created ON posts(hidden, created_utc DESC);
 
 -- Full-text search triggers
 CREATE OR REPLACE FUNCTION posts_tsv_trigger() RETURNS trigger AS $$
@@ -173,7 +177,7 @@ END $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- View for latest post version (current behavior)
 CREATE OR REPLACE VIEW posts_latest AS
-SELECT 
+SELECT DISTINCT ON (ph.post_id)
     ph.post_id,
     ph.subreddit,
     ph.author,
@@ -187,15 +191,11 @@ SELECT
     ph.version as latest_version,
     ph.captured_at
 FROM posts_history ph
-JOIN (
-    SELECT post_id, MAX(version) as max_version
-    FROM posts_history
-    GROUP BY post_id
-) mv ON ph.post_id = mv.post_id AND ph.version = mv.max_version;
+ORDER BY ph.post_id, ph.version DESC;
 
 -- View for latest comment version
 CREATE OR REPLACE VIEW comments_latest AS
-SELECT 
+SELECT DISTINCT ON (ch.comment_id)
     ch.comment_id,
     ch.post_id,
     ch.author,
@@ -206,8 +206,4 @@ SELECT
     ch.version as latest_version,
     ch.captured_at
 FROM comments_history ch
-JOIN (
-    SELECT comment_id, MAX(version) as max_version
-    FROM comments_history
-    GROUP BY comment_id
-) mv ON ch.comment_id = mv.comment_id AND ch.version = mv.max_version;
+ORDER BY ch.comment_id, ch.version DESC;

@@ -132,7 +132,8 @@ def get_db():
         return _tls.conn
 
     try:
-        _tls.conn.cursor().execute("SELECT 1")
+        with _tls.conn.cursor() as cur:
+            cur.execute("SELECT 1")
         return _tls.conn
     except Exception:
         logger.warning("DB connection lost in thread, reconnecting...")
@@ -161,7 +162,7 @@ else:
 def sha256(p):
     h = hashlib.sha256()
     with open(p, "rb") as f:
-        for c in iter(lambda: f.read(8192), b""):
+        for c in iter(lambda: f.read(131072), b""):
             h.update(c)
     return h.hexdigest()
 
@@ -707,12 +708,19 @@ def process_item(item, session=None):
 
 def worker(worker_id):
     processing_queue = f"media_processing_{worker_id}"
+    # Reuse a single session per worker to benefit from connection pooling
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+    )
     while True:
         # Clean up any stuck item from previous crash
         stuck = rd.lrange(processing_queue, 0, -1)
         for item_data in stuck:
             logger.info(f"Recovering stuck item for worker {worker_id}")
-            process_item(json.loads(item_data))
+            process_item(json.loads(item_data), session=session)
             rd.lrem(processing_queue, 0, item_data)
 
         logger.info(f"Worker {worker_id} waiting for media...")
@@ -742,7 +750,7 @@ def worker(worker_id):
         queue_wait_seconds.observe(time.monotonic() - _dequeue_start)
         try:
             item = json.loads(data)
-            process_item(item)
+            process_item(item, session=session)
             # Remove from processing queue once done
             rd.lrem(processing_queue, 0, data)
         except Exception as e:

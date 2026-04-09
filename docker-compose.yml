@@ -50,8 +50,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./ingester:/app
       - ./targets.txt:/app/targets.txt:ro
+    restart: unless-stopped
 
   downloader:
     container_name: reddit_archive_downloader
@@ -73,7 +73,7 @@ services:
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
       - ${THUMB_PATH}:${THUMB_PATH}
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
-      - ./downloader:/app
+    restart: unless-stopped
 
   api:
     container_name: reddit_archive_api
@@ -97,6 +97,7 @@ services:
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
+    restart: unless-stopped
 
   postgres-exporter:
     container_name: reddit_archive_postgres_exporter

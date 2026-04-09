@@ -59,9 +59,13 @@ BACKFILL_PASSES = int(os.getenv("BACKFILL_PASSES", "2"))
 logger.info(f"POLL_INTERVAL set to: {POLL_INTERVAL}")
 logger.info(f"BACKFILL_MODE: {BACKFILL_MODE}")
 
+def _read_secret(path):
+    with open(path) as f:
+        return f.read().strip()
+
 reddit = praw.Reddit(
-    client_id=open("/run/secrets/reddit_client_id").read().strip(),
-    client_secret=open("/run/secrets/reddit_client_secret").read().strip(),
+    client_id=_read_secret("/run/secrets/reddit_client_id"),
+    client_secret=_read_secret("/run/secrets/reddit_client_secret"),
     user_agent=os.getenv("REDDIT_USER_AGENT"),
 )
 
@@ -80,7 +84,8 @@ def get_db():
         return _tls.conn
 
     try:
-        _tls.conn.cursor().execute("SELECT 1")
+        with _tls.conn.cursor() as cur:
+            cur.execute("SELECT 1")
         return _tls.conn
     except Exception:
         logger.warning("DB connection lost in thread, reconnecting...")
@@ -213,6 +218,20 @@ def _get_redgifs_token() -> str | None:
         return _redgifs_token  # stale token is better than none
 
 
+def _parse_redgifs_urls(data: dict) -> list[str]:
+    """Extract HD/SD URLs from RedGifs API response."""
+    urls = []
+    if "gif" in data:
+        gif = data["gif"]
+        hd = gif.get("urls", {}).get("hd")
+        sd = gif.get("urls", {}).get("sd")
+        if hd:
+            urls.append(hd)
+        if sd:
+            urls.append(sd)
+    return urls
+
+
 def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
     """Fetch HD/SD video URLs from RedGifs API."""
     urls = []
@@ -227,15 +246,7 @@ def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
             headers=headers,
         )
         if resp.status_code == 200:
-            data = resp.json()
-            if "gif" in data:
-                gif = data["gif"]
-                hd = gif.get("urls", {}).get("hd")
-                sd = gif.get("urls", {}).get("sd")
-                if hd:
-                    urls.append(hd)
-                if sd:
-                    urls.append(sd)
+            urls = _parse_redgifs_urls(resp.json())
         elif resp.status_code == 401:
             # Token expired or invalid — force refresh and retry once
             global _redgifs_token_expiry
@@ -249,15 +260,7 @@ def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
                     headers=headers,
                 )
                 if resp.status_code == 200:
-                    data = resp.json()
-                    if "gif" in data:
-                        gif = data["gif"]
-                        hd = gif.get("urls", {}).get("hd")
-                        sd = gif.get("urls", {}).get("sd")
-                        if hd:
-                            urls.append(hd)
-                        if sd:
-                            urls.append(sd)
+                    urls = _parse_redgifs_urls(resp.json())
     except Exception as e:
         logger.warning(f"Failed to fetch RedGifs video URLs for {video_id}: {e}")
     return urls
@@ -500,7 +503,7 @@ def ingest_post(db, p):
     subreddit = str(p.subreddit).lower()
     author = str(p.author).lower() if p.author else None
 
-    if author and author.lower() == "[deleted]":
+    if author and author == "[deleted]":
         author = None
 
     title = p.title
@@ -602,37 +605,53 @@ def ingest_post(db, p):
 
     # media_urls already extracted at start of function for ingested_at logic
     urls_queued = 0
-    cur = db.cursor()
-    for med_url in media_urls:
-        if med_url:
-            # Check if this media URL is already known for this post
-            cur.execute(
-                "SELECT 1 FROM media WHERE post_id = %s AND url = %s",
-                (p.id, med_url),
-            )
-            if cur.fetchone():
-                continue
+    if media_urls:
+        cur = db.cursor()
+        # Batch-check which URLs already exist for this post
+        cur.execute(
+            "SELECT url FROM media WHERE post_id = %s AND url = ANY(%s)",
+            (p.id, media_urls),
+        )
+        existing_urls = {row[0] for row in cur.fetchall()}
+        cur.close()
 
-            rd.lpush(
-                "media_queue",
-                json.dumps(
-                    {
-                        "post_id": p.id,
-                        "url": med_url,
-                        "subreddit": subreddit,
-                        "author": str(p.author),
-                        "title": title,
-                    }
-                ),
-            )
-            urls_queued += 1
-            media_queued.inc()
-    cur.close()
+        for med_url in media_urls:
+            if med_url and med_url not in existing_urls:
+                rd.lpush(
+                    "media_queue",
+                    json.dumps(
+                        {
+                            "post_id": p.id,
+                            "url": med_url,
+                            "subreddit": subreddit,
+                            "author": str(p.author),
+                            "title": title,
+                        }
+                    ),
+                )
+                urls_queued += 1
+                media_queued.inc()
     if urls_queued > 0:
         logger.info(f"Queued {urls_queued} media URLs for post {p.id}")
 
     try:
         comments = fetch_comments(p)
+        if not comments:
+            return True
+
+        cur = db.cursor()
+        comment_ids = [c["id"] for c in comments]
+
+        # Batch-fetch latest version info for all comments at once
+        cur.execute(
+            """SELECT DISTINCT ON (comment_id) comment_id, version, version_hash
+               FROM comments_history
+               WHERE comment_id = ANY(%s)
+               ORDER BY comment_id, version DESC""",
+            (comment_ids,),
+        )
+        history_map = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
         for c in comments:
             c_author = c.get("author")
             if c_author and c_author.lower() == "[deleted]":
@@ -645,14 +664,9 @@ def ingest_post(db, p):
                 else None
             )
 
-            cur = db.cursor()
-            cur.execute(
-                "SELECT version, version_hash FROM comments_history WHERE comment_id=%s ORDER BY version DESC LIMIT 1",
-                (c["id"],),
-            )
-            row = cur.fetchone()
-            c_version = (row[0] + 1) if row else 1
-            c_current_hash = row[1] if row else None
+            prev = history_map.get(c["id"])
+            c_version = (prev[0] + 1) if prev else 1
+            c_current_hash = prev[1] if prev else None
 
             if c_current_hash != c_hash:
                 cur.execute(
@@ -783,13 +797,6 @@ def run_backfill_parallel(targets, passes=None, workers=None):
     backfill_errors = []
     backfill_stats = {"total": 0, "new": 0, "skipped": 0}
     rate_limited_count = 0
-
-    def submit_with_retry(ttype, name, sort_method, retry_count=0):
-        """Submit a scrape task with exponential backoff on rate limit."""
-        if retry_count > 2:
-            return None
-        future = executor.submit(fetch_target_posts, ttype, name, sort_method)
-        return future
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}

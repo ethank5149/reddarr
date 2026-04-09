@@ -232,6 +232,11 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_media_sha256_non_unique ON media(sha256)",
     "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_lower ON posts(LOWER(subreddit))",
     "CREATE INDEX IF NOT EXISTS idx_posts_author_lower ON posts(LOWER(author))",
+    # v9: Performance indexes for common query patterns
+    "CREATE INDEX IF NOT EXISTS idx_media_status ON media(status)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author, created_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_hidden_created ON posts(hidden, created_utc DESC)",
 ]
 
 
@@ -590,27 +595,21 @@ def posts(
         sort_order = "desc"
 
     with get_db_cursor() as cur:
-        query = """
-            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,
-                   p.raw->>'selftext' as selftext,
-                   p.raw->>'created_utc' as raw_created_utc
-            FROM posts p
-            WHERE 1=1
-        """
+        where_clauses = []
         params: list[Any] = []
 
         # Archive/Hidden filter - None shows all, True shows hidden, False shows visible
         if hidden is not None:
             if hidden:
-                query += " AND p.hidden = TRUE"
+                where_clauses.append("p.hidden = TRUE")
             else:
-                query += " AND p.hidden = FALSE"
+                where_clauses.append("p.hidden = FALSE")
 
         if subreddit:
-            query += " AND LOWER(subreddit) = LOWER(%s)"
+            where_clauses.append("LOWER(subreddit) = LOWER(%s)")
             params.append(subreddit)
         if author:
-            query += " AND LOWER(author) = LOWER(%s)"
+            where_clauses.append("LOWER(author) = LOWER(%s)")
             params.append(author)
 
         # media_type supersedes legacy has_media
@@ -645,24 +644,36 @@ def posts(
                     "(raw->'media'->'reddit_video') IS NULL))"
                 )
             if media_conditions:
-                query += " AND (" + " OR ".join(media_conditions) + ")"
+                where_clauses.append("(" + " OR ".join(media_conditions) + ")")
         elif has_media is True:
-            query += " AND (EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND m.file_path IS NOT NULL) OR url IS NOT NULL)"
+            where_clauses.append("(EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done' AND m.file_path IS NOT NULL) OR url IS NOT NULL)")
         elif has_media is False:
-            query += " AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND (url IS NULL OR url = '')"
+            where_clauses.append("NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'done') AND (url IS NULL OR url = '')")
 
         # NSFW filter - use native JSONB operator for correctness and performance
         if nsfw == "exclude":
-            query += (
-                " AND (raw IS NULL OR NOT COALESCE((raw->>'over_18')::boolean, false))"
+            where_clauses.append(
+                "(raw IS NULL OR NOT COALESCE((raw->>'over_18')::boolean, false))"
             )
         elif nsfw == "include":
             pass  # show all (default behavior)
 
-        query += f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
+        where_sql = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
-        cur.execute(query, params)
+        # Count query (uses same WHERE, no ORDER/LIMIT)
+        cur.execute(f"SELECT COUNT(*) FROM posts p WHERE 1=1{where_sql}", params)
+        total = cur.fetchone()[0] or 0
+
+        # Main query
+        query = f"""
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,
+                   p.raw->>'selftext' as selftext,
+                   p.raw->>'created_utc' as raw_created_utc
+            FROM posts p
+            WHERE 1=1{where_sql}
+            ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
+        """
+        cur.execute(query, params + [limit, offset])
         post_rows = cur.fetchall()
 
         if not post_rows:
@@ -810,23 +821,6 @@ def posts(
                     "hidden": is_hidden,
                 }
             )
-
-        total_query = (
-            query.replace(
-                "SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,",
-                "SELECT COUNT(*)",
-            )
-            .replace(
-                "\n                   p.raw->>'selftext' as selftext,\n                   p.raw->>'created_utc' as raw_created_utc",
-                "",
-            )
-            .replace(
-                f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s",
-                "",
-            )
-        )
-        cur.execute(total_query, params[:-2])
-        total = cur.fetchone()[0] or 0
 
         return {"posts": results, "total": total, "limit": limit, "offset": offset}
 
@@ -1325,7 +1319,22 @@ def search(
         )
 
         results = []
-        for row in cur.fetchall():
+        rows = cur.fetchall()
+        if not rows:
+            return results
+
+        # Batch-fetch media for all result posts
+        post_ids = [row[0] for row in rows]
+        media_by_post: dict[str, list[tuple]] = {pid: [] for pid in post_ids}
+        cur.execute(
+            "SELECT post_id, file_path, thumb_path FROM media WHERE post_id = ANY(%s)",
+            (post_ids,),
+        )
+        for m_pid, m_file_path, m_thumb_path in cur.fetchall():
+            if m_pid in media_by_post:
+                media_by_post[m_pid].append((m_file_path, m_thumb_path))
+
+        for row in rows:
             post_id, title, subreddit, author, created_utc, url, media_url, raw = row
 
             is_video = _is_video_url(url)
@@ -1337,11 +1346,7 @@ def search(
                 except Exception:
                     pass
 
-            cur.execute(
-                "SELECT file_path, thumb_path FROM media WHERE post_id = %s",
-                (post_id,),
-            )
-            media_rows = cur.fetchall()
+            media_rows = media_by_post.get(post_id, [])
 
             image_url = None
             video_url = None
@@ -1560,23 +1565,25 @@ def admin_stats():
                 }
             )
 
-        cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = FALSE")
-        total_posts = cur.fetchone()[0]
+        cur.execute("""
+            SELECT
+                COUNT(*) FILTER (WHERE hidden = FALSE),
+                COUNT(*) FILTER (WHERE hidden = TRUE)
+            FROM posts
+        """)
+        total_posts, hidden_posts = cur.fetchone()
 
-        cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = TRUE")
-        hidden_posts = cur.fetchone()[0]
+        cur.execute("""
+            SELECT
+                COUNT(*),
+                COUNT(*) FILTER (WHERE status = 'done'),
+                COUNT(*) FILTER (WHERE status = 'pending')
+            FROM media
+        """)
+        total_media, downloaded_media, pending_media = cur.fetchone()
 
         cur.execute("SELECT COUNT(*) FROM comments")
         total_comments = cur.fetchone()[0]
-
-        cur.execute("SELECT COUNT(*) FROM media WHERE status = 'done'")
-        downloaded_media = cur.fetchone()[0]
-
-        cur.execute("SELECT COUNT(*) FROM media")
-        total_media = cur.fetchone()[0]
-
-        cur.execute("SELECT COUNT(*) FROM media WHERE status = 'pending'")
-        pending_media = cur.fetchone()[0]
 
         cur.execute("""
             SELECT DATE(created_utc) as day, COUNT(*)
