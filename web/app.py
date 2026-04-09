@@ -170,6 +170,8 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_media_post_id_url ON media(post_id, url)",
     "DELETE FROM media a USING media b WHERE a.id > b.id AND a.post_id = b.post_id AND a.url = b.url",
     "ALTER TABLE media ADD CONSTRAINT media_post_id_url_key UNIQUE (post_id, url)",
+    "DROP INDEX IF EXISTS idx_media_sha256",
+    "CREATE INDEX IF NOT EXISTS idx_media_sha256_non_unique ON media(sha256)",
 ]
 
 
@@ -2111,45 +2113,40 @@ def delete_target(
         deleted_files = 0
 
         if prune:
+            # First, fetch post IDs safely
             if target_type == "subreddit":
                 cur.execute(
-                    "DELETE FROM posts WHERE LOWER(subreddit) = LOWER(%s) RETURNING id",
+                    "SELECT id FROM posts WHERE LOWER(subreddit) = LOWER(%s)",
                     (name,),
                 )
             else:
                 cur.execute(
-                    "DELETE FROM posts WHERE LOWER(author) = LOWER(%s) RETURNING id",
+                    "SELECT id FROM posts WHERE LOWER(author) = LOWER(%s)",
                     (name,),
                 )
-            deleted_posts = cur.rowcount
-
-            cur.execute(
-                "SELECT id FROM posts WHERE "
-                + (
-                    "LOWER(subreddit) = LOWER(%s)"
-                    if target_type == "subreddit"
-                    else "LOWER(author) = LOWER(%s)"
-                ),
-                (name,),
-            )
             post_ids = [row[0] for row in cur.fetchall()]
 
             if post_ids:
-                cur.execute("DELETE FROM media WHERE post_id = ANY(%s)", (post_ids,))
-                deleted_media = cur.rowcount
-
                 if delete_files:
                     cur.execute(
-                        "SELECT file_path FROM media WHERE post_id = ANY(%s) AND file_path IS NOT NULL",
+                        "SELECT file_path, thumb_path FROM media WHERE post_id = ANY(%s)",
                         (post_ids,),
                     )
-                    for row in cur.fetchall():
-                        if row[0] and os.path.exists(row[0]):
-                            try:
-                                os.remove(row[0])
-                                deleted_files += 1
-                            except Exception:
-                                pass
+                    for file_path, thumb_path in cur.fetchall():
+                        for p in [file_path, thumb_path]:
+                            if p and os.path.exists(p):
+                                try:
+                                    os.remove(p)
+                                    if p == file_path:
+                                        deleted_files += 1
+                                except Exception:
+                                    pass
+
+                cur.execute("DELETE FROM media WHERE post_id = ANY(%s)", (post_ids,))
+                deleted_media = cur.rowcount
+                cur.execute("DELETE FROM comments WHERE post_id = ANY(%s)", (post_ids,))
+                cur.execute("DELETE FROM posts WHERE id = ANY(%s)", (post_ids,))
+                deleted_posts = cur.rowcount
 
         conn.commit()
         return {
@@ -2933,9 +2930,13 @@ def _extract_media_urls_from_raw(raw: dict, post_url: str) -> list:
     seen = set()
     unique_urls = []
     for u in urls:
-        if u and u not in seen:
-            seen.add(u)
-            unique_urls.append(u)
+        if u:
+            # Strip query params from reddit previews for consistency
+            if "preview.redd.it" in u or "external-preview.redd.it" in u:
+                u = u.split("?")[0]
+            if u not in seen:
+                seen.add(u)
+                unique_urls.append(u)
 
     return unique_urls
 

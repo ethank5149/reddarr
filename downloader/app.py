@@ -318,8 +318,15 @@ def process_item(item, session=None):
                 url = get_best_image_url(url, session)
                 logger.info(f"High-res URL: {url[:60]}...")
 
+            # Strip query parameters for consistency if it's a reddit preview
+            if "preview.redd.it" in url or "external-preview.redd.it" in url:
+                url = url.split("?")[0]
+
             if (
-                any(url.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"])
+                any(
+                    url.lower().split("?")[0].endswith(x)
+                    for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+                )
                 or "i.redd.it" in url
             ):
                 logger.info(f"Downloading image: {url[:80]}...")
@@ -388,8 +395,10 @@ def process_item(item, session=None):
                         """
                        INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                        VALUES(%s,%s,%s,%s,%s,%s,%s)
-                       ON CONFLICT (sha256) DO UPDATE SET 
-                         post_id = EXCLUDED.post_id,
+                       ON CONFLICT (post_id, url) DO UPDATE SET 
+                         file_path = EXCLUDED.file_path,
+                         thumb_path = EXCLUDED.thumb_path,
+                         sha256 = EXCLUDED.sha256,
                          downloaded_at = EXCLUDED.downloaded_at,
                          status = EXCLUDED.status
                        """,
@@ -469,9 +478,10 @@ def process_item(item, session=None):
                             """
                             INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                             VALUES(%s,%s,%s,%s,%s,%s,%s)
-                            ON CONFLICT (sha256) DO UPDATE SET 
-                              post_id = EXCLUDED.post_id, 
+                            ON CONFLICT (post_id, url) DO UPDATE SET 
+                              file_path = EXCLUDED.file_path,
                               thumb_path = EXCLUDED.thumb_path,
+                              sha256 = EXCLUDED.sha256,
                               downloaded_at = EXCLUDED.downloaded_at,
                               status = EXCLUDED.status
                             """,
@@ -683,7 +693,7 @@ def process_item(item, session=None):
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) "
-                        "ON CONFLICT DO NOTHING",
+                        "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
                         (post_id, url),
                     )
                     conn.commit()

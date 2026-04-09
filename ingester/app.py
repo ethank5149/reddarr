@@ -411,6 +411,9 @@ def extract_media_urls(post):
     for u in urls:
         if u:
             u = u.replace("&amp;", "&")
+            # Reddit sometimes adds ?width=... to preview URLs, strip them for consistency
+            if "preview.redd.it" in u or "external-preview.redd.it" in u:
+                u = u.split("?")[0]
             if u not in seen:
                 seen.add(u)
                 unique_urls.append(u)
