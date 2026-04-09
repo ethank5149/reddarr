@@ -183,14 +183,48 @@ def _extract_redgifs_video_id(url_or_html: str) -> str | None:
     return None
 
 
+_redgifs_token: str | None = None
+_redgifs_token_expiry: float = 0.0
+_redgifs_token_lock = threading.Lock()
+
+
+def _get_redgifs_token() -> str | None:
+    """Obtain (and cache) a temporary RedGifs API bearer token."""
+    global _redgifs_token, _redgifs_token_expiry
+    with _redgifs_token_lock:
+        if _redgifs_token and time.time() < _redgifs_token_expiry:
+            return _redgifs_token
+        try:
+            resp = requests.get(
+                "https://api.redgifs.com/v2/auth/temporary",
+                timeout=10,
+                headers={"User-Agent": "reddit-archive/1.0"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                _redgifs_token = data.get("token")
+                # Tokens are valid for ~24 h; refresh after 20 h to be safe
+                _redgifs_token_expiry = time.time() + 20 * 3600
+                return _redgifs_token
+            else:
+                logger.warning(f"RedGifs auth returned {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to obtain RedGifs token: {e}")
+        return _redgifs_token  # stale token is better than none
+
+
 def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
     """Fetch HD/SD video URLs from RedGifs API."""
     urls = []
+    token = _get_redgifs_token()
+    headers = {"User-Agent": "reddit-archive/1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         resp = requests.get(
             f"https://api.redgifs.com/v2/gifs/{video_id}",
             timeout=10,
-            headers={"User-Agent": "reddit-archive/1.0"},
+            headers=headers,
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -202,6 +236,28 @@ def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
                     urls.append(hd)
                 if sd:
                     urls.append(sd)
+        elif resp.status_code == 401:
+            # Token expired or invalid — force refresh and retry once
+            global _redgifs_token_expiry
+            _redgifs_token_expiry = 0.0
+            token = _get_redgifs_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+                resp = requests.get(
+                    f"https://api.redgifs.com/v2/gifs/{video_id}",
+                    timeout=10,
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "gif" in data:
+                        gif = data["gif"]
+                        hd = gif.get("urls", {}).get("hd")
+                        sd = gif.get("urls", {}).get("sd")
+                        if hd:
+                            urls.append(hd)
+                        if sd:
+                            urls.append(sd)
     except Exception as e:
         logger.warning(f"Failed to fetch RedGifs video URLs for {video_id}: {e}")
     return urls

@@ -144,6 +144,72 @@ export default function App(){
   const [installPrompt, setInstallPrompt] = useState(null)
   const [showInstallBanner, setShowInstallBanner] = useState(false)
 
+  const [targetIndexSearch, setTargetIndexSearch] = useState("")
+  const [targetIndexSortBy, setTargetIndexSortBy] = useState("name_asc")
+  const [targetIndexFilterEnabled, setTargetIndexFilterEnabled] = useState(true)
+  const [targetIndexFilterStatus, setTargetIndexFilterStatus] = useState("all")
+
+  const [targetDetailSearch, setTargetDetailSearch] = useState("")
+  const [targetDetailSortBy, setTargetDetailSortBy] = useState("newest")
+  const [targetDetailFilterMediaType, setTargetDetailFilterMediaType] = useState("all")
+  const [targetDetailSearchResults, setTargetDetailSearchResults] = useState(null)
+
+  const targetIndexSearchTimeout = useRef()
+
+  function hasActiveTargetIndexFilters(){
+    return targetIndexSearch || targetIndexFilterStatus !== "all"
+  }
+
+  function hasActiveTargetDetailFilters(){
+    return targetDetailSearch || targetDetailFilterMediaType !== "all"
+  }
+
+  function getFilteredAndSortedTargets(items){
+    let filtered = [...items]
+    if(targetIndexSearch){
+      const q = targetIndexSearch.toLowerCase()
+      filtered = filtered.filter(t => t.name.toLowerCase().includes(q))
+    }
+    if(targetIndexFilterStatus !== "all"){
+      filtered = filtered.filter(t => {
+        if(targetIndexFilterStatus === "enabled") return t.enabled
+        if(targetIndexFilterStatus === "disabled") return !t.enabled
+        if(targetIndexFilterStatus === "error") return t.status === "error"
+        return true
+      })
+    }
+    filtered.sort((a,b) => {
+      if(targetIndexSortBy === "name_asc") return a.name.localeCompare(b.name)
+      if(targetIndexSortBy === "name_desc") return b.name.localeCompare(a.name)
+      if(targetIndexSortBy === "posts_desc") return (b.post_count||0) - (a.post_count||0)
+      if(targetIndexSortBy === "posts_asc") return (a.post_count||0) - (b.post_count||0)
+      if(targetIndexSortBy === "media_desc") return (b.total_media||0) - (a.total_media||0)
+      if(targetIndexSortBy === "media_asc") return (a.total_media||0) - (b.total_media||0)
+      return 0
+    })
+    return filtered
+  }
+
+  function getFilteredAndSortedPosts(posts){
+    let filtered = [...posts]
+    if(targetDetailFilterMediaType !== "all"){
+      filtered = filtered.filter(p => {
+        if(targetDetailFilterMediaType === "image") return !p.is_video && (p.url || p.image_urls?.length > 0)
+        if(targetDetailFilterMediaType === "video") return p.is_video || p.video_url
+        if(targetDetailFilterMediaType === "text") return !p.url && !p.image_urls?.length && !p.is_video && p.selftext
+        return true
+      })
+    }
+    filtered.sort((a,b) => {
+      if(targetDetailSortBy === "newest") return new Date(b.created_utc) - new Date(a.created_utc)
+      if(targetDetailSortBy === "oldest") return new Date(a.created_utc) - new Date(b.created_utc)
+      if(targetDetailSortBy === "title_asc") return (a.title||"").localeCompare(b.title||"")
+      if(targetDetailSortBy === "title_desc") return (b.title||"").localeCompare(a.title||"")
+      return 0
+    })
+    return filtered
+  }
+
   // Detect touch device and handle safe areas
   useEffect(() => {
     const checkTouch = () => setIsTouch(isTouchDevice())
@@ -264,6 +330,7 @@ export default function App(){
 
   const loader=useRef()
   const searchTimeout=useRef()
+  const targetDetailSearchTimeout=useRef()
   const esRef=useRef(null)
   const highlightTimerRef=useRef(null)
 
