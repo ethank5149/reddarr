@@ -1,4 +1,4 @@
-# Reddit Archive
+# Reddarr
 
 A self-hosted Reddit data archiving platform that collects posts, comments, and media from specified subreddits and users.
 
@@ -48,15 +48,15 @@ Once running, access the following services:
 
 | Service | URL | Default Credentials |
 |---------|-----|---------------------|
-| **Web UI/API** | http://localhost:8011 | N/A |
-| **Prometheus** | http://localhost:9011 | N/A |
-| **Grafana** | http://localhost:3011 | admin / admin |
+| **Web UI/API** | http://localhost:8080 | N/A |
+| **Prometheus** | http://localhost:9090 | N/A |
+| **Grafana** | http://localhost:3000 | admin / admin |
 | **PostgreSQL** | localhost:5432 | reddit / (see secrets/postgres_password) |
 | **Redis** | localhost:6379 | N/A |
 
 ### Grafana Setup
 
-1. Login to Grafana at http://localhost:3011
+1. Login to Grafana at http://localhost:3000
 2. Default credentials: `admin` / `admin`
 3. Prometheus is already configured as a data source via provisioning
 
@@ -74,24 +74,20 @@ Create a `.env` file with the following variables:
 | `THUMB_PATH` | Directory for thumbnails | /mnt/user/Archive/reddit/.thumbs |
 | `ARCHIVE_MEDIA_PATH` | Directory for archived media | /mnt/user/Archive/reddit/.archive |
 | `POLL_INTERVAL` | Seconds between Reddit API polls | 300 |
-| `REDDIT_ARCHIVE_API_PORT` | API/Web UI port | 8011 |
-| `REDDIT_ARCHIVE_PROMETHEUS_PORT` | Prometheus port | 9011 |
-| `REDDIT_ARCHIVE_GRAFANA_PORT` | Grafana port | 3011 |
+| `REDDIT_ARCHIVE_API_PORT` | API/Web UI port | 8080 |
+| `REDDIT_ARCHIVE_PROMETHEUS_PORT` | Prometheus port | 9090 |
+| `REDDIT_ARCHIVE_GRAFANA_PORT` | Grafana port | 3000 |
 
 ### Example .env
 
 ```
-POSTGRES_PASSWORD=changeme
 REDDIT_USER_AGENT=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36
-REDDIT_TARGET_SUBREDDITS=python,learnprogramming
-REDDIT_TARGET_USERS=spez
-ARCHIVE_PATH=/mnt/user/Archive/reddit
-THUMB_PATH=/mnt/user/Archive/reddit/.thumbs
-ARCHIVE_MEDIA_PATH=/mnt/user/Archive/reddit/.archive
+TARGETS_FILE=/app/targets.txt
+ARCHIVE_PATH=/path/to/archive
 POLL_INTERVAL=300
-REDDIT_ARCHIVE_API_PORT=8011
-REDDIT_ARCHIVE_PROMETHEUS_PORT=9011
-REDDIT_ARCHIVE_GRAFANA_PORT=3011
+REDDIT_ARCHIVE_API_PORT=8080
+REDDIT_ARCHIVE_PROMETHEUS_PORT=9090
+REDDIT_ARCHIVE_GRAFANA_PORT=3000
 ```
 
 ## API Endpoints

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== Reddit Archive - Build & Deploy ==="
+echo "=== Reddarr - Build & Deploy ==="
 
 if [ ! -f .env ]; then
     if [ -f .env.example ]; then
