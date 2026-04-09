@@ -607,10 +607,10 @@ def posts(
                 query += " AND p.hidden = FALSE"
 
         if subreddit:
-            query += " AND subreddit = %s"
+            query += " AND LOWER(subreddit) = LOWER(%s)"
             params.append(subreddit)
         if author:
-            query += " AND author = %s"
+            query += " AND LOWER(author) = LOWER(%s)"
             params.append(author)
 
         # media_type supersedes legacy has_media
@@ -2412,10 +2412,10 @@ def admin_logs(
         params: list[Any] = []
 
         if subreddit:
-            query += " AND p.subreddit = %s"
+            query += " AND LOWER(p.subreddit) = LOWER(%s)"
             params.append(subreddit)
         if author:
-            query += " AND p.author = %s"
+            query += " AND LOWER(p.author) = LOWER(%s)"
             params.append(author)
 
         query += " ORDER BY p.created_utc DESC LIMIT %s OFFSET %s"
