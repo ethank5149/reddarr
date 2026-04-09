@@ -3099,6 +3099,7 @@ async def event_stream():
                         t.type,
                         t.name,
                         t.enabled,
+                        t.status,
                         t.last_created,
                         COUNT(DISTINCT p.id) AS post_count,
                         COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
@@ -3109,7 +3110,7 @@ async def event_stream():
                     LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
                                       OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
                     LEFT JOIN media m ON m.post_id = p.id
-                    GROUP BY t.type, t.name, t.enabled, t.last_created
+                    GROUP BY t.type, t.name, t.enabled, t.status, t.last_created
                     ORDER BY t.type, t.name
                 """)
                 target_rows = cur.fetchall()
@@ -3119,6 +3120,7 @@ async def event_stream():
                         ttype,
                         name,
                         enabled,
+                        status,
                         last_created,
                         post_count,
                         posts_7d,
@@ -3144,6 +3146,7 @@ async def event_stream():
                             "type": ttype,
                             "name": name,
                             "enabled": enabled,
+                            "status": status or "active",
                             "last_created": last_created.isoformat()
                             if last_created
                             else None,
