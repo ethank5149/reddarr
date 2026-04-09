@@ -457,6 +457,15 @@ export default function App(){
     return ()=> obs.disconnect()
   },[targetPostsLoader.current, targetDetailType, targetDetailName, targetPostsLoading])
 
+  // Poll for new target posts every 10s
+  useEffect(()=>{
+    if(!targetDetailType || !targetDetailName) return
+    const poll = setInterval(()=>{
+      loadTargetPosts(targetDetailType, targetDetailName, 0)
+    }, 10000)
+    return ()=> clearInterval(poll)
+  },[targetDetailType, targetDetailName])
+
   // Polling fallback every 10s on system tab
   useEffect(()=>{
     if(activeTab !== "system") return
