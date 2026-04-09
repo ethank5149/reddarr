@@ -230,6 +230,8 @@ _MIGRATIONS = [
     "ALTER TABLE media ADD CONSTRAINT media_post_id_url_key UNIQUE (post_id, url)",
     "DROP INDEX IF EXISTS idx_media_sha256",
     "CREATE INDEX IF NOT EXISTS idx_media_sha256_non_unique ON media(sha256)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_lower ON posts(LOWER(subreddit))",
+    "CREATE INDEX IF NOT EXISTS idx_posts_author_lower ON posts(LOWER(author))",
 ]
 
 
@@ -809,12 +811,19 @@ def posts(
                 }
             )
 
-        total_query = query.replace(
-            f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s",
-            " ORDER BY 1",
-        ).replace(
-            "SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden",
-            "SELECT COUNT(*)",
+        total_query = (
+            query.replace(
+                "SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,",
+                "SELECT COUNT(*)",
+            )
+            .replace(
+                "\n                   p.raw->>'selftext' as selftext,\n                   p.raw->>'created_utc' as raw_created_utc",
+                "",
+            )
+            .replace(
+                f" ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s",
+                "",
+            )
         )
         cur.execute(total_query, params[:-2])
         total = cur.fetchone()[0] or 0
