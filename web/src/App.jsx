@@ -1424,8 +1424,8 @@ export default function App(){
                       </button>
                       <button onClick={()=>scrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Scrape</button>
                       <button onClick={()=>backfillTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📜 Backfill</button>
-                      <button onClick={()=>rescanTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescan</button>
-                      <button onClick={()=>rescrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2d2000",border:"1px solid #4a3a00",borderRadius:"3px",color:"#f9c300",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescrape Missing</button>
+                      <button onClick={()=>rescanTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Re-download All</button>
+                      <button onClick={()=>rescrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2d2000",border:"1px solid #4a3a00",borderRadius:"3px",color:"#f9c300",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Retry Failed</button>
                       <button onClick={()=>{if(window.confirm(`Archive all posts from ${targetDetailType==="subreddit"?"r/":"u/"}${currentTarget.name}?`))runArchiveTarget(currentTarget.type,currentTarget.name)}} style={{padding:"6px 14px",background:"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📦 Archive All</button>
                       <button onClick={()=>deleteTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>✕ Remove</button>
                     </div>
@@ -1758,10 +1758,10 @@ export default function App(){
               <div style={{padding:"12px 16px 16px",borderTop:"1px solid #1a1a1a"}}>
                 <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
                   <input type="text" placeholder="r/ subreddit…" autoComplete="off" spellCheck={false} value={filterSubreddit}
-                    onChange={e=>{const v=e.target.value;setFilterSubreddit(v);clearTimeout(searchTimeout._filterSubreddit);searchTimeout._filterSubreddit=setTimeout(()=>applyFilters({...filtersRef.current,subreddit:v}),400)}}
+                    onChange={e=>{const v=e.target.value;setFilterSubreddit(v);clearTimeout(searchTimeout.current);searchTimeout.current=setTimeout(()=>applyFilters({...filtersRef.current,subreddit:v}),400)}}
                     style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}/>
                   <input type="text" placeholder="u/ author…" autoComplete="off" spellCheck={false} value={filterAuthor}
-                    onChange={e=>{const v=e.target.value;setFilterAuthor(v);clearTimeout(searchTimeout._filterAuthor);searchTimeout._filterAuthor=setTimeout(()=>applyFilters({...filtersRef.current,author:v}),400)}}
+                    onChange={e=>{const v=e.target.value;setFilterAuthor(v);clearTimeout(searchTimeout.current);searchTimeout.current=setTimeout(()=>applyFilters({...filtersRef.current,author:v}),400)}}
                     style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}/>
                   <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
                     {[{value:"image",label:"🖼 Images"},{value:"video",label:"🎬 Videos"},{value:"text",label:"📝 Text"}].map(mt=>(
@@ -1845,10 +1845,10 @@ export default function App(){
               <div style={{padding:"12px 16px 16px",borderTop:"1px solid #1a1a1a"}}>
                 <div style={{maxWidth:"1400px",margin:"0 auto",display:"flex",alignItems:"center",gap:"10px",flexWrap:"wrap"}}>
                   <input type="text" placeholder="r/ subreddit…" autoComplete="off" spellCheck={false} value={archiveFilterSubreddit}
-                    onChange={e=>{const v=e.target.value;setArchiveFilterSubreddit(v);clearTimeout(archiveSearchTimeout._sub);archiveSearchTimeout._sub=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)}}
+                    onChange={e=>{const v=e.target.value;setArchiveFilterSubreddit(v);clearTimeout(archiveSearchTimeout.current);archiveSearchTimeout.current=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,subreddit:v}),400)}}
                     style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}/>
                   <input type="text" placeholder="u/ author…" autoComplete="off" spellCheck={false} value={archiveFilterAuthor}
-                    onChange={e=>{const v=e.target.value;setArchiveFilterAuthor(v);clearTimeout(archiveSearchTimeout._auth);archiveSearchTimeout._auth=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,author:v}),400)}}
+                    onChange={e=>{const v=e.target.value;setArchiveFilterAuthor(v);clearTimeout(archiveSearchTimeout.current);archiveSearchTimeout.current=setTimeout(()=>applyArchiveFilters({...archiveFiltersRef.current,author:v}),400)}}
                     style={{padding:"9px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"13px",outline:"none",width:"140px"}}/>
                 </div>
               </div>
