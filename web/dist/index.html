@@ -3,32 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover" />
-    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="theme-color" content="#0b1728" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Reddit Archive" />
+    <meta name="apple-mobile-web-app-title" content="Reddarr" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="format-detection" content="telephone=no" />
-    <meta name="msapplication-TileColor" content="#0d0d0d" />
+    <meta name="msapplication-TileColor" content="#0b1728" />
     <meta name="msapplication-tap-highlight" content="no" />
-    <title>Reddit Archive</title>
+    <title>Reddarr</title>
     <link rel="icon" type="image/png" href="/icon.png" />
     <link rel="apple-touch-icon" href="/icon.png" />
     <link rel="manifest" href="/manifest.json" />
     <style>
       :root {
-        --color-bg: #0d0d0d;
-        --color-surface: #1a1a1a;
-        --color-surface-elevated: #1e1e1e;
-        --color-border: #2a2a2a;
-        --color-border-subtle: #222;
-        --color-primary: #ff4500;
-        --color-primary-hover: #ff6a33;
+        --color-bg: #1a2234;
+        --color-surface: #161d2f;
+        --color-surface-elevated: #1c2a3f;
+        --color-border: #243447;
+        --color-border-subtle: #1c2a3f;
+        --color-primary: #35c5f4;
+        --color-primary-hover: #5fd4f8;
         --color-accent: #46d160;
-        --color-text: #ffffff;
-        --color-text-secondary: #cccccc;
-        --color-text-muted: #666666;
-        --color-text-dim: #444444;
+        --color-text: #f5f7fa;
+        --color-text-secondary: #c8d6e0;
+        --color-text-muted: #5a7b9a;
+        --color-text-dim: #3a5068;
         --shadow-sm: 0 2px 8px rgba(0,0,0,0.2);
         --shadow-md: 0 4px 20px rgba(0,0,0,0.3);
         --shadow-lg: 0 12px 40px rgba(0,0,0,0.4);
@@ -42,7 +42,7 @@
       }
       * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
       html, body { 
-        background: var(--color-bg); 
+        background: #1a2234; 
         overscroll-behavior: contain;
         -webkit-overflow-scrolling: touch;
       }
@@ -51,9 +51,9 @@
         padding-bottom: env(safe-area-inset-bottom, 0);
       }
       ::-webkit-scrollbar { width: 6px; height: 6px; }
-      ::-webkit-scrollbar-track { background: #141414; }
-      ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-      ::-webkit-scrollbar-thumb:hover { background: #444; }
+      ::-webkit-scrollbar-track { background: #0b1728; }
+      ::-webkit-scrollbar-thumb { background: #243447; border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: #2d4156; }
       @keyframes spin { to { transform: rotate(360deg); } }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
       @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -62,10 +62,10 @@
       @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
       input:focus, button:focus { outline: none; }
       select:focus { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-      input:focus { border-color: var(--color-primary) !important; box-shadow: 0 0 0 3px rgba(255,69,0,0.15) !important; }
-      button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-primary), 0 0 0 4px rgba(255,69,0,0.2) !important; }
+      input:focus { border-color: var(--color-primary) !important; box-shadow: 0 0 0 3px rgba(53,197,244,0.15) !important; }
+      button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--color-primary), 0 0 0 4px rgba(53,197,244,0.2) !important; }
       button { touch-action: manipulation; }
-      ::selection { background: rgba(255,69,0,0.3); }
+      ::selection { background: rgba(53,197,244,0.3); }
       
       .skeleton {
         background: linear-gradient(90deg, #1a1a1a 25%, #252525 50%, #1a1a1a 75%);
@@ -149,11 +149,11 @@
         position: fixed;
         bottom: 20px;
         right: 20px;
-        background: linear-gradient(135deg, #ff4500, #ff6a33);
+        background: linear-gradient(135deg, #35c5f4, #5fd4f8);
         color: white;
         padding: 16px 24px;
         border-radius: 12px;
-        box-shadow: 0 8px 32px rgba(255,69,0,0.4);
+        box-shadow: 0 8px 32px rgba(53,197,244,0.4);
         z-index: 1000;
         cursor: pointer;
         animation: slideUp 0.3s ease;
@@ -173,8 +173,8 @@
       }
       
       .post-card:hover, .post-card:focus-within {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 40px rgba(255,69,0,0.15);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(53,197,244,0.1);
       }
       
       .post-card:active {
@@ -228,7 +228,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: linear-gradient(180deg, rgba(255,69,0,0.2) 0%, transparent 100%);
+        background: linear-gradient(180deg, rgba(53,197,244,0.2) 0%, transparent 100%);
         z-index: 99;
         pointer-events: none;
         opacity: 0;
@@ -243,7 +243,7 @@
         width: 24px;
         height: 24px;
         border: 2px solid #333;
-        border-top-color: #ff4500;
+        border-top-color: #35c5f4;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
       }
@@ -270,7 +270,7 @@
       }
       
       .toast.error {
-        border-color: #ff4500;
+        border-color: #35c5f4;
         background: linear-gradient(135deg, #2d0a00, #1e1e1e);
       }
       
@@ -289,7 +289,7 @@
       /* Focus ring for accessibility */
       .focus-ring:focus {
         outline: none;
-        box-shadow: 0 0 0 2px #ff4500, 0 0 0 4px rgba(255,69,0,0.2);
+        box-shadow: 0 0 0 2px #35c5f4, 0 0 0 4px rgba(53,197,244,0.2);
       }
       
       /* Reduced motion preference */
@@ -301,7 +301,7 @@
         }
       }
     </style>
-    <script type="module" crossorigin src="/static/index-B_SwJ6gY.js"></script>
+    <script type="module" crossorigin src="/static/index-DZCCPsOE.js"></script>
   </head>
   <body>
     <div id="root"></div>

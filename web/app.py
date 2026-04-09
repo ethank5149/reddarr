@@ -2929,6 +2929,82 @@ def media_rescan():
     }
 
 
+@app.post("/api/admin/media/rescrape")
+def media_rescrape():
+    """Retry all failed or missing media downloads.
+    Finds all media with status='error' or status='pending' or missing file_path
+    and requeues them for download.
+    """
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+
+    with get_db_cursor() as cur:
+        cur.execute("""
+            SELECT m.id, m.post_id, m.url, p.subreddit, p.author, p.title
+            FROM media m
+            JOIN posts p ON m.post_id = p.id
+            WHERE (m.status IS NULL OR m.status = '')
+               OR m.status = 'error'
+               OR m.status = 'pending'
+               OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
+            ORDER BY m.id
+        """)
+        failed_media = cur.fetchall()
+
+    if not failed_media:
+        return {
+            "status": "ok",
+            "message": "No failed or missing media found",
+            "requeued": 0,
+        }
+
+    requeued = 0
+    errors = []
+
+    for media_id, post_id, url, subreddit, author, title in failed_media:
+        if not url:
+            errors.append(f"media {media_id}: no URL")
+            continue
+
+        try:
+            rd.lpush(
+                "media_queue",
+                json.dumps(
+                    {
+                        "post_id": post_id,
+                        "url": url,
+                        "subreddit": subreddit,
+                        "author": author,
+                        "title": title or "",
+                    }
+                ),
+            )
+            requeued += 1
+        except Exception as e:
+            errors.append(f"media {media_id}: {e}")
+
+    with get_db_cursor() as cur:
+        cur.execute("""
+            UPDATE media
+            SET status = 'pending'
+            WHERE (status IS NULL OR status = '')
+               OR status = 'error'
+               OR status = 'pending'
+               OR (status IN ('done', 'partial') AND (file_path IS NULL OR file_path = ''))
+        """)
+
+    logger.info(f"Media rescrape: requeued {requeued} failed/missing items")
+
+    return {
+        "status": "ok",
+        "requeued": requeued,
+        "total_found": len(failed_media),
+        "errors": errors[:10] if errors else [],
+    }
+
+
 @app.get("/api/admin/health")
 def health_check():
     issues = []

@@ -1971,18 +1971,32 @@ export default function App(){
                   <p style={{fontSize:"12px",color:"#8aa4bd",marginBottom:"12px",margin:0}}>
                     Re-scan existing posts to find additional images/videos that weren't originally queued for download.
                   </p>
-                  <button
-                    onClick={()=>{
-                      if(!window.confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
-                      axios.post("/api/admin/media/rescan").then(r=>{
-                        toastSuccess(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
-                        loadAdmin()
-                      }).catch(err=>toastError("Rescan failed: " + (err.response?.data?.detail||err.message)))
-                    }}
-                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}
-                  >
-                    🔍 Re-scan All Posts
-                  </button>
+                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"16px"}}>
+                    <button
+                      onClick={()=>{
+                        if(!window.confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
+                        axios.post("/api/admin/media/rescan").then(r=>{
+                          toastSuccess(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
+                          loadAdmin()
+                        }).catch(err=>toastError("Rescan failed: " + (err.response?.data?.detail||err.message)))
+                      }}
+                      style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}
+                    >
+                      🔍 Re-scan All Posts
+                    </button>
+                    <button
+                      onClick={()=>{
+                        if(!window.confirm("Retry ALL failed or missing media downloads? This will re-queue any downloads that failed or are pending.")) return
+                        axios.post("/api/admin/media/rescrape").then(r=>{
+                          toastSuccess(`Requeued ${r.data.requeued} failed/missing items (found ${r.data.total_found} total)`)
+                          loadAdmin()
+                        }).catch(err=>toastError("Rescrape failed: " + (err.response?.data?.detail||err.message)))
+                      }}
+                      style={{padding:"10px 20px",background:"linear-gradient(135deg,#f9c300,#e6b200)",border:"none",borderRadius:"3px",color:"#000",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}
+                    >
+                      ↻ Rescrape Failed
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
