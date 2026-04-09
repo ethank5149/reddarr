@@ -173,6 +173,17 @@ export default function App(){
   const [cardScraping, setCardScraping] = useState({})             // { "type:name": bool }
   const [cardBackfilling, setCardBackfilling] = useState({})       // { "type:name": bool }
 
+  // Admin section collapse state
+  const [adminSections, setAdminSections] = useState({
+    status: true,
+    overview: true,
+    archive: true,
+    targets: true,
+    thumbnails: true,
+    media: true,
+    activity: true
+  })
+
   // Filter + sort state
   const [filterSubreddit, setFilterSubreddit] = useState("")
   const [filterAuthor, setFilterAuthor] = useState("")
@@ -617,6 +628,34 @@ export default function App(){
         fetchCardAudit(ttype, name)
       }
     }
+  }
+
+  function toggleAdminSection(section){
+    setAdminSections(prev => ({...prev, [section]: !prev[section]}))
+  }
+
+  function collapseAllSections(){
+    setAdminSections({
+      status: false,
+      overview: false,
+      archive: false,
+      targets: false,
+      thumbnails: false,
+      media: false,
+      activity: false
+    })
+  }
+
+  function expandAllSections(){
+    setAdminSections({
+      status: true,
+      overview: true,
+      archive: true,
+      targets: true,
+      thumbnails: true,
+      media: true,
+      activity: true
+    })
   }
 
   function fetchCardAudit(ttype, name){
@@ -1200,16 +1239,81 @@ export default function App(){
 
           {adminData && (<>
             {/* Header row */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px",flexWrap:"wrap",gap:"12px"}}>
               <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                 <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>System Status</h2>
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Admin Dashboard</h2>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                <button onClick={collapseAllSections} title="Collapse all sections" style={{padding:"6px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>⊟ All</button>
+                <button onClick={expandAllSections} title="Expand all sections" style={{padding:"6px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>⊞ All</button>
                 {lastUpdated && <span style={{fontSize:"11px",color:"#444",fontVariantNumeric:"tabular-nums"}}>synced {lastUpdated.toLocaleTimeString()}</span>}
                 <button onClick={loadAdmin} style={{padding:"8px 16px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
-                <button onClick={()=>{setResetModal(true);setResetInput("");setResetResult(null)}} style={{padding:"8px 16px",background:"#1a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>⚠ Reset All Data</button>
+                <button onClick={()=>{setResetModal(true);setResetInput("");setResetResult(null)}} style={{padding:"8px 16px",background:"#1a0000",border:"1px solid #550000",borderRadius:"8px",color:"#ff4444",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>⚠ Reset</button>
               </div>
+            </div>
+
+            {/* Active jobs indicator */}
+            {(archiveJob || thumbJob) && (
+              <div style={{display:"flex",gap:"16px",marginBottom:"20px",padding:"12px 16px",background:"#1a1a00",borderRadius:"10px",border:"1px solid #3a3a00",flexWrap:"wrap"}}>
+                <div style={{fontSize:"12px",color:"#f9c300",fontWeight:"600",display:"flex",alignItems:"center",gap:"6px"}}>
+                  <span style={{width:"8px",height:"8px",borderRadius:"50%",background:"#f9c300",animation:"pulse 1.5s infinite"}}/>
+                  Jobs Running
+                </div>
+                {archiveJob && (
+                  <span style={{fontSize:"11px",color:"#888"}}>
+                    Archive: <span style={{color:"#46d160"}}>{Math.round((archiveJob.done/(archiveJob.total||1))*100)}%</span>
+                  </span>
+                )}
+                {thumbJob && (
+                  <span style={{fontSize:"11px",color:"#888"}}>
+                    Thumbnails: <span style={{color:"#46d160"}}>{Math.round((thumbJob.done/(thumbJob.total||1))*100)}%</span>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* ── Section 1: System Status ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("status")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.status?"16px":0,transition:"border-radius 0.2s",borderBottomLeftRadius:adminSections.status?"12px":"12px",borderBottomRightRadius:adminSections.status?"12px":"12px"}}
+              >
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>System Status</h3>
+                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>Health · Queue</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                  {healthStatus && (
+                    <span style={{fontSize:"11px",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500",padding:"2px 8px",background:healthStatus?.status==="healthy"?"#0d1f0d":healthStatus?.status==="degraded"?"#2d2000":"#1f0d0d",borderRadius:"6px"}}>
+                      {healthStatus.status}
+                    </span>
+                  )}
+                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.status?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                </div>
+              </div>
+              {adminSections.status && (
+                <div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,200px)",gap:"12px",marginBottom:"24px"}}>
+                    <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                      <div style={{fontSize:"11px",color:"#666",marginBottom:"8px"}}>Health</div>
+                      <div style={{fontSize:"18px",fontWeight:"600",color:healthStatus?.status==="healthy"?"#46d160":healthStatus?.status==="degraded"?"#f9c300":"#ff4500"}}>{healthStatus?.status||"unknown"}</div>
+                      {healthStatus?.issues?.length>0 && <div style={{fontSize:"10px",color:"#ff4500",marginTop:"4px"}}>{healthStatus.issues.join(", ")}</div>}
+                    </div>
+                    <div style={{background:"#1e1e1e",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
+                      <div style={{fontSize:"11px",color:"#666",marginBottom:"8px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                        <span>Queue</span>
+                        {queueInfo?.queue_length > 0 && (
+                          <button onClick={(e)=>{e.stopPropagation();clearQueue()}} style={{fontSize:"10px",padding:"2px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"4px",color:"#ff4444",cursor:"pointer"}}>clear</button>
+                        )}
+                      </div>
+                      <div style={{fontSize:"18px",fontWeight:"600",color:queueInfo?.queue_length>0?"#f9c300":"#fff",transition:"color 0.3s"}}>{(queueInfo?.queue_length||0).toLocaleString()}</div>
+                      <div style={{fontSize:"10px",color:"#555",marginTop:"4px"}}>pending items</div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Health + Queue */}
@@ -1231,60 +1335,89 @@ export default function App(){
               </div>
             </div>
 
-            {/* Overview counts */}
-            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"24px"}}>
-              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Overview</h2>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"16px",marginBottom:"40px"}}>
-              {[
-                {label:"Visible",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
-                {label:"Hidden",value:adminData.hidden_posts,color:"#888",icon:"👁"},
-                {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
-                {label:"Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
-                {label:"Queued",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
-                {label:"Total Media",value:adminData.total_media,color:"#fff",icon:"📁"},
-              ].map(s=>(
-                <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"20px",borderRadius:"16px",border:"1px solid #2a2a2a",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",color:"#666",marginBottom:"8px",textTransform:"uppercase",letterSpacing:"0.5px"}}><span>{s.icon}</span>{s.label}</div>
-                  <div style={{fontSize:"32px",fontWeight:"700",color:s.color,transition:"color 0.3s",fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
+            {/* ── Section 2: Overview ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("overview")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.overview?"16px":0}}
+              >
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Overview</h3>
+                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>Statistics · Chart</span>
                 </div>
-              ))}
+                <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.overview?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+              </div>
+              {adminSections.overview && (
+                <div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"12px",marginBottom:"20px"}}>
+                    {[
+                      {label:"Visible",value:adminData.total_posts,color:"#ff4500",icon:"📄"},
+                      {label:"Hidden",value:adminData.hidden_posts,color:"#888",icon:"👁"},
+                      {label:"Comments",value:adminData.total_comments,color:"#7193ff",icon:"💬"},
+                      {label:"Downloaded",value:adminData.downloaded_media,color:"#46d160",icon:"⬇"},
+                      {label:"Queued",value:adminData.pending_media,color:"#f9c300",icon:"⏳"},
+                      {label:"Total Media",value:adminData.total_media,color:"#fff",icon:"📁"},
+                    ].map(s=>(
+                      <div key={s.label} style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",padding:"16px",borderRadius:"12px",border:"1px solid #2a2a2a",transition:"transform 0.2s",cursor:"default",":hover":{transform:"translateY(-2px)"}}}>
+                        <div style={{display:"flex",alignItems:"center",gap:"6px",fontSize:"10px",color:"#666",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.5px"}}><span>{s.icon}</span>{s.label}</div>
+                        <div style={{fontSize:"26px",fontWeight:"700",color:s.color,transition:"color 0.3s",fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <PostsChart data={adminData.posts_per_day}/>
+                </div>
+              )}
             </div>
-
-            {/* Posts per day chart */}
-            <PostsChart data={adminData.posts_per_day}/>
           </>)}
 
           {adminData && (<>
-            {/* ── Archive Manager ── */}
-            <div style={{marginBottom:"40px"}}>
-              {/* Section header */}
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
+            {/* ── Section 3: Archive Manager ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("archive")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.archive?"16px":0}}
+              >
                 <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                  <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
-                  <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Archive Manager</h2>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Archive Manager</h3>
                   {archiveStats && (
-                    <span style={{fontSize:"12px",color:"#555",background:"#1a1a1a",padding:"3px 8px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                      {archiveStats.archive_pct}% hidden
+                    <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>
+                      {archiveStats.archive_pct}% archived
+                    </span>
+                  )}
+                  {archiveJob && (
+                    <span style={{fontSize:"11px",color:"#f9c300",background:"#2d2000",padding:"2px 8px",borderRadius:"10px",display:"flex",alignItems:"center",gap:"4px"}}>
+                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#f9c300",animation:"pulse 1.5s infinite"}}/>
+                      Running
                     </span>
                   )}
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                  <button onClick={loadArchiveStats} style={{padding:"6px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"12px"}}>↻ Refresh</button>
-                  <button
-                    onClick={()=>setArchivePanelOpen(o=>!o)}
-                    style={{padding:"6px 14px",background:archivePanelOpen?"#1a2a1a":"#1a2a1a",border:`1px solid ${archivePanelOpen?"#46d160":"#2a4a2a"}`,borderRadius:"8px",color:archivePanelOpen?"#46d160":"#4a8a4a",cursor:"pointer",fontSize:"12px",fontWeight:"500"}}>
-                    {archivePanelOpen ? "▲ Filters" : "▼ Filters"}
-                  </button>
-                  <button
-                    onClick={runArchiveAll}
-                    disabled={!!archiveJob}
-                    style={{padding:"6px 16px",background:archiveJob?"#2a2a2a":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"8px",color:archiveJob?"#555":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"700",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
-                    {archiveJob ? "⏳ Archiving…" : "Archive All Posts"}
-                  </button>
+                  <button onClick={(e)=>{e.stopPropagation();loadArchiveStats()}} style={{padding:"4px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>↻</button>
+                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.archive?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
                 </div>
               </div>
+              {adminSections.archive && (
+                <div>
+                  {/* Action bar */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <button
+                        onClick={()=>setArchivePanelOpen(o=>!o)}
+                        style={{padding:"6px 14px",background:archivePanelOpen?"#1a2a1a":"#1a2a1a",border:`1px solid ${archivePanelOpen?"#46d160":"#2a4a2a"}`,borderRadius:"8px",color:archivePanelOpen?"#46d160":"#4a8a4a",cursor:"pointer",fontSize:"12px",fontWeight:"500"}}>
+                        {archivePanelOpen ? "▲ Hide" : "▼ Filters"} Advanced
+                      </button>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <button
+                        onClick={runArchiveAll}
+                        disabled={!!archiveJob}
+                        style={{padding:"8px 16px",background:archiveJob?"#2a2a2a":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"8px",color:archiveJob?"#555":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"700",transition:"background 0.2s, color 0.2s, opacity 0.2s"}}>
+                        {archiveJob ? "⏳ Archiving…" : "📦 Archive All Posts"}
+                      </button>
+                    </div>
+                  </div>
 
               {/* Archive progress overview */}
               {archiveStats && (()=>{
@@ -1479,383 +1612,395 @@ export default function App(){
                   )}
                 </div>
               )}
+              </div>
+            )}
             </div>
 
-            {/* Scrape Targets */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Scrape Targets</h2>
-                <button onClick={scrapeNow}
-                  style={{padding:"6px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
-                  {scrapeTriggered ? "✓ Triggered" : "⚡ Scrape Now"}
-                </button>
-                <button onClick={triggerBackfill}
-                  style={{padding:"6px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
-                  {backfillTriggered ? "✓ Triggered" : "📜 Backfill"}
-                </button>
+            {/* ── Section 4: Scrape Targets ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("targets")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.targets?"16px":0}}
+              >
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Scrape Targets</h3>
+                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>{adminData.targets?.length || 0} targets</span>
+                  {adminData.targets?.filter(t=>t.enabled&&t.status==="active").length > 0 && (
+                    <span style={{fontSize:"11px",color:"#46d160",background:"#0d1f0d",padding:"2px 8px",borderRadius:"10px"}}>
+                      {adminData.targets.filter(t=>t.enabled&&t.status==="active").length} active
+                    </span>
+                  )}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.targets?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                </div>
               </div>
-              {/* Backfill Status Display */}
-              {backfillStatus && backfillStatus.status !== "none" && (
-                <div style={{marginBottom:"16px",padding:"12px",background:backfillStatus.status==="done"?"#0d2818":backfillStatus.status==="partial"?"#2d2000":"#1e3a5f",borderRadius:"8px",border:`1px solid ${backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#2a5a8a"}`}}>
-                  <div style={{fontSize:"13px",fontWeight:"600",color:backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#7ab3e0",marginBottom:"8px"}}>
-                    {backfillStatus.status === "done" ? "✓ Backfill Complete" : backfillStatus.status === "partial" ? "⚠ Backfill Partial" : "🔄 Backfill Running…"}
+              {adminSections.targets && (
+                <div>
+                  {/* Backfill Status Display */}
+                  {backfillStatus && backfillStatus.status !== "none" && (
+                    <div style={{marginBottom:"16px",padding:"12px",background:backfillStatus.status==="done"?"#0d2818":backfillStatus.status==="partial"?"#2d2000":"#1e3a5f",borderRadius:"8px",border:`1px solid ${backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#2a5a8a"}`}}>
+                      <div style={{fontSize:"13px",fontWeight:"600",color:backfillStatus.status==="done"?"#46d160":backfillStatus.status==="partial"?"#f9c300":"#7ab3e0",marginBottom:"8px"}}>
+                        {backfillStatus.status === "done" ? "✓ Backfill Complete" : backfillStatus.status === "partial" ? "⚠ Backfill Partial" : "🔄 Backfill Running…"}
+                      </div>
+                      <div style={{display:"flex",gap:"16px",fontSize:"12px",color:"#ccc",marginBottom:"8px",flexWrap:"wrap"}}>
+                        <span>Total: <b style={{color:"#fff"}}>{backfillStatus.total}</b></span>
+                        <span>New: <b style={{color:"#46d160"}}>{backfillStatus.new}</b></span>
+                        <span>Skipped: <b style={{color:"#888"}}>{backfillStatus.skipped}</b></span>
+                        <span>Completed: <b style={{color:"#fff"}}>{backfillStatus.completed}</b>/{backfillStatus.targets_total}</span>
+                        {backfillStatus.rate_limited > 0 && (
+                          <span style={{color:"#f9c300"}}>Rate Limited: <b>{backfillStatus.rate_limited}</b></span>
+                        )}
+                      </div>
+                      {backfillStatus.errors && backfillStatus.errors.length > 0 && (
+                        <div style={{fontSize:"11px",color:"#ff6a33",background:"#1a0a00",padding:"8px",borderRadius:"4px",maxHeight:"100px",overflowY:"auto"}}>
+                          <div style={{fontWeight:"600",marginBottom:"4px",color:"#ff4500"}}>Errors:</div>
+                          {backfillStatus.errors.map((e,i)=><div key={i} style={{fontFamily:"monospace",marginBottom:"2px"}}>{e}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Header with actions */}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                      <button onClick={scrapeNow}
+                        style={{padding:"8px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:scrapeTriggered?"#000":"#fff",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
+                        {scrapeTriggered ? "✓ Sent" : "⚡ Scrape All"}
+                      </button>
+                      <button onClick={triggerBackfill}
+                        style={{padding:"8px 14px",background:backfillTriggered?"#46d160":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:backfillTriggered?"#000":"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600",transition:"background 0.3s ease, color 0.3s ease"}}>
+                        {backfillTriggered ? "✓ Sent" : "📜 Backfill All"}
+                      </button>
+                    </div>
+                    <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
+                      <select value={addTargetType} onChange={e=>setAddTargetType(e.target.value)}
+                         aria-label="Target type"
+                         style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer"}}>
+                         <option value="subreddit">r/ subreddit</option>
+                         <option value="user">u/ user</option>
+                       </select>
+                       <input type="text" placeholder="name…" aria-label={`Add ${addTargetType} name`} autoComplete="off" spellCheck={false} value={addTargetName} onChange={e=>setAddTargetName(e.target.value)}
+                         onKeyDown={e=>e.key==="Enter"&&addTarget()}
+                         style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
+                      <button onClick={addTarget} disabled={!addTargetName.trim()}
+                        style={{padding:"8px 16px",background:addTargetName.trim()?"linear-gradient(135deg,#ff4500,#ff6a33)":"#2a2a2a",border:"none",borderRadius:"8px",color:addTargetName.trim()?"#fff":"#555",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
+                        + Add
+                      </button>
+                    </div>
                   </div>
-                  <div style={{display:"flex",gap:"16px",fontSize:"12px",color:"#ccc",marginBottom:"8px",flexWrap:"wrap"}}>
-                    <span>Total: <b style={{color:"#fff"}}>{backfillStatus.total}</b></span>
-                    <span>New: <b style={{color:"#46d160"}}>{backfillStatus.new}</b></span>
-                    <span>Skipped: <b style={{color:"#888"}}>{backfillStatus.skipped}</b></span>
-                    <span>Completed: <b style={{color:"#fff"}}>{backfillStatus.completed}</b>/{backfillStatus.targets_total}</span>
-                    {backfillStatus.rate_limited > 0 && (
-                      <span style={{color:"#f9c300"}}>Rate Limited: <b>{backfillStatus.rate_limited}</b></span>
-                    )}
+
+                  {/* Target cards grid */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"10px",marginBottom:"32px"}}>
+                    {adminData.targets && adminData.targets.map(t=>{
+                      const cardKey = `${t.type}:${t.name}`
+                      const isExpanded = expandedCard === cardKey
+                      const audit = cardAudit[cardKey]
+                      const auditLoading = cardAuditLoading[cardKey]
+                      const isScraping = cardScraping[cardKey]
+                      const isBackfilling = cardBackfilling[cardKey]
+                      const isArchivingTarget = cardArchiving[cardKey]
+                      const mediaPct = t.total_media > 0 ? Math.round((t.downloaded_media / t.total_media) * 100) : 0
+                      return (
+                      <div key={`${t.type}-${t.name}`} style={{
+                        background:"linear-gradient(145deg,#1e1e1e,#171717)",
+                        borderRadius:"12px",
+                        border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":isExpanded?"1px solid #ff450055":"1px solid #2a2a2a",
+                        opacity:t.enabled?1:0.6,
+                        transition:"all 0.2s ease",
+                        display:"flex",
+                        flexDirection:"column",
+                        overflow:"hidden",
+                      }}>
+                        {/* Card header */}
+                        <div style={{padding:"14px",display:"flex",flexDirection:"column",gap:"10px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                            <div style={{minWidth:0,flex:1,cursor:"pointer"}} onClick={()=>toggleCardExpand(t.type,t.name)}>
+                              <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"4px"}}>
+                                <span style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px",fontWeight:"600"}}>{t.type}</span>
+                                {t.status!=="active" && (
+                                  <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#222",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#888"}}>
+                                    {t.status==="taken_down"?"⛔":t.status==="deleted"?"👤":""}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{fontSize:"15px",fontWeight:"600",color:t.status==="active"?"#fff":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {t.type==="subreddit"?"r/":"u/"}{t.name}
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:"4px",flexShrink:0,alignItems:"center"}}>
+                              {t.status==="active" && (
+                                <button onClick={(e)=>{e.stopPropagation();toggleTarget(t.type,t.name)}} title={t.enabled?"Disable":"Enable"} style={{padding:"4px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"6px",color:t.enabled?"#000":"#666",cursor:"pointer",fontSize:"10px",fontWeight:"700"}}>
+                                  {t.enabled?"●":"○"}
+                                </button>
+                              )}
+                              {(t.status==="taken_down"||t.status==="deleted") && (
+                                <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"active")}} title="Reactivate" style={{padding:"4px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
+                              )}
+                              {t.status==="active" && (
+                                <>
+                                  {t.type==="subreddit" && (
+                                    <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"taken_down")}} title="Mark taken down" style={{padding:"4px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
+                                  )}
+                                  {t.type==="user" && (
+                                    <button onClick={(e)=>{e.stopPropagation();setTargetStatus(t.type,t.name,"deleted")}} title="Mark deleted" style={{padding:"4px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"6px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
+                                  )}
+                                  <button onClick={(e)=>{e.stopPropagation();deleteTarget(t.type,t.name)}} title="Remove" style={{padding:"4px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
+                                </>
+                              )}
+                              <button onClick={()=>toggleCardExpand(t.type,t.name)} title={isExpanded?"Collapse":"Expand"} style={{padding:"4px 6px",background:"transparent",border:"1px solid #333",borderRadius:"6px",color:isExpanded?"#ff4500":"#555",cursor:"pointer",fontSize:"12px",lineHeight:1,transition:"color 0.2s"}}>
+                                {isExpanded?"▲":"▼"}
+                              </button>
+                            </div>
+                          </div>
+                          {/* Stats row */}
+                          {(t.status==="active" || t.status==="taken_down") && (
+                            <div style={{display:"flex",gap:"12px",fontSize:"11px"}}>
+                              <div><span style={{color:"#666"}}>Posts </span><span style={{color:t.status==="taken_down"?"#888":"#fff",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</span></div>
+                              <div><span style={{color:"#666"}}>Media </span><span style={{color:"#46d160",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</span></div>
+                            </div>
+                          )}
+                          {/* Progress bar for active targets */}
+                          {t.status==="active" && (
+                            <>
+                              <div style={{background:"#141414",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
+                                <div style={{width:`${Math.min(100,mediaPct)}%`,background:mediaPct>=100?"#46d160":"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"2px",transition:"width 0.3s"}}/>
+                              </div>
+                              {t.last_created && (
+                                <div style={{fontSize:"10px",color:"#444",display:"flex",justifyContent:"space-between"}}>
+                                  <span>{new Date(t.last_created).toLocaleDateString()}</span>
+                                  <span>{formatRate(t.rate_per_second)}/s</span>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        {/* Expanded panel */}
+                        {isExpanded && (
+                          <div style={{borderTop:"1px solid #2a2a2a",padding:"12px",background:"#161616",display:"flex",flexDirection:"column",gap:"8px"}}>
+                            {/* Quick action buttons */}
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"6px"}}>
+                              {t.status==="active" && t.enabled && (
+                                <button onClick={()=>scrapeTargetNow(t.type,t.name)} disabled={isScraping} style={{padding:"6px 10px",background:isScraping?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:isScraping?"#555":"#fff",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                  {isScraping?"✓":"⚡"} Scrape
+                                </button>
+                              )}
+                              {t.status==="active" && t.enabled && (
+                                <button onClick={()=>backfillTargetNow(t.type,t.name)} disabled={isBackfilling} style={{padding:"6px 10px",background:isBackfilling?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"6px",color:isBackfilling?"#555":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                  {isBackfilling?"✓":"📜"} Backfill
+                                </button>
+                              )}
+                              <button onClick={()=>rescanTarget(t.type,t.name)} style={{padding:"6px 10px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"6px",color:"#46d160",cursor:"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                ↻ Rescan
+                              </button>
+                              <button onClick={()=>fetchCardAudit(t.type,t.name)} disabled={auditLoading} style={{padding:"6px 10px",background:"#1e1e2a",border:"1px solid #2a2a4a",borderRadius:"6px",color:auditLoading?"#555":"#7193ff",cursor:auditLoading?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                                {auditLoading?"…":"🔍"} Audit
+                              </button>
+                            </div>
+                            {/* Archive button */}
+                            <button onClick={()=>{
+                              if(!window.confirm(`Archive all ${t.post_count?.toLocaleString()||"?"} posts from ${t.type==="subreddit"?"r/":"u/"}${t.name}?`)) return
+                              runArchiveTarget(t.type, t.name)
+                            }} disabled={!!archiveJob||isArchivingTarget||t.post_count===0} style={{padding:"6px 10px",background:isArchivingTarget?"#2a2a2a":"#132213",border:"1px solid #1a3a1a",borderRadius:"6px",color:isArchivingTarget?"#555":"#46d160",cursor:(archiveJob||isArchivingTarget||t.post_count===0)?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600"}}>
+                              {isArchivingTarget?"⏳":"📦"} Archive All
+                            </button>
+
+                            {/* Audit results */}
+                            {auditLoading && <div style={{fontSize:"11px",color:"#555",textAlign:"center",padding:"8px"}}>Running integrity check…</div>}
+                            {audit && !auditLoading && (()=>{
+                              const okPct = audit.total_media > 0 ? Math.round((audit.media_ok / audit.total_media) * 100) : 100
+                              const hasIssues = audit.media_missing > 0 || audit.posts_all_missing > 0
+                              return (
+                                <div style={{background:"#111",borderRadius:"8px",padding:"10px",border:`1px solid ${hasIssues?"#ff450033":"#46d16033"}`}}>
+                                  <div style={{fontSize:"10px",fontWeight:"600",color:hasIssues?"#ff6b3d":"#46d160",marginBottom:"6px"}}>
+                                    {hasIssues ? "⚠ Issues" : "✓ OK"}
+                                  </div>
+                                  <div style={{background:"#222",height:"4px",borderRadius:"2px",overflow:"hidden",marginBottom:"6px"}}>
+                                    <div style={{width:`${okPct}%`,background:hasIssues?"#f9c300":"#46d160",height:"100%"}}/>
+                                  </div>
+                                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"2px",fontSize:"9px"}}>
+                                    <span style={{color:"#666"}}>Posts</span><span style={{color:"#fff",textAlign:"right"}}>{audit.total_posts?.toLocaleString()}</span>
+                                    <span style={{color:"#46d160"}}>OK</span><span style={{color:"#46d160",textAlign:"right"}}>{audit.posts_ok?.toLocaleString()}</span>
+                                    {audit.media_missing>0 && <><span style={{color:"#ff6b6b"}}>Missing</span><span style={{color:"#ff6b6b",textAlign:"right"}}>{audit.media_missing.toLocaleString()}</span></>}
+                                    {audit.media_error>0 && <><span style={{color:"#ff4500"}}>Errors</span><span style={{color:"#ff4500",textAlign:"right"}}>{audit.media_error.toLocaleString()}</span></>}
+                                  </div>
+                                  {audit.media_missing>0 && (
+                                    <button onClick={()=>rescanTarget(t.type,t.name)} style={{marginTop:"6px",width:"100%",padding:"4px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"4px",color:"#fff",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
+                                      Re-queue {audit.media_missing} missing
+                                    </button>
+                                  )}
+                                </div>
+                              )
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    )})}
                   </div>
-                  {backfillStatus.errors && backfillStatus.errors.length > 0 && (
-                    <div style={{fontSize:"11px",color:"#ff6a33",background:"#1a0a00",padding:"8px",borderRadius:"4px",maxHeight:"100px",overflowY:"auto"}}>
-                      <div style={{fontWeight:"600",marginBottom:"4px",color:"#ff4500"}}>Errors:</div>
-                      {backfillStatus.errors.map((e,i)=><div key={i} style={{fontFamily:"monospace",marginBottom:"2px"}}>{e}</div>)}
+                </div>
+              )}
+            </div>
+
+            {/* ── Section 5: Thumbnail Utilities ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("thumbnails")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.thumbnails?"16px":0}}
+              >
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#7193ff,#5a7ad4)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Thumbnail Utilities</h3>
+                  {thumbJob && (
+                    <span style={{fontSize:"11px",color:"#f9c300",background:"#2d2000",padding:"2px 8px",borderRadius:"10px",display:"flex",alignItems:"center",gap:"4px"}}>
+                      <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#f9c300",animation:"pulse 1.5s infinite"}}/>
+                      Running
+                    </span>
+                  )}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                  <button onClick={(e)=>{e.stopPropagation();loadThumbStats()}} style={{padding:"4px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"6px",color:"#666",cursor:"pointer",fontSize:"11px"}}>↻</button>
+                  <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.thumbnails?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
+                </div>
+              </div>
+              {adminSections.thumbnails && (
+                <div>
+                  {/* Stats row */}
+                  {thumbStats && (
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"10px",marginBottom:"16px"}}>
+                      {[
+                        {label:"Media files",value:thumbStats.total_media_with_file,color:"#fff"},
+                        {label:"Thumbs OK",value:thumbStats.with_thumb_in_db,color:"#46d160"},
+                        {label:"Missing",value:thumbStats.missing_thumb_in_db,color:thumbStats.missing_thumb_in_db>0?"#f9c300":"#46d160"},
+                        {label:"On disk",value:thumbStats.thumb_files_on_disk,color:"#7193ff"},
+                        {label:"Disk",value:`${thumbStats.thumb_disk_mb} MB`,color:"#888"},
+                      ].map(s=>(
+                        <div key={s.label} style={{background:"#1a1a1a",padding:"12px 14px",borderRadius:"10px",border:"1px solid #2a2a2a"}}>
+                          <div style={{fontSize:"10px",color:"#555",marginBottom:"4px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
+                          <div style={{fontSize:"20px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{typeof s.value==="number"?s.value.toLocaleString():s.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"16px"}}>
+                    <button onClick={runThumbBackfill} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:thumbJob?"#555":"#fff",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                      {thumbJob?"⏳":"⬇"} Backfill Missing
+                    </button>
+                    <button onClick={runThumbRebuildAll} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"8px",color:thumbJob?"#555":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                      {thumbJob?"⏳":"🔄"} Rebuild All
+                    </button>
+                    <button onClick={runThumbPurgeOrphans} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#2a2a2a":"#2a0000",border:"1px solid #550000",borderRadius:"8px",color:thumbJob?"#555":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                      {thumbJob?"⏳":"🗑"} Purge Orphans
+                    </button>
+                  </div>
+
+                  {/* Job progress bar */}
+                  {thumbJob && (()=>{
+                    const pct = thumbJob.total>0 ? Math.round(thumbJob.done/thumbJob.total*100) : 0
+                    return (
+                      <div style={{background:"#1a1a1a",borderRadius:"10px",border:"1px solid #2a2a2a",padding:"14px",marginBottom:"16px"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+                          <span style={{fontSize:"12px",color:"#ccc",fontWeight:"500"}}>{thumbJob.type||"job"} — {thumbJob.status}</span>
+                          <span style={{fontSize:"12px",color:"#666",fontVariantNumeric:"tabular-nums"}}>{thumbJob.done.toLocaleString()} / {thumbJob.total.toLocaleString()}</span>
+                        </div>
+                        <div style={{background:"#141414",height:"6px",borderRadius:"3px",overflow:"hidden",marginBottom:"6px"}}>
+                          <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"3px",transition:"width 0.4s ease"}}/>
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555"}}>
+                          <span>{pct}%{thumbJob.skipped>0?` · ${thumbJob.skipped} skipped`:""}</span>
+                          {thumbJob.errors?.length>0 && <span style={{color:"#ff6b6b"}}>{thumbJob.errors.length} error(s)</span>}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Last job result summary */}
+                  {thumbJobResult && !thumbJob && (
+                    <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"8px",padding:"12px 14px",fontSize:"12px",color:"#46d160"}}>
+                      ✓ Complete — {thumbJobResult.done?.toLocaleString()} processed
+                      {thumbJobResult.skipped>0 && <span style={{color:"#888"}}>, {thumbJobResult.skipped} skipped</span>}
+                      {thumbJobResult.errors?.length>0 && <span style={{color:"#ff6b6b"}}>, {thumbJobResult.errors.length} error(s)</span>}
                     </div>
                   )}
                 </div>
               )}
-              {/* Add target form */}
-              <div style={{display:"flex",gap:"8px",alignItems:"center"}}>
-                <select value={addTargetType} onChange={e=>setAddTargetType(e.target.value)}
-                   aria-label="Target type"
-                   style={{padding:"8px 10px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#ccc",fontSize:"13px",cursor:"pointer"}}>
-                   <option value="subreddit">r/ subreddit</option>
-                   <option value="user">u/ user</option>
-                 </select>
-                 <input type="text" placeholder="name…" aria-label={`Add ${addTargetType} name`} autoComplete="off" spellCheck={false} value={addTargetName} onChange={e=>setAddTargetName(e.target.value)}
-                   onKeyDown={e=>e.key==="Enter"&&addTarget()}
-                   style={{padding:"8px 12px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#fff",fontSize:"13px",outline:"none",width:"160px"}}/>
-                <button onClick={addTarget} disabled={!addTargetName.trim()}
-                  style={{padding:"8px 16px",background:addTargetName.trim()?"linear-gradient(135deg,#ff4500,#ff6a33)":"#2a2a2a",border:"none",borderRadius:"8px",color:addTargetName.trim()?"#fff":"#555",cursor:addTargetName.trim()?"pointer":"not-allowed",fontSize:"13px",fontWeight:"600"}}>
-                  + Add
-                </button>
-              </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"8px",marginBottom:"40px"}}>
-              {adminData.targets && adminData.targets.map(t=>{
-                const cardKey = `${t.type}:${t.name}`
-                const isExpanded = expandedCard === cardKey
-                const audit = cardAudit[cardKey]
-                const auditLoading = cardAuditLoading[cardKey]
-                const isScraping = cardScraping[cardKey]
-                const isBackfilling = cardBackfilling[cardKey]
-                return (
-                <div key={`${t.type}-${t.name}`} style={{
-                  background:"linear-gradient(145deg,#1e1e1e,#171717)",
-                  borderRadius:"10px",
-                  border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff00044":isExpanded?"1px solid #ff450055":"1px solid #2a2a2a",
-                  opacity:t.enabled?1:0.7,
-                  transition:"background 0.2s ease, color 0.2s ease, transform 0.2s ease",
-                  display:"flex",
-                  flexDirection:"column",
-                  overflow:"hidden",
-                }}>
-                  {/* Card header — click to expand */}
-                  <div style={{padding:"12px",display:"flex",flexDirection:"column",gap:"8px"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{minWidth:0,flex:1,cursor:"pointer"}} onClick={()=>toggleCardExpand(t.type,t.name)}>
-                        <div style={{display:"flex",alignItems:"center",gap:"6px"}}>
-                          <span style={{fontSize:"9px",color:"#555",textTransform:"uppercase",letterSpacing:"0.5px"}}>{t.type}</span>
-                          {t.status!=="active" && (
-                            <span style={{fontSize:"8px",padding:"1px 4px",borderRadius:"3px",background:t.status==="taken_down"?"#440000":t.status==="deleted"?"#444400":"#222",color:t.status==="taken_down"?"#ff4444":t.status==="deleted"?"#ffff44":"#888"}}>
-                              {t.status==="taken_down"?"⛔":t.status==="deleted"?"👤":""}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{fontSize:"14px",fontWeight:"600",color:t.status==="active"?"#fff":t.status==="taken_down"?"#ff6666":t.status==="deleted"?"#ffff66":"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                          {t.type==="subreddit"?"r/":"u/"}{t.name}
-                        </div>
-                      </div>
-                      <div style={{display:"flex",gap:"4px",flexShrink:0,alignItems:"center"}}>
-                        {t.status==="active" && (
-                          <button onClick={()=>toggleTarget(t.type,t.name)} title={t.enabled?"Disable scraping":"Enable scraping"} style={{padding:"3px 8px",background:t.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"6px",color:t.enabled?"#000":"#888",cursor:"pointer",fontSize:"10px",fontWeight:"600"}}>
-                            {t.enabled?"●":"○"}
-                          </button>
-                        )}
-                        {(t.status==="taken_down"||t.status==="deleted") && (
-                          <button onClick={()=>setTargetStatus(t.type,t.name,"active")} title="Reactivate" style={{padding:"3px 8px",background:"#003300",border:"1px solid #00aa00",borderRadius:"6px",color:"#44ff44",cursor:"pointer",fontSize:"10px"}}>♻</button>
-                        )}
-                        {t.status==="active" && (
-                          <>
-                            {t.type==="subreddit" && (
-                              <button onClick={()=>setTargetStatus(t.type,t.name,"taken_down")} title="Mark taken down" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #550000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>⛔</button>
-                            )}
-                            {t.type==="user" && (
-                              <button onClick={()=>setTargetStatus(t.type,t.name,"deleted")} title="Mark deleted" style={{padding:"3px 6px",background:"#2a2a00",border:"1px solid #555500",borderRadius:"6px",color:"#ffff44",cursor:"pointer",fontSize:"10px"}}>👤</button>
-                            )}
-                            <button onClick={()=>deleteTarget(t.type,t.name)} title="Remove target" style={{padding:"3px 6px",background:"#2a0000",border:"1px solid #440000",borderRadius:"6px",color:"#ff4444",cursor:"pointer",fontSize:"10px"}}>✕</button>
-                          </>
-                        )}
-                        {/* Expand/collapse chevron */}
-                        <button onClick={()=>toggleCardExpand(t.type,t.name)} title={isExpanded?"Collapse":"Expand actions"} style={{padding:"3px 6px",background:"transparent",border:"1px solid #333",borderRadius:"6px",color:isExpanded?"#ff4500":"#555",cursor:"pointer",fontSize:"12px",lineHeight:1,transition:"color 0.2s"}}>
-                          {isExpanded?"▲":"▼"}
-                        </button>
-                      </div>
-                    </div>
-                    {(t.status==="active" || t.status==="taken_down") && (
-                      <div style={{display:"flex",gap:"8px",fontSize:"11px"}}>
-                        <div style={{color:"#666"}}>Posts:</div>
-                        <div style={{color:t.status==="taken_down"?"#888":"#fff",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</div>
-                        <div style={{color:"#666"}}>Media:</div>
-                        <div style={{color:"#46d160",fontVariantNumeric:"tabular-nums"}}>{t.downloaded_media}/{t.total_media}</div>
-                      </div>
-                    )}
-                    {t.status==="active" && (
-                      <>
-                        <div style={{background:"#141414",height:"4px",borderRadius:"2px",overflow:"hidden"}}>
-                          <div style={{width:`${Math.min(100,t.progress_percent)}%`,background:t.progress_percent>=100?"#46d160":"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"2px"}}/>
-                        </div>
-                        {t.last_created && (
-                          <div style={{fontSize:"10px",color:"#444",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                            {new Date(t.last_created).toLocaleDateString()} · {formatRate(t.rate_per_second)}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
 
-                  {/* Expanded panel */}
-                  {isExpanded && (()=>{
-                    const isArchivingTarget = cardArchiving[cardKey]
-                    return (
-                    <div style={{borderTop:"1px solid #2a2a2a",padding:"10px 12px",background:"#161616",display:"flex",flexDirection:"column",gap:"10px"}}>
-
-                      {/* Action buttons row */}
-                      <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
-                        {t.status==="active" && t.enabled && (
-                          <button
-                            onClick={()=>scrapeTargetNow(t.type,t.name)}
-                            disabled={isScraping}
-                            title="Trigger an immediate scrape for this target only"
-                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isScraping?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:isScraping?"#555":"#fff",cursor:isScraping?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
-                            {isScraping ? "✓ Sent" : "⚡ Scrape"}
-                          </button>
-                        )}
-                        {t.status==="active" && t.enabled && (
-                          <button
-                            onClick={()=>backfillTargetNow(t.type,t.name)}
-                            disabled={isBackfilling}
-                            title="Trigger a historical backfill for this target only"
-                            style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isBackfilling?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"6px",color:isBackfilling?"#555":"#7ab3e0",cursor:isBackfilling?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
-                            {isBackfilling ? "✓ Sent" : "📜 Backfill"}
-                          </button>
-                        )}
-                        <button
-                          onClick={()=>rescanTarget(t.type,t.name)}
-                          title="Re-queue all media for this target for re-download"
-                          style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"6px",color:"#46d160",cursor:"pointer",fontSize:"11px",fontWeight:"600",flex:"1",justifyContent:"center",minWidth:"80px"}}>
-                          ↻ Rescan
-                        </button>
-                        <button
-                          onClick={()=>fetchCardAudit(t.type,t.name)}
-                          disabled={auditLoading}
-                          title="Check media integrity for this target"
-                          style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:"#1e1e2a",border:"1px solid #2a2a4a",borderRadius:"6px",color:auditLoading?"#555":"#7193ff",cursor:auditLoading?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",flex:"1",justifyContent:"center",minWidth:"80px"}}>
-                          {auditLoading ? "…" : "🔍 Audit"}
-                        </button>
-                        <button
-                          onClick={()=>{
-                            if(!window.confirm(`Archive all ${t.post_count?.toLocaleString()||"?"} posts from ${t.type==="subreddit"?"r/":"u/"}${t.name}?\n\nThis will move their media files to the archive directory and hide them from the Browse tab.`)) return
-                            runArchiveTarget(t.type, t.name)
-                          }}
-                          disabled={!!archiveJob||isArchivingTarget||t.post_count===0}
-                          title={`Archive all posts from ${t.type==="subreddit"?"r/":"u/"}${t.name}`}
-                          style={{display:"flex",alignItems:"center",gap:"4px",padding:"5px 10px",background:isArchivingTarget?"#2a2a2a":"#132213",border:"1px solid #1a3a1a",borderRadius:"6px",color:isArchivingTarget?"#555":"#46d160",cursor:(archiveJob||isArchivingTarget||t.post_count===0)?"not-allowed":"pointer",fontSize:"11px",fontWeight:"600",transition:"background 0.2s, color 0.2s, opacity 0.2s",flex:"1",justifyContent:"center",minWidth:"80px"}}>
-                          {isArchivingTarget ? "⏳" : "📦 Archive"}
-                        </button>
-                      </div>
-
-                      {/* Audit results */}
-                      {auditLoading && (
-                        <div style={{fontSize:"11px",color:"#555",textAlign:"center",padding:"8px 0"}}>Running integrity check…</div>
-                      )}
-                      {audit && !auditLoading && (()=>{
-                        const missingPct = audit.total_media > 0 ? Math.round((audit.media_missing / audit.total_media) * 100) : 0
-                        const okPct = audit.total_media > 0 ? Math.round((audit.media_ok / audit.total_media) * 100) : 100
-                        const hasIssues = audit.media_missing > 0 || audit.posts_all_missing > 0
-                        return (
-                          <div style={{background:"#111",borderRadius:"8px",padding:"10px",border:`1px solid ${hasIssues?"#ff450033":"#46d16033"}`}}>
-                            <div style={{fontSize:"10px",fontWeight:"600",color:hasIssues?"#ff6b3d":"#46d160",marginBottom:"8px",textTransform:"uppercase",letterSpacing:"0.5px"}}>
-                              {hasIssues ? "⚠ Issues Found" : "✓ Integrity OK"}
-                            </div>
-                            {/* Media bar */}
-                            <div style={{marginBottom:"8px"}}>
-                              <div style={{display:"flex",justifyContent:"space-between",fontSize:"10px",color:"#666",marginBottom:"3px"}}>
-                                <span>Media integrity</span>
-                                <span style={{color:hasIssues?"#f9c300":"#46d160"}}>{okPct}% OK</span>
-                              </div>
-                              <div style={{background:"#222",height:"5px",borderRadius:"3px",overflow:"hidden"}}>
-                                <div style={{display:"flex",height:"100%"}}>
-                                  <div style={{width:`${okPct}%`,background:"#46d160",transition:"width 0.4s"}}/>
-                                  {missingPct>0 && <div style={{width:`${missingPct}%`,background:"#ff4500",transition:"width 0.4s"}}/>}
-                                </div>
-                              </div>
-                            </div>
-                            {/* Stats grid */}
-                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px",fontSize:"10px"}}>
-                              <div style={{color:"#666"}}>Posts total</div><div style={{color:"#fff",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.total_posts.toLocaleString()}</div>
-                              <div style={{color:"#46d160"}}>Posts OK</div><div style={{color:"#46d160",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_ok.toLocaleString()}</div>
-                              {audit.posts_partial>0 && <><div style={{color:"#f9c300"}}>Posts partial</div><div style={{color:"#f9c300",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_partial.toLocaleString()}</div></>}
-                              {audit.posts_all_missing>0 && <><div style={{color:"#ff6b6b"}}>Posts all missing</div><div style={{color:"#ff6b6b",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_all_missing.toLocaleString()}</div></>}
-                              {audit.posts_no_media>0 && <><div style={{color:"#888"}}>Posts (no media)</div><div style={{color:"#888",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.posts_no_media.toLocaleString()}</div></>}
-                              <div style={{color:"#666",marginTop:"4px",borderTop:"1px solid #222",paddingTop:"4px"}}>Media total</div><div style={{color:"#fff",textAlign:"right",fontVariantNumeric:"tabular-nums",marginTop:"4px",borderTop:"1px solid #222",paddingTop:"4px"}}>{audit.total_media.toLocaleString()}</div>
-                              <div style={{color:"#46d160"}}>Downloaded</div><div style={{color:"#46d160",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_ok.toLocaleString()}</div>
-                              {audit.media_missing>0 && <><div style={{color:"#ff6b6b"}}>Missing</div><div style={{color:"#ff6b6b",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_missing.toLocaleString()}</div></>}
-                              {audit.media_error>0 && <><div style={{color:"#ff4500"}}>Errors</div><div style={{color:"#ff4500",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_error.toLocaleString()}</div></>}
-                              {audit.media_pending>0 && <><div style={{color:"#f9c300"}}>Pending</div><div style={{color:"#f9c300",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{audit.media_pending.toLocaleString()}</div></>}
-                            </div>
-                            {/* Quick fix: if missing media, offer rescan */}
-                            {audit.media_missing>0 && (
-                              <button
-                                onClick={()=>rescanTarget(t.type,t.name)}
-                                style={{marginTop:"8px",width:"100%",padding:"5px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"6px",color:"#fff",cursor:"pointer",fontSize:"11px",fontWeight:"600"}}>
-                                Re-queue {audit.media_missing.toLocaleString()} missing →
-                              </button>
-                            )}
-                          </div>
-                        )
-                      })()}
-                    </div>
-                  )})()}
+            {/* ── Section 6: Media Re-scan ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("media")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.media?"16px":0}}
+              >
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Media Re-scan</h3>
+                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>Find missing media</span>
                 </div>
-              )})}
-            </div>
-
-            {/* ── Thumbnail Utilities ── */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:"12px",marginBottom:"16px",flexWrap:"wrap"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Thumbnail Utilities</h2>
+                <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.media?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
               </div>
-              <button onClick={loadThumbStats} style={{padding:"6px 14px",background:"#1e1e1e",border:"1px solid #333",borderRadius:"8px",color:"#888",cursor:"pointer",fontSize:"12px"}}>↻ Refresh Stats</button>
-            </div>
-
-            {/* Stats row */}
-            {thumbStats && (
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"12px",marginBottom:"20px"}}>
-                {[
-                  {label:"Media with file",value:thumbStats.total_media_with_file,color:"#fff"},
-                  {label:"Thumbs OK",value:thumbStats.with_thumb_in_db,color:"#46d160"},
-                  {label:"Missing thumbs",value:thumbStats.missing_thumb_in_db,color:thumbStats.missing_thumb_in_db>0?"#f9c300":"#46d160",
-                   sub:thumbStats.missing_thumb_in_db>0?`${thumbStats.missing_no_db_path} no path · ${thumbStats.missing_file_gone} file gone`:null},
-                  {label:"Files on disk",value:thumbStats.thumb_files_on_disk,color:"#7193ff"},
-                  {label:"Disk usage",value:`${thumbStats.thumb_disk_mb} MB`,color:"#888"},
-                ].map(s=>(
-                  <div key={s.label} style={{background:"#1a1a1a",padding:"14px 16px",borderRadius:"12px",border:"1px solid #2a2a2a"}}>
-                    <div style={{fontSize:"11px",color:"#555",marginBottom:"6px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
-                    <div style={{fontSize:"22px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{typeof s.value==="number"?s.value.toLocaleString():s.value}</div>
-                    {s.sub && <div style={{fontSize:"10px",color:"#666",marginTop:"4px"}}>{s.sub}</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Action buttons */}
-            <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"16px"}}>
-              <button
-                onClick={runThumbBackfill}
-                disabled={!!thumbJob}
-                style={{padding:"10px 20px",background:thumbJob?"#2a2a2a":"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:thumbJob?"#555":"#fff",cursor:thumbJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"600"}}>
-                Backfill Missing
-              </button>
-              <button
-                onClick={runThumbRebuildAll}
-                disabled={!!thumbJob}
-                style={{padding:"10px 20px",background:thumbJob?"#2a2a2a":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"10px",color:thumbJob?"#555":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"600"}}>
-                Rebuild All
-              </button>
-              <button
-                onClick={runThumbPurgeOrphans}
-                disabled={!!thumbJob}
-                style={{padding:"10px 20px",background:thumbJob?"#2a2a2a":"#2a0000",border:"1px solid #550000",borderRadius:"10px",color:thumbJob?"#555":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"13px",fontWeight:"600"}}>
-                Purge Orphans
-              </button>
-            </div>
-
-            {/* Job progress bar */}
-            {thumbJob && (()=>{
-              const pct = thumbJob.total>0 ? Math.round(thumbJob.done/thumbJob.total*100) : 0
-              return (
-                <div style={{background:"#1a1a1a",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"20px"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
-                    <span style={{fontSize:"13px",color:"#ccc",fontWeight:"500",textTransform:"capitalize"}}>{thumbJob.type||"job"} — {thumbJob.status}</span>
-                    <span style={{fontSize:"12px",color:"#666",fontVariantNumeric:"tabular-nums"}}>{thumbJob.done.toLocaleString()} / {thumbJob.total.toLocaleString()}</span>
-                  </div>
-                  <div style={{background:"#141414",height:"8px",borderRadius:"4px",overflow:"hidden",marginBottom:"6px"}}>
-                    <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#ff4500,#ff6a33)",height:"100%",borderRadius:"4px",transition:"width 0.4s ease"}}/>
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#555"}}>
-                    <span>{pct}%{thumbJob.skipped>0?` · ${thumbJob.skipped} skipped`:""}</span>
-                    {thumbJob.errors?.length>0 && <span style={{color:"#ff6b6b"}}>{thumbJob.errors.length} error(s)</span>}
-                  </div>
+              {adminSections.media && (
+                <div style={{background:"#1a1a1a",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px"}}>
+                  <p style={{fontSize:"12px",color:"#888",marginBottom:"12px",margin:0}}>
+                    Re-scan existing posts to find additional images/videos that weren't originally queued for download.
+                  </p>
+                  <button
+                    onClick={()=>{
+                      if(!window.confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
+                      axios.post("/api/admin/media/rescan").then(r=>{
+                        toastSuccess(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
+                        loadAdmin()
+                      }).catch(err=>toastError("Rescan failed: " + (err.response?.data?.detail||err.message)))
+                    }}
+                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"8px",color:"#fff",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}
+                  >
+                    🔍 Re-scan All Posts
+                  </button>
                 </div>
-              )
-            })()}
+              )}
+            </div>
 
-            {/* Last job result summary */}
-            {thumbJobResult && !thumbJob && (
-              <div style={{background:"#0d1f0d",border:"1px solid #1a3a1a",borderRadius:"10px",padding:"12px 16px",marginBottom:"20px",fontSize:"13px",color:"#46d160"}}>
-                Job complete — {thumbJobResult.done?.toLocaleString()} processed
-                {thumbJobResult.skipped>0 && <span style={{color:"#888"}}>, {thumbJobResult.skipped} skipped</span>}
-                {thumbJobResult.errors?.length>0 && <span style={{color:"#ff6b6b"}}>, {thumbJobResult.errors.length} error(s)</span>}
+            {/* ── Section 7: Recent Activity ── */}
+            <div style={{marginBottom:"16px"}}>
+              <div 
+                onClick={()=>toggleAdminSection("activity")}
+                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1e1e1e",borderRadius:"12px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.activity?"16px":0}}
+              >
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}} />
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#fff"}}>Recent Activity</h3>
+                  <span style={{fontSize:"11px",color:"#555",background:"#141414",padding:"2px 8px",borderRadius:"10px"}}>live</span>
+                  <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#444",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
+                </div>
+                <span style={{color:"#555",fontSize:"14px",transition:"transform 0.2s",transform:adminSections.activity?"rotate(0deg)":"rotate(-90deg)"}}>▼</span>
               </div>
-            )}
-
-            {/* ── Media Re-scan Utility ── */}
-            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px",marginTop:"32px"}}>
-              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Media Re-scan</h2>
-            </div>
-            <div style={{background:"#1a1a1a",borderRadius:"12px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"20px"}}>
-              <p style={{fontSize:"13px",color:"#888",marginBottom:"12px",margin:0}}>
-                Re-scan existing posts to find additional images/videos that weren't originally queued for download.
-                Useful for retroactively capturing gallery images or fixing posts hidden before full media extraction was implemented.
-              </p>
-              <button
-                onClick={()=>{
-                  if(!window.confirm("Re-scan ALL posts for missing media? This may queue many items.")) return
-                  axios.post("/api/admin/media/rescan").then(r=>{
-                    toastSuccess(`Scanned ${r.data.posts_scanned} posts, found ${r.data.urls_found} URLs, queued ${r.data.newly_queued} new items`)
-                    loadAdmin()
-                  }).catch(err=>toastError("Rescan failed: " + (err.response?.data?.detail||err.message)))
-                }}
-                style={{padding:"10px 20px",background:"linear-gradient(135deg,#ff4500,#ff6a33)",border:"none",borderRadius:"10px",color:"#fff",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>
-                Re-scan All Posts
-              </button>
-            </div>
-
-            {/* Recent Activity */}
-            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"16px"}}>
-              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#ff4500,#ff6a33)",borderRadius:"2px"}} />
-              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Recent Activity</h2>
-              <span style={{fontSize:"12px",color:"#555",marginLeft:"4px"}}>live</span>
-              <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#444",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
-            </div>
-            <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"16px",border:"1px solid #2a2a2a",overflow:"hidden",boxShadow:"0 4px 20px rgba(0,0,0,0.3)"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
-                <thead>
-                  <tr style={{background:"#141414",borderBottom:"1px solid #2a2a2a"}}>
-                    {["Time","Subreddit","Author","Title"].map(h=>(
-                      <th key={h} style={{padding:"14px 16px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"12px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}`}</style>
-                  {logs && logs.map(l=>(
-                    <tr key={l.id} className={highlightedRows.has(l.id)?"row-new":""} style={{borderBottom:"1px solid #222",transition:"background 0.3s ease"}}>
-                      <td style={{padding:"12px 16px",color:"#555"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
-                      <td style={{padding:"12px 16px"}}><span style={{background:"#ff450022",color:"#ff4500",padding:"4px 8px",borderRadius:"4px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
-                      <td style={{padding:"12px 16px",color:"#888"}}>{l.author||"-"}</td>
-                      <td style={{padding:"12px 16px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{l.title||"-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {adminSections.activity && (
+                <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"12px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
+                    <thead>
+                      <tr style={{background:"#141414",borderBottom:"1px solid #2a2a2a"}}>
+                        {["Time","Subreddit","Author","Title"].map(h=>(
+                          <th key={h} style={{padding:"12px 14px",textAlign:"left",color:"#666",fontWeight:"500",fontSize:"11px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}`}</style>
+                      {logs && logs.map(l=>(
+                        <tr key={l.id} className={highlightedRows.has(l.id)?"row-new":""} style={{borderBottom:"1px solid #222",transition:"background 0.3s ease"}}>
+                          <td style={{padding:"12px 14px",color:"#555"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
+                          <td style={{padding:"12px 14px"}}><span style={{background:"#ff450022",color:"#ff4500",padding:"4px 8px",borderRadius:"4px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
+                          <td style={{padding:"12px 14px",color:"#888"}}>{l.author||"-"}</td>
+                          <td style={{padding:"12px 14px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#ccc"}}>{l.title||"-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </>)}
         </div>
