@@ -164,6 +164,8 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_comments_history_version ON comments_history(comment_id, version DESC)",
     # v6: targets.status column for tracking banned/deleted subreddits
     "ALTER TABLE targets ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
+    # v7: targets.icon_url for subreddit/user avatars
+    "ALTER TABLE targets ADD COLUMN IF NOT EXISTS icon_url TEXT",
 ]
 
 
@@ -222,6 +224,101 @@ def startup():
             os.makedirs(d, exist_ok=True)
         except Exception:
             pass
+
+    # Fetch target icons in background so startup isn't blocked
+    threading.Thread(target=_refresh_target_icons, daemon=True).start()
+
+
+ICONS_DIR = os.path.join(THUMB_PATH, ".icons")
+
+
+def _refresh_target_icons():
+    """Download subreddit/user icons from Reddit and save locally."""
+    import urllib.request
+    import urllib.error
+
+    try:
+        os.makedirs(ICONS_DIR, exist_ok=True)
+    except Exception:
+        return
+
+    if not connection_pool:
+        return
+
+    conn = None
+    try:
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+        cur.execute("SELECT type, name FROM targets WHERE enabled = true AND (icon_url IS NULL OR icon_url = '')")
+        rows = cur.fetchall()
+        cur.close()
+    except Exception as e:
+        logger.warning(f"Icon refresh query failed: {e}")
+        return
+    finally:
+        if conn:
+            connection_pool.putconn(conn)
+
+    if not rows:
+        return
+
+    logger.info(f"Fetching icons for {len(rows)} targets...")
+    ua = "Mozilla/5.0 (compatible; Reddarr/1.0)"
+
+    for ttype, name in rows:
+        try:
+            if ttype == "subreddit":
+                url = f"https://www.reddit.com/r/{name}/about.json"
+            elif ttype == "user":
+                url = f"https://www.reddit.com/user/{name}/about.json"
+            else:
+                continue
+
+            req = urllib.request.Request(url, headers={"User-Agent": ua})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+
+            about = data.get("data", {})
+            icon_remote = None
+            if ttype == "subreddit":
+                icon_remote = about.get("community_icon") or about.get("icon_img") or None
+            else:
+                icon_remote = about.get("icon_img") or about.get("snoovatar_img") or None
+
+            if icon_remote:
+                # Strip query params (Reddit appends cache-busters)
+                if "?" in icon_remote:
+                    icon_remote = icon_remote.split("?")[0]
+
+                ext = os.path.splitext(icon_remote)[1] or ".png"
+                local_name = f"{ttype}_{name}{ext}"
+                local_path = os.path.join(ICONS_DIR, local_name)
+
+                req2 = urllib.request.Request(icon_remote, headers={"User-Agent": ua})
+                with urllib.request.urlopen(req2, timeout=15) as img_resp:
+                    with open(local_path, "wb") as f:
+                        f.write(img_resp.read())
+
+                # Store as relative path under THUMB_PATH so /thumb/ endpoint serves it
+                rel_path = os.path.join(".icons", local_name)
+
+                conn2 = connection_pool.getconn()
+                try:
+                    cur2 = conn2.cursor()
+                    cur2.execute(
+                        "UPDATE targets SET icon_url = %s WHERE type = %s AND name = %s",
+                        (f"/thumb/{rel_path}", ttype, name),
+                    )
+                    conn2.commit()
+                    cur2.close()
+                    logger.info(f"Icon saved for {ttype}:{name}")
+                finally:
+                    connection_pool.putconn(conn2)
+
+            time.sleep(1)  # Rate limit Reddit requests
+        except Exception as e:
+            logger.warning(f"Failed to fetch icon for {ttype}:{name}: {e}")
+            time.sleep(2)
 
 
 @app.on_event("shutdown")
@@ -1276,6 +1373,7 @@ def admin_stats():
                 t.name,
                 t.enabled,
                 t.status,
+                t.icon_url,
                 t.last_created,
                 COUNT(DISTINCT p.id) AS post_count,
                 COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
@@ -1286,7 +1384,7 @@ def admin_stats():
             LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
                               OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
             LEFT JOIN media m ON m.post_id = p.id
-            GROUP BY t.type, t.name, t.enabled, t.status, t.last_created
+            GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
             ORDER BY t.type, t.name
         """)
         targets = []
@@ -1297,6 +1395,7 @@ def admin_stats():
                 name,
                 enabled,
                 status,
+                icon_url,
                 last_created,
                 post_count,
                 posts_7d,
@@ -1324,6 +1423,7 @@ def admin_stats():
                     "name": name,
                     "enabled": enabled,
                     "status": status or "active",
+                    "icon_url": icon_url,
                     "last_created": last_created.isoformat() if last_created else None,
                     "post_count": post_count,
                     "total_media": total_media,
@@ -3112,7 +3212,7 @@ async def event_stream():
                     LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
                                       OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
                     LEFT JOIN media m ON m.post_id = p.id
-                    GROUP BY t.type, t.name, t.enabled, t.status, t.last_created
+                    GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
                     ORDER BY t.type, t.name
                 """)
                 target_rows = cur.fetchall()
@@ -3123,6 +3223,7 @@ async def event_stream():
                         name,
                         enabled,
                         status,
+                        icon_url,
                         last_created,
                         post_count,
                         posts_7d,
@@ -3149,6 +3250,7 @@ async def event_stream():
                             "name": name,
                             "enabled": enabled,
                             "status": status or "active",
+                            "icon_url": icon_url,
                             "last_created": last_created.isoformat()
                             if last_created
                             else None,

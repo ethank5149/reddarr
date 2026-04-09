@@ -1097,7 +1097,10 @@ export default function App(){
       >
         {/* Poster area */}
         <div style={{aspectRatio:"2/3",background:"linear-gradient(135deg,#0b1728,#131b2e)",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
-          <div style={{fontSize:"48px",fontWeight:"900",color:"#1c2a3f",letterSpacing:"-2px"}}>{prefix}{t.name.slice(0,2).toUpperCase()}</div>
+          {t.icon_url ? (
+            <img src={t.icon_url} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.style.display="none";e.target.nextSibling.style.display="flex"}}/>
+          ) : null}
+          <div style={{fontSize:"48px",fontWeight:"900",color:"#1c2a3f",letterSpacing:"-2px",display:t.icon_url?"none":"flex",alignItems:"center",justifyContent:"center",position:"absolute",inset:0}}>{prefix}{t.name.slice(0,2).toUpperCase()}</div>
           {/* Status badge */}
           {t.status !== "active" && (
             <div style={{position:"absolute",top:"8px",right:"8px",padding:"2px 8px",borderRadius:"3px",fontSize:"9px",fontWeight:"700",background:t.status==="taken_down"?"#440000":"#444400",color:t.status==="taken_down"?"#ff4444":"#ffff44"}}>

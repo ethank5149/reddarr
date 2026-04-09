@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS targets (
 
 -- Add status column to existing installations
 ALTER TABLE targets ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+ALTER TABLE targets ADD COLUMN IF NOT EXISTS icon_url TEXT;
 
 -- POSTS table
 CREATE TABLE IF NOT EXISTS posts (
