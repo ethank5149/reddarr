@@ -314,6 +314,9 @@ def process_item(item, session=None):
         is_corrupted = False
 
         while retries < MAX_RETRIES:
+            if "imgur.com" in url and url.lower().split("?")[0].endswith(".gifv"):
+                url = url.replace(".gifv", ".mp4").replace(".GIFV", ".mp4")
+
             if "i.redd.it" in url and not url.lower().split("?")[0].endswith(".gif"):
                 url = get_best_image_url(url, session)
                 logger.info(f"High-res URL: {url[:60]}...")
@@ -325,7 +328,7 @@ def process_item(item, session=None):
             if (
                 any(
                     url.lower().split("?")[0].endswith(x)
-                    for x in [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+                    for x in [".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm"]
                 )
                 or "i.redd.it" in url
             ):
@@ -602,7 +605,7 @@ def process_item(item, session=None):
                             continue
 
                     content_type = r.headers.get("content-type", "")
-                    if "image" in content_type:
+                    if "image" in content_type or "video" in content_type:
                         ext = "." + content_type.split("/")[-1].split(";")[0].strip()
                         post_dir = get_post_dir(post_id, q_subreddit, q_author)
                         name = (

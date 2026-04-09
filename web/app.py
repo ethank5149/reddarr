@@ -1578,6 +1578,123 @@ def rescan_target(target_type: str, name: str):
     return {"status": "ok", "requeued": requeued, "posts": len(post_rows)}
 
 
+@app.post("/api/admin/target/{target_type}/{name}/rescrape")
+def rescrape_target(target_type: str, name: str):
+    """Retry failed or missing media downloads for a specific target."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+
+    with get_db_cursor() as cur:
+        if target_type == "subreddit":
+            cur.execute(
+                """
+                SELECT m.id, m.post_id, m.url, p.subreddit, p.author, p.title
+                FROM media m
+                JOIN posts p ON m.post_id = p.id
+                WHERE LOWER(p.subreddit) = LOWER(%s) AND (
+                   (m.status IS NULL OR m.status = '')
+                   OR m.status = 'error'
+                   OR m.status = 'pending'
+                   OR m.status = 'failed'
+                   OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
+                )
+            """,
+                (name,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT m.id, m.post_id, m.url, p.subreddit, p.author, p.title
+                FROM media m
+                JOIN posts p ON m.post_id = p.id
+                WHERE LOWER(p.author) = LOWER(%s) AND (
+                   (m.status IS NULL OR m.status = '')
+                   OR m.status = 'error'
+                   OR m.status = 'pending'
+                   OR m.status = 'failed'
+                   OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
+                )
+            """,
+                (name,),
+            )
+        failed_media = cur.fetchall()
+
+    if not failed_media:
+        return {
+            "status": "ok",
+            "message": "No failed or missing media found for this target",
+            "requeued": 0,
+        }
+
+    requeued = 0
+    errors = []
+
+    for media_id, post_id, url, subreddit, author, title in failed_media:
+        if not url:
+            errors.append(f"media {media_id}: no URL")
+            continue
+
+        try:
+            rd.lpush(
+                "media_queue",
+                json.dumps(
+                    {
+                        "post_id": post_id,
+                        "url": url,
+                        "subreddit": subreddit,
+                        "author": author,
+                        "title": title or "",
+                    }
+                ),
+            )
+            requeued += 1
+        except Exception as e:
+            errors.append(f"media {media_id}: {e}")
+
+    with get_db_cursor() as cur:
+        if target_type == "subreddit":
+            cur.execute(
+                """
+                UPDATE media SET status = 'pending'
+                FROM posts p
+                WHERE media.post_id = p.id AND LOWER(p.subreddit) = LOWER(%s) AND (
+                   (media.status IS NULL OR media.status = '')
+                   OR media.status = 'error'
+                   OR media.status = 'pending'
+                   OR media.status = 'failed'
+                   OR (media.status IN ('done', 'partial') AND (media.file_path IS NULL OR media.file_path = ''))
+                )
+            """,
+                (name,),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE media SET status = 'pending'
+                FROM posts p
+                WHERE media.post_id = p.id AND LOWER(p.author) = LOWER(%s) AND (
+                   (media.status IS NULL OR media.status = '')
+                   OR media.status = 'error'
+                   OR media.status = 'pending'
+                   OR media.status = 'failed'
+                   OR (media.status IN ('done', 'partial') AND (media.file_path IS NULL OR media.file_path = ''))
+                )
+            """,
+                (name,),
+            )
+
+    return {
+        "status": "ok",
+        "requeued": requeued,
+        "total_found": len(failed_media),
+        "errors": errors[:10] if errors else [],
+    }
+
+
 @app.get("/api/admin/target/{target_type}/{name}/audit")
 def audit_target(target_type: str, name: str):
     """Return per-target media integrity stats."""

@@ -702,6 +702,20 @@ export default function App(){
       })
   }
 
+  function rescrapeTargetNow(ttype, name){
+    const key = `${ttype}:${name}`
+    setCardScraping(prev => ({...prev, [key]: true}))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescrape`)
+      .then(r => {
+        toastSuccess(`Requeued ${r.data.requeued} missing items for ${name}`)
+        setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
+      })
+      .catch(() => {
+        toastError(`Failed to rescrape missing items for ${name}`)
+        setCardScraping(prev => ({...prev, [key]: false}))
+      })
+  }
+
   function backfillTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardBackfilling(prev => ({...prev, [key]: true}))
@@ -1350,6 +1364,7 @@ export default function App(){
                     <button onClick={()=>scrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Scrape</button>
                     <button onClick={()=>backfillTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📜 Backfill</button>
                     <button onClick={()=>rescanTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#1e2a1e",border:"1px solid #2a4a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescan</button>
+                    <button onClick={()=>rescrapeTargetNow(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2d2000",border:"1px solid #4a3a00",borderRadius:"3px",color:"#f9c300",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>↻ Rescrape Missing</button>
                     <button onClick={()=>{if(window.confirm(`Archive all posts from ${targetDetailType==="subreddit"?"r/":"u/"}${currentTarget.name}?`))runArchiveTarget(currentTarget.type,currentTarget.name)}} style={{padding:"6px 14px",background:"#132213",border:"1px solid #1a3a1a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>📦 Archive All</button>
                     <button onClick={()=>deleteTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff4444",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>✕ Remove</button>
                   </div>

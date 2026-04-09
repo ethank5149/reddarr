@@ -151,7 +151,16 @@ def fetch_comments(post):
     return comments
 
 
-_DIRECT_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_DIRECT_IMAGE_EXTS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".mp4",
+    ".gifv",
+    ".webm",
+)
 _DIRECT_MEDIA_HOSTS = (
     "i.redd.it",
     "v.redd.it",
