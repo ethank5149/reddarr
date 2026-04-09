@@ -167,7 +167,8 @@ _MIGRATIONS = [
     # v7: targets.icon_url for subreddit/user avatars
     "ALTER TABLE targets ADD COLUMN IF NOT EXISTS icon_url TEXT",
     # v8: media unique constraint on (post_id, url)
-    "DELETE FROM media WHERE id NOT IN (SELECT MIN(id) FROM media GROUP BY post_id, url)",
+    "CREATE INDEX IF NOT EXISTS idx_media_post_id_url ON media(post_id, url)",
+    "DELETE FROM media a USING media b WHERE a.id > b.id AND a.post_id = b.post_id AND a.url = b.url",
     "ALTER TABLE media ADD CONSTRAINT media_post_id_url_key UNIQUE (post_id, url)",
 ]
 

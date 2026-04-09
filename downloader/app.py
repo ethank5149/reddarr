@@ -710,17 +710,17 @@ def worker(worker_id):
         data = rd.blmove(
             "media_queue",
             processing_queue,
-            src_free="RIGHT",
-            dst_free="LEFT",
             timeout=5,
+            src="RIGHT",
+            dest="LEFT",
         )
         if data is None:
             data = rd.blmove(
                 "media_queue_retry",
                 processing_queue,
-                src_free="RIGHT",
-                dst_free="LEFT",
                 timeout=5,
+                src="RIGHT",
+                dest="LEFT",
             )
 
         if data is None:
