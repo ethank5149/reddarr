@@ -14,8 +14,9 @@ from pathlib import Path
 
 import psycopg2
 from psycopg2 import pool as pg_pool
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import (
     FileResponse,
@@ -81,7 +82,39 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def metrics_middleware(request, call_next):
+async def metrics_middleware(request: Request, call_next):
+    # --- Auth check ---
+    path = request.url.path
+    if path.startswith("/api/") and path != "/api/login":
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        token = auth_header.split(" ")[1]
+
+        if token == "admin-token-123":
+            pass
+        elif token == "guest-token-123":
+            if request.method != "GET":
+                return JSONResponse(
+                    status_code=403, content={"detail": "Forbidden: Admin required"}
+                )
+            allowed_guest_get = [
+                "/api/posts",
+                "/api/post/",
+                "/api/search",
+                "/api/comments",
+                "/api/media",
+                "/api/admin/stats",
+                "/api/events",
+            ]
+            if not any(path.startswith(p) for p in allowed_guest_get):
+                return JSONResponse(
+                    status_code=403, content={"detail": "Forbidden: Admin required"}
+                )
+        else:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    # --- End Auth check ---
+
     start = time.monotonic()
     response = await call_next(request)
     duration = time.monotonic() - start
@@ -98,6 +131,20 @@ async def metrics_middleware(request, call_next):
         endpoint=endpoint,
     ).observe(duration)
     return response
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+def login(req: LoginRequest):
+    if req.username == "admin" and req.password == "admin":
+        return {"token": "admin-token-123", "role": "admin"}
+    elif req.username == "guest" and req.password == "guest":
+        return {"token": "guest-token-123", "role": "guest"}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 logger.info("API STARTED - version 4.0.0")

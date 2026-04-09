@@ -16,6 +16,33 @@ const isTouchDevice = () => 'ontouchstart' in window || navigator.maxTouchPoints
 const preventDefault = (e) => { if (e.touches.length > 1) e.preventDefault() }
 
 export default function App(){
+  const [token, setToken] = useState(() => localStorage.getItem("token"))
+  const [role, setRole] = useState(() => localStorage.getItem("role"))
+  const [loginUser, setLoginUser] = useState("")
+  const [loginPass, setLoginPass] = useState("")
+  const [loginErr, setLoginErr] = useState("")
+
+  useEffect(() => {
+    const reqInterceptor = axios.interceptors.request.use(config => {
+      const storedToken = localStorage.getItem("token")
+      if (storedToken) config.headers.Authorization = `Bearer ${storedToken}`
+      return config
+    })
+    const resInterceptor = axios.interceptors.response.use(r => r, err => {
+      if (err.response?.status === 401) {
+        setToken(null)
+        setRole(null)
+        localStorage.removeItem("token")
+        localStorage.removeItem("role")
+      }
+      return Promise.reject(err)
+    })
+    return () => {
+      axios.interceptors.request.eject(reqInterceptor)
+      axios.interceptors.response.eject(resInterceptor)
+    }
+  }, [])
+
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -1010,10 +1037,10 @@ export default function App(){
     {to:"/subreddits",label:"Subreddits",match:"subreddits",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>),count:subredditTargets.length},
     {to:"/users",label:"Users",match:"users",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>),count:userTargets.length},
     {to:"/library",label:"All Posts",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>)},
-    {to:"/archive",label:"Hidden",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>)},
-    {to:"/wanted",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
-    {to:"/system",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
-  ]
+    role === "admin" && {to:"/archive",label:"Hidden",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>)},
+    role === "admin" && {to:"/wanted",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
+    role === "admin" && {to:"/system",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
+  ].filter(Boolean)
 
   // ── Shared components ──
 
@@ -1070,16 +1097,18 @@ export default function App(){
             <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",letterSpacing:"1px",marginBottom:"3px"}}>{p.subreddit||"reddit"}</div>
             <div style={{fontSize:"13px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:isArchive?"#8aa4bd":"#c8d6e0"}}>{p.title}</div>
           </div>
-          <div style={{display:"flex",gap:"4px",flexShrink:0}}>
-            <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} aria-label="Delete post"
-              style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
-              <span aria-hidden="true">🗑</span>
-            </button>
-            <button onClick={e=>{e.stopPropagation();isArchive?unhidePost(p.id):hidePost(p.id)}} aria-label={isArchive?"Unhide":"Hide"}
-              style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
-              <span aria-hidden="true">👁</span>
-            </button>
-          </div>
+          {role === "admin" && (
+            <div style={{display:"flex",gap:"4px",flexShrink:0}}>
+              <button onClick={e=>{e.stopPropagation();deletePost(p.id)}} aria-label="Delete post"
+                style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                <span aria-hidden="true">🗑</span>
+              </button>
+              <button onClick={e=>{e.stopPropagation();isArchive?unhidePost(p.id):hidePost(p.id)}} aria-label={isArchive?"Unhide":"Hide"}
+                style={{minWidth:"36px",minHeight:"36px",padding:"0 8px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"14px",display:"flex",alignItems:"center",justifyContent:"center",transition:"background 0.15s, color 0.15s"}}>
+                <span aria-hidden="true">👁</span>
+              </button>
+            </div>
+          )}
         </div>
       </article>
     )
@@ -1184,6 +1213,32 @@ export default function App(){
     }
   }
 
+  if (!token) {
+    const doLogin = (e) => {
+      e.preventDefault()
+      setLoginErr("")
+      axios.post("/api/login", {username: loginUser, password: loginPass})
+        .then(r => {
+          localStorage.setItem("token", r.data.token)
+          localStorage.setItem("role", r.data.role)
+          setToken(r.data.token)
+          setRole(r.data.role)
+        })
+        .catch(e => setLoginErr(e.response?.data?.detail || "Login failed"))
+    }
+    return (
+      <div style={{display:"flex",minHeight:"100vh",background:"#1a2234",alignItems:"center",justifyContent:"center",color:"#dfe6ed",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif"}}>
+        <form onSubmit={doLogin} style={{background:"#161d2f",padding:"40px",borderRadius:"5px",border:"1px solid #1c2a3f",width:"100%",maxWidth:"320px",display:"flex",flexDirection:"column",gap:"15px",boxShadow:"0 10px 30px rgba(0,0,0,0.5)"}}>
+          <h2 style={{margin:"0 0 10px",textAlign:"center",fontSize:"22px",color:"#f5f7fa"}}>Reddarr Login</h2>
+          {loginErr && <div style={{color:"#ff6666",fontSize:"13px",textAlign:"center"}}>{loginErr}</div>}
+          <input type="text" placeholder="Username" value={loginUser} onChange={e=>setLoginUser(e.target.value)} style={{padding:"12px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0b1728",color:"#f5f7fa",fontSize:"14px",outline:"none"}}/>
+          <input type="password" placeholder="Password" value={loginPass} onChange={e=>setLoginPass(e.target.value)} style={{padding:"12px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0b1728",color:"#f5f7fa",fontSize:"14px",outline:"none"}}/>
+          <button type="submit" style={{padding:"12px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#0b1728",fontWeight:"bold",cursor:"pointer",fontSize:"15px",marginTop:"10px"}}>Log In</button>
+        </form>
+      </div>
+    )
+  }
+
   return (
     <div style={{display:"flex",minHeight:"100vh",background:"#1a2234",color:"#dfe6ed",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif"}}>
       {/* ── SIDEBAR (Sonarr-style) ── */}
@@ -1239,9 +1294,12 @@ export default function App(){
         <div style={{padding:"16px",display:"flex",alignItems:"center",gap:"10px",borderTop:"1px solid #1c2a3f"}}>
           <LiveDot connected={liveConnected}/>
           {!sidebarCollapsed && (
-            <div style={{fontSize:"11px",color:"#3a5068"}}>
-              {liveConnected?"Connected":"Connecting…"}
-              {queueInfo && <span style={{marginLeft:"8px",color:queueInfo.queue_length>0?"#f9c300":"#46d160"}}>{queueInfo.queue_length||0}Q</span>}
+            <div style={{fontSize:"11px",color:"#3a5068",flex:1,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                {liveConnected?"Connected":"Connecting…"}
+                {queueInfo && <span style={{marginLeft:"8px",color:queueInfo.queue_length>0?"#f9c300":"#46d160"}}>{queueInfo.queue_length||0}Q</span>}
+              </div>
+              <button onClick={()=>{setToken(null);setRole(null);localStorage.clear();window.location.reload()}} style={{background:"none",border:"none",color:"#5a7b9a",cursor:"pointer",textDecoration:"underline",fontSize:"11px",padding:0}}>Logout</button>
             </div>
           )}
         </div>
@@ -1906,13 +1964,17 @@ export default function App(){
                 <div style={{background:"linear-gradient(145deg,#141414,#1a1a1a)",padding:"20px",borderRadius:"3px",marginBottom:"20px",fontSize:"14px",lineHeight:"1.8",color:"#b0c4d4",whiteSpace:"pre-wrap",border:"1px solid #222",maxHeight:"240px",overflow:"auto"}}>{selectedPost.selftext}</div>
               )}
               <div style={{marginBottom:"20px",display:"flex",gap:"8px",flexWrap:"wrap"}}>
-                <button onClick={()=>deletePost(selectedPost.id)} style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"3px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>🗑 Delete</button>
-                {selectedPost.hidden ? (
-                  <button onClick={()=>unhidePost(selectedPost.id)} style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>↩ Unhide</button>
-                ) : (
-                  <button onClick={()=>hidePost(selectedPost.id)} style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>👁 Hide</button>
+                {role === "admin" && (
+                  <>
+                    <button onClick={()=>deletePost(selectedPost.id)} style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"3px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>🗑 Delete</button>
+                    {selectedPost.hidden ? (
+                      <button onClick={()=>unhidePost(selectedPost.id)} style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>↩ Unhide</button>
+                    ) : (
+                      <button onClick={()=>hidePost(selectedPost.id)} style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>👁 Hide</button>
+                    )}
+                  </>
                 )}
-                <button onClick={()=>setSelectedPost(null)} style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"13px",marginLeft:"auto",minHeight:"44px"}}>✕ Close</button>
+                <button onClick={()=>setSelectedPost(null)} style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"13px",marginLeft:role==="admin"?"auto":0,minHeight:"44px"}}>✕ Close</button>
               </div>
               {selectedPost.comments === undefined && <div style={{color:"#3a5068",fontSize:"13px",padding:"8px 0"}}>Loading comments…</div>}
               {selectedPost.comments && selectedPost.comments.length > 0 && (
