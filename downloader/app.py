@@ -420,7 +420,13 @@ def process_item(item, session=None):
                     logger.info(f"Saved to DB: post_id={post_id}, path={path}")
                 break
 
-            elif "v.redd.it" in url or "youtube.com" in url or "youtu.be" in url:
+            elif (
+                "v.redd.it" in url
+                or "youtube.com" in url
+                or "youtu.be" in url
+                or "redgifs.com" in url
+                or (".gif" in url.lower() and "redd.it" not in url)
+            ):
                 logger.info(f"Downloading video: {url}")
                 post_dir = get_post_dir(post_id, q_subreddit, q_author)
                 video_name = make_filename(q_subreddit, q_author, q_title, post_id, url)
@@ -711,9 +717,7 @@ def worker(worker_id):
     # Reuse a single session per worker to benefit from connection pooling
     session = requests.Session()
     session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     )
     while True:
         # Clean up any stuck item from previous crash
