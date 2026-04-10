@@ -2460,6 +2460,32 @@ def delete_target(
             connection_pool.putconn(conn)
 
 
+@app.get("/api/admin/activity")
+def admin_activity(limit: int = Query(50, ge=1, le=200)):
+    """Activity stream endpoint - returns recent posts sorted by ingestion time."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.id, p.subreddit, p.author, p.created_utc, p.title, p.ingested_at
+            FROM posts p
+            ORDER BY COALESCE(p.ingested_at, p.created_utc) DESC
+            LIMIT %s
+        """,
+            (limit,),
+        )
+        return [
+            {
+                "id": r[0],
+                "subreddit": r[1],
+                "author": r[2],
+                "created_utc": r[3].isoformat() if r[3] else None,
+                "title": r[4],
+                "ingested_at": r[5].isoformat() if r[5] else None,
+            }
+            for r in cur.fetchall()
+        ]
+
+
 @app.get("/api/admin/logs")
 def admin_logs(
     limit: int = Query(50, ge=1, le=200),
@@ -3961,6 +3987,749 @@ def reset_all(confirm: str = Query(...)):
         "deleted_mb": round(deleted_bytes / 1024 / 1024, 2),
         "errors": errors,
     }
+
+
+BACKUP_DIR = os.getenv("BACKUP_PATH", "/data/backups")
+BACKUP_META_DIR = os.path.join(BACKUP_DIR, ".meta")
+
+
+def _ensure_backup_dirs():
+    """Ensure backup directories exist."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    os.makedirs(BACKUP_META_DIR, exist_ok=True)
+
+
+def _get_backup_meta(name: str) -> dict:
+    """Read metadata for a backup."""
+    meta_file = os.path.join(BACKUP_META_DIR, f"{name}.json")
+    if os.path.exists(meta_file):
+        with open(meta_file, "r") as f:
+            return json.load(f)
+    return {}
+
+
+def _save_backup_meta(name: str, meta: dict):
+    """Save metadata for a backup."""
+    _ensure_backup_dirs()
+    meta_file = os.path.join(BACKUP_META_DIR, f"{name}.json")
+    with open(meta_file, "w") as f:
+        json.dump(meta, f)
+
+
+def _delete_backup_meta(name: str):
+    """Delete metadata for a backup."""
+    meta_file = os.path.join(BACKUP_META_DIR, f"{name}.json")
+    if os.path.exists(meta_file):
+        os.remove(meta_file)
+
+
+@app.get("/api/admin/db/stats")
+def db_stats():
+    """Get database statistics for backup/restore decisions."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM posts")
+        posts_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM media")
+        media_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM comments")
+        comments_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM targets")
+        targets_count = cur.fetchone()[0]
+        return {
+            "posts": posts_count,
+            "media": media_count,
+            "comments": comments_count,
+            "targets": targets_count,
+        }
+
+
+@app.post("/api/admin/db/backup")
+def create_backup(label: Optional[str] = Query(None)):
+    """Create a database backup dump."""
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Could not create backup directory: {e}"
+        )
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = label or f"backup_{timestamp}"
+    backup_file = os.path.join(BACKUP_DIR, f"{backup_name}.sql")
+
+    try:
+        from shared.config import get_secret
+
+        pg_user = os.environ.get("POSTGRES_USER", "reddit")
+        pg_host = os.environ.get("POSTGRES_HOST", "db")
+        pg_port = os.environ.get("POSTGRES_PORT", "5432")
+        pg_db = os.environ.get("POSTGRES_DB", "reddit")
+
+        result = subprocess.run(
+            [
+                "pg_dump",
+                "-h",
+                pg_host,
+                "-p",
+                pg_port,
+                "-U",
+                pg_user,
+                "-d",
+                pg_db,
+                "-f",
+                backup_file,
+                "-F",
+                "p",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=500, detail=f"pg_dump failed: {result.stderr}"
+            )
+
+        file_size = os.path.getsize(backup_file)
+        return {
+            "status": "ok",
+            "backup_file": backup_file,
+            "file_size": file_size,
+            "label": backup_name,
+        }
+    except subprocess.TimeoutExpired:
+        if os.path.exists(backup_file):
+            os.remove(backup_file)
+        raise HTTPException(status_code=500, detail="Backup timed out")
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500, detail="pg_dump not available in container"
+        )
+    except Exception as e:
+        if os.path.exists(backup_file):
+            os.remove(backup_file)
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+
+
+@app.post("/api/admin/db/backup/partial")
+def create_partial_backup(
+    label: str = Query(...),
+    subreddits: Optional[str] = Query(None),
+    targets: Optional[str] = Query(None),
+    before_date: Optional[str] = Query(None),
+    after_date: Optional[str] = Query(None),
+    tables: Optional[str] = Query("posts,comments,media"),
+):
+    """Create a partial backup filtered by subreddits, users, or date range.
+
+    Only backs up matching records - useful for selective backups.
+    """
+    _ensure_backup_dirs()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = f"{label}_{timestamp}" if label else f"partial_{timestamp}"
+    backup_file = os.path.join(BACKUP_DIR, f"{backup_name}.sql")
+
+    target_subs = set()
+    if subreddits:
+        for s in subreddits.split(","):
+            target_subs.add(s.strip().lower())
+    if targets:
+        for t in targets.split(","):
+            target_subs.add(t.strip().lower())
+
+    table_list = [t.strip() for t in tables.split(",")]
+    filters = {
+        "subreddits": list(target_subs) if target_subs else [],
+        "before_date": before_date,
+        "after_date": after_date,
+        "tables": table_list,
+    }
+
+    try:
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+
+        with open(backup_file, "w") as f:
+            for table in table_list:
+                if table == "posts":
+                    query = "SELECT * FROM posts WHERE 1=1"
+                    params = []
+                    if target_subs:
+                        placeholders = ",".join(["%s"] * len(target_subs))
+                        query += f" AND LOWER(subreddit) IN ({placeholders})"
+                        params.extend(list(target_subs))
+                    if before_date:
+                        query += " AND created_utc <= %s"
+                        params.append(before_date)
+                    if after_date:
+                        query += " AND created_utc >= %s"
+                        params.append(after_date)
+                    cur.execute(query, params)
+
+                elif table == "comments":
+                    query = """SELECT c.* FROM comments c WHERE EXISTS 
+                        (SELECT 1 FROM posts p WHERE p.id = c.post_id"""
+                    params = []
+                    if target_subs:
+                        query += (
+                            " AND LOWER(p.subreddit) IN ("
+                            + ",".join(["%s"] * len(target_subs))
+                            + ")"
+                        )
+                        params.extend(list(target_subs))
+                    if before_date:
+                        query += " AND p.created_utc <= %s"
+                        params.append(before_date)
+                    if after_date:
+                        query += " AND p.created_utc >= %s"
+                        params.append(after_date)
+                    query += ")"
+                    cur.execute(query, params)
+
+                elif table == "media":
+                    query = """SELECT m.* FROM media m WHERE EXISTS 
+                        (SELECT 1 FROM posts p WHERE p.id = m.post_id"""
+                    params = []
+                    if target_subs:
+                        query += (
+                            " AND LOWER(p.subreddit) IN ("
+                            + ",".join(["%s"] * len(target_subs))
+                            + ")"
+                        )
+                        params.extend(list(target_subs))
+                    if before_date:
+                        query += " AND p.created_utc <= %s"
+                        params.append(before_date)
+                    if after_date:
+                        query += " AND p.created_utc >= %s"
+                        params.append(after_date)
+                    query += ")"
+                    cur.execute(query, params)
+
+                else:
+                    continue
+
+                rows = cur.fetchall()
+
+                f.write(f"-- Table: {table} ({len(rows)} rows)\n")
+                f.write(f"COPY {table} FROM stdin;\n")
+                for row in rows:
+                    f.write(
+                        "\t".join(str(v) if v is not None else "\\N" for v in row)
+                        + "\n"
+                    )
+                f.write("\\.\n\n")
+
+        cur.close()
+        connection_pool.putconn(conn)
+
+        file_size = os.path.getsize(backup_file)
+
+        _save_backup_meta(
+            f"{backup_name}.sql",
+            {
+                "type": "partial",
+                "filters": filters,
+                "created_at": datetime.now().isoformat(),
+                "file_size": file_size,
+            },
+        )
+
+        return {
+            "status": "ok",
+            "backup_file": backup_name + ".sql",
+            "file_size": file_size,
+            "filters": filters,
+        }
+
+    except Exception as e:
+        if os.path.exists(backup_file):
+            os.remove(backup_file)
+        raise HTTPException(status_code=500, detail=f"Partial backup failed: {e}")
+
+
+@app.delete("/api/admin/db/backup/{name}")
+def delete_backup(name: str):
+    """Delete a backup file and its metadata."""
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+    if not os.path.realpath(backup_path).startswith(os.path.realpath(BACKUP_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    os.remove(backup_path)
+    _delete_backup_meta(name)
+
+    return {"status": "ok", "deleted": name}
+
+
+@app.get("/api/admin/db/backup/{name}/info")
+def backup_info(name: str):
+    """Get detailed info about a backup including metadata."""
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    stat = os.stat(backup_path)
+    meta = _get_backup_meta(name)
+
+    post_count = 0
+    comment_count = 0
+    media_count = 0
+
+    current_table = None
+    in_copy = False
+    try:
+        with open(backup_path, "r") as f:
+            for line in f:
+                if line.startswith("COPY "):
+                    in_copy = True
+                    if "posts" in line:
+                        current_table = "posts"
+                    elif "comments" in line:
+                        current_table = "comments"
+                    elif "media" in line:
+                        current_table = "media"
+                    continue
+                elif line == "\\.":
+                    in_copy = False
+                    current_table = None
+                    continue
+                if in_copy and line.strip() and not line.startswith("--"):
+                    if current_table == "posts":
+                        post_count += 1
+                    elif current_table == "comments":
+                        comment_count += 1
+                    elif current_table == "media":
+                        media_count += 1
+    except Exception:
+        pass
+
+    return {
+        "name": name,
+        "size": stat.st_size,
+        "created": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "type": meta.get("type", "full"),
+        "filters": meta.get("filters", {}),
+        "counts": {
+            "posts": post_count,
+            "comments": comment_count,
+            "media": media_count,
+        },
+    }
+
+
+@app.post("/api/admin/db/backup/merge")
+def merge_backups(
+    sources: str = Query(...),
+    output: str = Query(...),
+    confirm: Optional[str] = Query(None),
+):
+    """Merge multiple partial backups into one.
+
+    sources: comma-separated list of backup filenames
+    output: name for the merged backup
+    """
+    source_names = [s.strip() for s in sources.split(",")]
+
+    merged_records = {
+        "posts": set(),
+        "comments": set(),
+        "media": set(),
+    }
+
+    for source_name in source_names:
+        source_path = os.path.join(BACKUP_DIR, source_name)
+        if not os.path.exists(source_path):
+            raise HTTPException(
+                status_code=404, detail=f"Backup not found: {source_name}"
+            )
+
+        try:
+            with open(source_path, "r") as f:
+                current_table = None
+                in_copy = False
+                for line in f:
+                    if line.startswith("COPY "):
+                        in_copy = True
+                        if "posts" in line:
+                            current_table = "posts"
+                        elif "comments" in line:
+                            current_table = "comments"
+                        elif "media" in line:
+                            current_table = "media"
+                        continue
+                    elif line == "\\.":
+                        in_copy = False
+                        current_table = None
+                        continue
+
+                    if in_copy and current_table and line.strip():
+                        parts = line.split("\t")
+                        id_val = parts[0] if parts else None
+                        if id_val and id_val != "\\N":
+                            if current_table == "posts":
+                                merged_records["posts"].add(line.strip())
+                            elif current_table == "comments":
+                                merged_records["comments"].add(line.strip())
+                            elif current_table == "media":
+                                merged_records["media"].add(line.strip())
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error reading {source_name}: {e}"
+            )
+
+    if confirm != "MERGE":
+        return {
+            "status": "preview",
+            "would_merge": {
+                "posts": len(merged_records["posts"]),
+                "comments": len(merged_records["comments"]),
+                "media": len(merged_records["media"]),
+            },
+            "sources": source_names,
+            "output": output,
+            "message": "Pass confirm=MERGE to merge",
+        }
+
+    _ensure_backup_dirs()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    merged_name = f"{output}_{timestamp}.sql"
+    merged_path = os.path.join(BACKUP_DIR, merged_name)
+
+    try:
+        with open(merged_path, "w") as f:
+            for table, records in [
+                ("posts", merged_records["posts"]),
+                ("comments", merged_records["comments"]),
+                ("media", merged_records["media"]),
+            ]:
+                if not records:
+                    continue
+                f.write(f"-- Table: {table} ({len(records)} rows)\n")
+                f.write(f"COPY {table} FROM stdin;\n")
+                for record in records:
+                    f.write(record + "\n")
+                f.write("\\.\n\n")
+
+        _save_backup_meta(
+            merged_name,
+            {
+                "type": "merged",
+                "sources": source_names,
+                "created_at": datetime.now().isoformat(),
+                "file_size": os.path.getsize(merged_path),
+            },
+        )
+
+        return {
+            "status": "ok",
+            "merged": merged_name,
+            "counts": {
+                "posts": len(merged_records["posts"]),
+                "comments": len(merged_records["comments"]),
+                "media": len(merged_records["media"]),
+            },
+        }
+
+    except Exception as e:
+        if os.path.exists(merged_path):
+            os.remove(merged_path)
+        raise HTTPException(status_code=500, detail=f"Merge failed: {e}")
+
+
+@app.get("/api/admin/db/backups")
+def list_backups():
+    """List available backup files."""
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        files = []
+        for f in os.listdir(BACKUP_DIR):
+            if f.endswith(".sql"):
+                fpath = os.path.join(BACKUP_DIR, f)
+                stat = os.stat(fpath)
+                files.append(
+                    {
+                        "name": f,
+                        "size": stat.st_size,
+                        "created": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    }
+                )
+        files.sort(key=lambda x: x["created"], reverse=True)
+        return files
+    except Exception as e:
+        return []
+
+
+@app.get("/api/admin/db/backup/{name}")
+def download_backup(name: str):
+    """Download a backup file."""
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+    if not os.path.realpath(backup_path).startswith(os.path.realpath(BACKUP_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return FileResponse(backup_path, media_type="application/sql", filename=name)
+
+
+@app.post("/api/admin/db/restore")
+def restore_backup(name: str = Query(...), confirm: str = Query(...)):
+    """Restore database from a backup file."""
+    if confirm != "RESTORE":
+        raise HTTPException(status_code=400, detail="Pass confirm=RESTORE to proceed")
+
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    try:
+        from shared.config import get_secret
+
+        pg_user = os.environ.get("POSTGRES_USER", "reddit")
+        pg_host = os.environ.get("POSTGRES_HOST", "db")
+        pg_port = os.environ.get("POSTGRES_PORT", "5432")
+        pg_db = os.environ.get("POSTGRES_DB", "reddit")
+
+        result = subprocess.run(
+            [
+                "psql",
+                "-h",
+                pg_host,
+                "-p",
+                pg_port,
+                "-U",
+                pg_user,
+                "-d",
+                pg_db,
+                "-f",
+                backup_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            raise HTTPException(
+                status_code=500, detail=f"Restore failed: {result.stderr}"
+            )
+
+        return {
+            "status": "ok",
+            "restored_from": name,
+            "output": result.stdout[:500] if result.stdout else "",
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Restore timed out")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="psql not available in container")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+
+
+@app.post("/api/admin/db/partial-restore")
+def partial_restore(
+    name: str = Query(...),
+    subreddits: Optional[str] = Query(None),
+    targets: Optional[str] = Query(None),
+    before_date: Optional[str] = Query(None),
+    after_date: Optional[str] = Query(None),
+    confirm: Optional[str] = Query(None),
+):
+    """Perform a partial database restore from backup based on filters.
+
+    Parses SQL backup and inserts matching rows (posts/comments/media) into existing DB.
+    Use dry_run=true first to preview what would be restored.
+    """
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    target_subs = set()
+    if subreddits:
+        for s in subreddits.split(","):
+            target_subs.add(s.strip().lower())
+    if targets:
+        for t in targets.split(","):
+            target_subs.add(t.strip().lower())
+
+    target_list = list(target_subs)
+
+    matches = {
+        "posts": [],
+        "comments": [],
+        "media": [],
+    }
+
+    current_table = None
+    current_insert = []
+    in_copy = False
+
+    try:
+        with open(backup_path, "r") as f:
+            for line in f:
+                line = line.rstrip()
+
+                if line.startswith("COPY "):
+                    in_copy = True
+                    if "posts" in line:
+                        current_table = "posts"
+                    elif "comments" in line:
+                        current_table = "comments"
+                    elif "media" in line:
+                        current_table = "media"
+                    else:
+                        current_table = None
+                    continue
+                elif line == "\\.":
+                    in_copy = False
+                    current_table = None
+                    continue
+
+                if not in_copy or not current_table:
+                    continue
+
+                if current_table == "posts":
+                    parts = line.split("\t")
+                    if len(parts) >= 3:
+                        subreddit = parts[2].lower() if parts[2] else ""
+                        post_id = parts[0]
+
+                        match = True
+                        if target_list and subreddit not in target_list:
+                            match = False
+                        if match and before_date or after_date:
+                            try:
+                                created = parts[3] if len(parts) > 3 else None
+                                if created:
+                                    if before_date and created > before_date:
+                                        match = False
+                                    if after_date and created < after_date:
+                                        match = False
+                            except:
+                                pass
+
+                        if match:
+                            matches["posts"].append(
+                                {
+                                    "id": post_id,
+                                    "subreddit": subreddit,
+                                }
+                            )
+
+                elif current_table == "comments":
+                    parts = line.split("\t")
+                    if len(parts) >= 4:
+                        comment_id = parts[0]
+                        post_id = parts[1]
+                        matches["comments"].append(
+                            {
+                                "id": comment_id,
+                                "post_id": post_id,
+                            }
+                        )
+
+                elif current_table == "media":
+                    parts = line.split("\t")
+                    if len(parts) >= 2:
+                        media_id = parts[0]
+                        post_id = parts[1]
+                        matches["media"].append(
+                            {
+                                "id": media_id,
+                                "post_id": post_id,
+                            }
+                        )
+
+        post_count = len(matches["posts"])
+        comment_count = len(matches["comments"])
+        media_count = len(matches["media"])
+
+        if confirm != "RESTORE":
+            return {
+                "status": "preview",
+                "would_restore": {
+                    "posts": post_count,
+                    "comments": comment_count,
+                    "media": media_count,
+                },
+                "filters": {
+                    "subreddits": subreddits,
+                    "targets": targets,
+                    "before_date": before_date,
+                    "after_date": after_date,
+                },
+                "sample": matches["posts"][:5],
+            }
+
+        if post_count == 0:
+            return {
+                "status": "ok",
+                "restored": {"posts": 0, "comments": 0, "media": 0},
+                "message": "No matching records found",
+            }
+
+        imported_posts = 0
+        imported_comments = 0
+
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+        try:
+            for post_match in matches["posts"]:
+                try:
+                    cur.execute(
+                        "SELECT id FROM posts WHERE id = %s", (post_match["id"],)
+                    )
+                    if not cur.fetchone():
+                        cur.execute(
+                            """
+                            INSERT INTO posts (id, subreddit, author, title, created_utc, url, selftext, raw, media_url, hidden, hidden_at, ingested_at)
+                            SELECT id, subreddit, author, title, created_utc, url, selftext, raw, media_url, hidden, hidden_at, ingested_at
+                            FROM posts WHERE id = %s
+                        """,
+                            (post_match["id"],),
+                        )
+                        imported_posts += 1
+                except Exception:
+                    pass
+
+            for comment_match in matches["comments"]:
+                try:
+                    cur.execute(
+                        "SELECT id FROM comments WHERE id = %s", (comment_match["id"],)
+                    )
+                    if not cur.fetchone():
+                        cur.execute(
+                            """
+                            INSERT INTO comments (id, post_id, author, body, created_utc, raw)
+                            SELECT id, post_id, author, body, created_utc, raw
+                            FROM comments WHERE id = %s
+                        """,
+                            (comment_match["id"],),
+                        )
+                        imported_comments += 1
+                except Exception:
+                    pass
+
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail=f"Import failed: {e}")
+        finally:
+            cur.close()
+            connection_pool.putconn(conn)
+
+        return {
+            "status": "ok",
+            "restored": {
+                "posts": imported_posts,
+                "comments": imported_comments,
+                "media": media_count,
+            },
+            "message": f"Restored {imported_posts} posts, {imported_comments} comments",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Partial restore failed: {e}")
 
 
 @app.get("/api/posts/by-date")

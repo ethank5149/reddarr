@@ -65,6 +65,8 @@ export default function App(){
     activeTab = "wanted"
   } else if(pathParts[0] === "system") {
     activeTab = "system"
+  } else if(pathParts[0] === "activity") {
+    activeTab = "activity"
   }
 
   // Redirect bare / to /library
@@ -290,6 +292,15 @@ export default function App(){
   const [archivePanelOpen, setArchivePanelOpen] = useState(false)
   const [cardArchiving, setCardArchiving] = useState({})
 
+  // Database backup/restore state
+  const [dbStats, setDbStats] = useState(null)
+  const [dbBackups, setDbBackups] = useState([])
+  const [dbBackupLoading, setDbBackupLoading] = useState(false)
+  const [dbBackupResult, setDbBackupResult] = useState(null)
+  const [dbRestoreModal, setDbRestoreModal] = useState(false)
+  const [dbRestoreLoading, setDbRestoreLoading] = useState(false)
+  const [partialRestoreFilters, setPartialRestoreFilters] = useState({subreddits: "", targets: "", before_date: "", after_date: ""})
+
   // Backfill status
   const [backfillStatus, setBackfillStatus] = useState(null)
   const backfillPollRef = useRef(null)
@@ -307,7 +318,7 @@ export default function App(){
 
   // Admin section collapse state
   const [adminSections, setAdminSections] = useState({
-    status: true, overview: true, archive: true, targets: true, thumbnails: true, media: true, activity: true
+    status: true, overview: true, archive: true, targets: true, thumbnails: true, media: true, database: true, activity: true
   })
 
   // Filter + sort state
@@ -404,6 +415,8 @@ export default function App(){
     if(activeTab === "system"){
       if(!adminData) loadAdmin()
       loadThumbStats()
+      loadDbStats()
+      loadDbBackups()
     }
     if(activeTab === "wanted"){
       loadAuditSummary()
@@ -472,13 +485,14 @@ export default function App(){
     return ()=> clearInterval(poll)
   },[targetDetailType, targetDetailName])
 
-  // Polling fallback every 10s on system tab
+  // Polling fallback every 10s on system and activity tabs
   useEffect(()=>{
-    if(activeTab !== "system") return
+    if(activeTab !== "system" && activeTab !== "activity") return
     const poll = setInterval(()=>{
       axios.get("/api/admin/stats").then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
       axios.get("/api/admin/queue").then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
       axios.get("/api/admin/health").then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
+      axios.get("/api/admin/activity?limit=50").then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
       setLastUpdated(new Date())
     }, 10000)
     return ()=> clearInterval(poll)
@@ -676,7 +690,7 @@ export default function App(){
     setAdminLoading(true)
     Promise.all([
       axios.get("/api/admin/stats").catch(()=>({data:null})),
-      axios.get("/api/admin/logs?limit=50").catch(()=>({data:[]})),
+      axios.get("/api/admin/activity?limit=50").catch(()=>({data:[]})),
       axios.get("/api/admin/queue").catch(()=>({data:null})),
       axios.get("/api/admin/health").catch(()=>({data:null}))
     ]).then(([statsRes,logsRes,queueRes,healthRes])=>{
@@ -773,10 +787,10 @@ export default function App(){
     setAdminSections(prev => ({...prev, [section]: !prev[section]}))
   }
   function collapseAllSections(){
-    setAdminSections({ status:false, overview:false, archive:false, targets:false, thumbnails:false, media:false, activity:false })
+    setAdminSections({ status:false, overview:false, archive:false, targets:false, thumbnails:false, media:false, database:false, activity:false })
   }
   function expandAllSections(){
-    setAdminSections({ status:true, overview:true, archive:true, targets:true, thumbnails:true, media:true, activity:true })
+    setAdminSections({ status:true, overview:true, archive:true, targets:true, thumbnails:true, media:true, database:true, activity:true })
   }
 
   function fetchCardAudit(ttype, name){
@@ -901,6 +915,140 @@ export default function App(){
 
   function loadArchiveStats(){
     axios.get("/api/admin/archive/stats").then(r=>setArchiveStats(r.data)).catch(()=>setArchiveStats(null))
+  }
+
+  function loadDbStats(){
+    axios.get("/api/admin/db/stats").then(r=>setDbStats(r.data)).catch(()=>setDbStats(null))
+  }
+
+  function loadDbBackups(){
+    axios.get("/api/admin/db/backups").then(r=>setDbBackups(r.data||[])).catch(()=>setDbBackups([]))
+  }
+
+  function createDbBackup(label){
+    setDbBackupLoading(true)
+    setDbBackupResult(null)
+    axios.post(`/api/admin/db/backup?label=${encodeURIComponent(label||"")}`)
+      .then(r=>{
+        setDbBackupResult(r.data)
+        loadDbBackups()
+        toastSuccess(`Backup created: ${r.data.label}`)
+      })
+      .catch(err=>toastError("Backup failed: " + (err.response?.data?.detail||err.message)))
+      .finally(()=>setDbBackupLoading(false))
+  }
+
+  function createPartialBackup(label, filters, tables){
+    setDbBackupLoading(true)
+    setDbBackupResult(null)
+    const params = new URLSearchParams()
+    params.set("label", label || "partial")
+    if(filters.subreddits) params.set("subreddits", filters.subreddits)
+    if(filters.targets) params.set("targets", filters.targets)
+    if(filters.before_date) params.set("before_date", filters.before_date)
+    if(filters.after_date) params.set("after_date", filters.after_date)
+    if(tables) params.set("tables", tables)
+    axios.post(`/api/admin/db/backup/partial?${params.toString()}`)
+      .then(r=>{
+        setDbBackupResult(r.data)
+        loadDbBackups()
+        toastSuccess(`Partial backup: ${r.data.filters?.tables?.join(",")}`)
+      })
+      .catch(err=>toastError("Partial backup failed: " + (err.response?.data?.detail||err.message)))
+      .finally(()=>setDbBackupLoading(false))
+  }
+
+  function deleteBackup(name){
+    if(!window.confirm(`Delete ${name}? This cannot be undone.`)) return
+    axios.delete(`/api/admin/db/backup/${encodeURIComponent(name)}`)
+      .then(r=>{
+        loadDbBackups()
+        toastSuccess("Backup deleted")
+      })
+      .catch(err=>toastError("Delete failed: " + (err.response?.data?.detail||err.message)))
+  }
+
+  function getBackupInfo(name){
+    axios.get(`/api/admin/db/backup/${encodeURIComponent(name)}/info`)
+      .then(r=>setDbBackupResult(r.data))
+      .catch(err=>toastError("Info failed: " + (err.response?.data?.detail||err.message)))
+  }
+
+  const [mergeBackupsState, setMergeBackupsState] = useState({sources: "", output: "", result: null, loading: false})
+
+  function runMergeBackups(mode){
+    const m = mergeBackupsState
+    if(!m.sources || !m.output){
+      toastError("Select source backups and output name")
+      return
+    }
+    setMergeBackupsState(prev=>({...prev, loading: true}))
+    const params = new URLSearchParams()
+    params.set("sources", m.sources)
+    params.set("output", m.output)
+    if(mode === "restore") params.set("confirm", "MERGE")
+    axios.post(`/api/admin/db/backup/merge?${params.toString()}`)
+      .then(r=>{
+        setMergeBackupsState(prev=>({...prev, result: r.data}))
+        if(r.data.status === "ok"){
+          loadDbBackups()
+          toastSuccess(`Merged: ${r.data.counts?.posts} posts`)
+        } else if(r.data.status === "preview"){
+          toastSuccess(`Would merge: ${r.data.would_merge?.posts} posts`)
+        }
+      })
+      .catch(err=>toastError("Merge failed: " + (err.response?.data?.detail||err.message)))
+      .finally(()=>setMergeBackupsState(prev=>({...prev, loading: false})))
+  }
+
+  function restoreDbBackup(name){
+    if(!window.confirm(`Restoring from ${name} will replace all current data. Continue?`)) return
+    setDbRestoreLoading(true)
+    axios.post(`/api/admin/db/restore?name=${encodeURIComponent(name)}&confirm=RESTORE`)
+      .then(r=>{
+        toastSuccess("Database restored successfully")
+        loadDbStats()
+      })
+      .catch(err=>toastError("Restore failed: " + (err.response?.data?.detail||err.message)))
+      .finally(()=>setDbRestoreLoading(false))
+  }
+
+  const [partialRestoreBackup, setPartialRestoreBackup] = useState("")
+  const [partialRestoreResult, setPartialRestoreResult] = useState(null)
+  const [partialRestoreLoading, setPartialRestoreLoading] = useState(false)
+
+  function runPartialRestore(mode){
+    const f = partialRestoreFilters
+    const backup = partialRestoreBackup || dbBackups[0]?.name
+    if(!backup){
+      toastError("Select a backup file first")
+      return
+    }
+    if(!f.subreddits && !f.targets && !f.before_date && !f.after_date){
+      toastError("At least one filter required")
+      return
+    }
+    const params = new URLSearchParams()
+    params.set("name", backup)
+    if(f.subreddits) params.set("subreddits", f.subreddits)
+    if(f.targets) params.set("targets", f.targets)
+    if(f.before_date) params.set("before_date", f.before_date)
+    if(f.after_date) params.set("after_date", f.after_date)
+    if(mode === "restore") params.set("confirm", "RESTORE")
+    
+    setPartialRestoreLoading(true)
+    axios.post(`/api/admin/db/partial-restore?${params.toString()}`)
+      .then(r=>{
+        setPartialRestoreResult(r.data)
+        if(r.data.status === "ok"){
+          toastSuccess(`Restored ${r.data.restored?.posts || 0} posts`)
+          loadDbStats()
+        } else if(r.data.status === "preview"){
+          toastSuccess(`Would restore: ${r.data.would_restore?.posts || 0} posts`)
+        }
+      })
+      .catch(err=>toastError("Partial restore failed: " + (err.response?.data?.detail||err.message)))
+      .finally(()=>setPartialRestoreLoading(false))
   }
 
   function startArchiveJobPoll(jobId){
@@ -1118,6 +1266,7 @@ export default function App(){
     role === "admin" && {to:"/archive",label:"Hidden",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>)},
     role === "admin" && {to:"/wanted",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
     role === "admin" && {to:"/system",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
+    role === "admin" && {to:"/activity",label:"Activity",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>)},
   ].filter(Boolean)
 
   // ── Shared components ──
@@ -1287,6 +1436,7 @@ export default function App(){
       case "archive": return "Hidden"
       case "wanted": return "Wanted"
       case "system": return "System"
+      case "activity": return "Activity"
       default: return "Reddarr"
     }
   }
@@ -1786,6 +1936,137 @@ export default function App(){
               )}
             </div>
 
+            {/* Database Maintenance */}
+            <div style={{marginBottom:"16px"}}>
+              <div onClick={()=>toggleAdminSection("database")} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.database?"16px":0}}>
+                <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                  <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#f9c300,#e6b200)",borderRadius:"2px"}}/>
+                  <h3 style={{margin:0,fontSize:"16px",fontWeight:"600",color:"#f5f7fa"}}>Database Maintenance</h3>
+                </div>
+                <span style={{color:"#5a7b9a",fontSize:"14px",transform:adminSections.database?"rotate(0deg)":"rotate(-90deg)",transition:"transform 0.2s"}}>▼</span>
+              </div>
+              {adminSections.database && (
+                <div>
+                  {dbStats && (
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:"10px",marginBottom:"16px"}}>
+                      {[
+                        {label:"Posts",value:dbStats.posts,color:"#f5f7fa"},
+                        {label:"Media",value:dbStats.media,color:"#35c5f4"},
+                        {label:"Comments",value:dbStats.comments,color:"#7193ff"},
+                        {label:"Targets",value:dbStats.targets,color:"#46d160"},
+                      ].map(s=>(
+                        <div key={s.label} style={{background:"#161d2f",padding:"12px 14px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                          <div style={{fontSize:"10px",color:"#5a7b9a",marginBottom:"4px",textTransform:"uppercase"}}>{s.label}</div>
+                          <div style={{fontSize:"20px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{s.value?.toLocaleString()}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Create Full Backup */}
+                  <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"16px"}}>
+                    <button onClick={()=>createDbBackup("")} disabled={dbBackupLoading} style={{padding:"10px 18px",background:dbBackupLoading?"#243447":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:dbBackupLoading?"#5a7b9a":"#f5f7fa",cursor:dbBackupLoading?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                      {dbBackupLoading?"Creating...":"💾 Create Full Backup"}
+                    </button>
+                  </div>
+
+                  {/* Create Partial Backup */}
+                  <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"16px"}}>
+                    <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"12px"}}>Create Partial Backup</div>
+                    <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"12px"}}>
+                      <input type="text" placeholder="label (e.g. askreddit-2024)" 
+                        value={partialRestoreFilters.targets} onChange={e=>setPartialRestoreFilters(f=>({...f,targets:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"180px"}}/>
+                      <input type="text" placeholder="subreddits (AskReddit,Programming)" 
+                        value={partialRestoreFilters.subreddits} onChange={e=>setPartialRestoreFilters(f=>({...f,subreddits:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"200px"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"12px"}}>
+                      <input type="date" title="Before date" 
+                        onChange={e=>setPartialRestoreFilters(f=>({...f, before_date: e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none"}}/>
+                      <input type="date" title="After date"
+                        onChange={e=>setPartialRestoreFilters(f=>({...f, after_date: e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none"}}/>
+                    </div>
+                    <button onClick={()=>createPartialBackup(partialRestoreFilters.targets || "partial", partialRestoreFilters, "posts,comments,media")} disabled={dbBackupLoading} 
+                      style={{padding:"8px 16px",background:dbBackupLoading?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:dbBackupLoading?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                      {dbBackupLoading?"Creating...":"📦 Create Partial"}
+                    </button>
+                  </div>
+
+                  {/* Merge Backups */}
+                  <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"16px"}}>
+                    <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"12px"}}>Merge Partial Backups</div>
+                    <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"12px"}}>
+                      <input type="text" placeholder="source files (comma sep)" value={mergeBackupsState.sources} onChange={e=>setMergeBackupsState(s=>({...s, sources: e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"260px"}}/>
+                      <input type="text" placeholder="output name" value={mergeBackupsState.output} onChange={e=>setMergeBackupsState(s=>({...s, output: e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"140px"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:"10px"}}>
+                      <button onClick={()=>runMergeBackups("preview")} disabled={mergeBackupsState.loading} style={{padding:"8px 16px",background:mergeBackupsState.loading?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:mergeBackupsState.loading?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>Preview</button>
+                      <button onClick={()=>runMergeBackups("merge")} disabled={mergeBackupsState.loading} style={{padding:"8px 16px",background:mergeBackupsState.loading?"#243447":"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:mergeBackupsState.loading?"#5a7b9a":"#ff6b6b",cursor:mergeBackupsState.loading?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>Merge</button>
+                    </div>
+                    {mergeBackupsState.result && (
+                      <div style={{background:"#0a1a0a",borderRadius:"3px",border:"1px solid #1a4a1a",padding:"12px",marginTop:"12px",fontSize:"12px",color:"#46d160"}}>
+                        {mergeBackupsState.result.status === "preview" ? <>Would merge: {mergeBackupsState.result.would_merge?.posts} posts</> : <>Merged: {mergeBackupsState.result.counts?.posts} posts</>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Available Backups */}
+                  {dbBackups.length > 0 && (
+                    <div style={{marginBottom:"16px"}}>
+                      <div style={{fontSize:"11px",color:"#5a7b9a",marginBottom:"8px"}}>Available Backups ({dbBackups.length})</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:"8px"}}>
+                        {dbBackups.map(b=>(
+                          <div key={b.name} style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"8px 12px",display:"flex",alignItems:"center",gap:"8px"}}>
+                            <span style={{fontSize:"12px",color:"#8aa4bd"}}>{b.name}</span>
+                            <span style={{fontSize:"10px",color:"#5a7b9a"}}>{(b.size/1024).toFixed(1)}KB</span>
+                            <button onClick={()=>getBackupInfo(b.name)} style={{padding:"4px 8px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"10px"}}>ℹ</button>
+                            <button onClick={()=>deleteBackup(b.name)} style={{padding:"4px 8px",background:"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:"#ff6b6b",cursor:"pointer",fontSize:"10px"}}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Restore from Backup */}
+                  <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"16px"}}>
+                    <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"12px"}}>Restore from Backup</div>
+                    <div style={{marginBottom:"12px"}}>
+                      <select value={partialRestoreBackup} onChange={e=>setPartialRestoreBackup(e.target.value)}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"280px"}}>
+                        <option value="">Select backup...</option>
+                        {dbBackups.map(b=>(<option key={b.name} value={b.name}>{b.name}</option>))}
+                      </select>
+                    </div>
+                    <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"12px"}}>
+                      <input type="text" placeholder="subreddits filter" value={partialRestoreFilters.subreddits} onChange={e=>setPartialRestoreFilters(f=>({...f,subreddits:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"180px"}}/>
+                      <input type="text" placeholder="targets filter" value={partialRestoreFilters.targets} onChange={e=>setPartialRestoreFilters(f=>({...f,targets:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none",width:"160px"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"12px"}}>
+                      <input type="date" onChange={e=>setPartialRestoreFilters(f=>({...f,before_date:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none"}}/>
+                      <input type="date" onChange={e=>setPartialRestoreFilters(f=>({...f,after_date:e.target.value}))}
+                        style={{padding:"8px 12px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#f5f7fa",fontSize:"12px",outline:"none"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:"10px"}}>
+                      <button onClick={()=>runPartialRestore("preview")} disabled={partialRestoreLoading} style={{padding:"8px 16px",background:partialRestoreLoading?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:"#7ab3e0",cursor:partialRestoreLoading?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>Preview</button>
+                      <button onClick={()=>runPartialRestore("restore")} disabled={partialRestoreLoading} style={{padding:"8px 16px",background:partialRestoreLoading?"#243447":"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:partialRestoreLoading?"#5a7b9a":"#ff6b6b",cursor:partialRestoreLoading?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>Restore</button>
+                    </div>
+                    {partialRestoreResult && (
+                      <div style={{background:"#0a1a0a",borderRadius:"3px",border:"1px solid #1a4a1a",padding:"12px",marginTop:"12px",fontSize:"12px",color:"#46d160"}}>
+                        {partialRestoreResult.status === "preview" ? <>Would restore: {partialRestoreResult.would_restore?.posts} posts</> : <>Restored: {partialRestoreResult.restored?.posts} posts</>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Activity log */}
             <div style={{marginBottom:"16px"}}>
               <div onClick={()=>toggleAdminSection("activity")} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:"#1c2a3f",borderRadius:"3px",border:"1px solid #2a2a2a",cursor:"pointer",marginBottom:adminSections.activity?"16px":0}}>
@@ -1820,6 +2101,40 @@ export default function App(){
               )}
             </div>
           </>)}
+        </div>
+      )}
+
+      {/* ── ACTIVITY TAB ── */}
+      {activeTab === "activity" && (
+        <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px",flexWrap:"wrap",gap:"12px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+              <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#46d160,#2ea84e)",borderRadius:"2px"}}/>
+              <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Activity Stream</h2>
+              <div style={{width:"6px",height:"6px",borderRadius:"50%",background:liveConnected?"#46d160":"#3a5068",boxShadow:liveConnected?"0 0 6px #46d160":"none"}}/>
+            </div>
+            <span style={{fontSize:"11px",color:"#3a5068",fontVariantNumeric:"tabular-nums"}}>synced {lastUpdated?.toLocaleTimeString()}</span>
+          </div>
+          <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
+              <thead><tr style={{background:"#131b2e",borderBottom:"1px solid #2a2a2a"}}>
+                {["Time","Subreddit","Author","Title"].map(h=>(
+                  <th key={h} style={{padding:"12px 14px",textAlign:"left",color:"#5a7b9a",fontWeight:"500",fontSize:"11px",textTransform:"uppercase"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}`}</style>
+                {logs && logs.map(l=>(
+                  <tr key={l.id} className={highlightedRows.has(l.id)?"row-new":""} style={{borderBottom:"1px solid #222"}}>
+                    <td style={{padding:"12px 14px",color:"#5a7b9a"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
+                    <td style={{padding:"12px 14px"}}><span style={{background:"rgba(53,197,244,0.13)",color:"#35c5f4",padding:"4px 8px",borderRadius:"3px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
+                    <td style={{padding:"12px 14px",color:"#8aa4bd"}}>{l.author||"-"}</td>
+                    <td style={{padding:"12px 14px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#c8d6e0"}}>{l.title||"-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
