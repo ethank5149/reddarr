@@ -155,6 +155,7 @@ export default function App(){
   const [targetDetailSortBy, setTargetDetailSortBy] = useState("newest")
   const [targetDetailFilterMediaType, setTargetDetailFilterMediaType] = useState("all")
   const [targetDetailSearchResults, setTargetDetailSearchResults] = useState(null)
+  const [targetLiveStats, setTargetLiveStats] = useState(null)
 
   const targetIndexSearchTimeout = useRef()
 
@@ -342,6 +343,7 @@ export default function App(){
   const loader=useRef()
   const searchTimeout=useRef()
   const targetDetailSearchTimeout=useRef()
+  const targetDetailSearchResultsRef=useRef(null)
   const esRef=useRef(null)
   const highlightTimerRef=useRef(null)
 
@@ -462,6 +464,12 @@ export default function App(){
       .catch(()=>setTargetPostsLoading(false))
   }
 
+  function loadTargetStats(ttype, name){
+    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/stats`)
+      .then(r=>setTargetLiveStats(r.data))
+      .catch(()=>setTargetLiveStats(null))
+  }
+
   // Target detail infinite scroll
   useEffect(()=>{
     if(!targetDetailType || !targetDetailName) return
@@ -482,6 +490,16 @@ export default function App(){
       console.log("Polling target posts for", targetDetailName)
       loadTargetPosts(targetDetailType, targetDetailName, 0)
     }, 10000)
+    return ()=> clearInterval(poll)
+  },[targetDetailType, targetDetailName])
+
+  // Poll for target live stats every 15s
+  useEffect(()=>{
+    if(!targetDetailType || !targetDetailName) return
+    loadTargetStats(targetDetailType, targetDetailName)
+    const poll = setInterval(()=>{
+      loadTargetStats(targetDetailType, targetDetailName)
+    }, 15000)
     return ()=> clearInterval(poll)
   },[targetDetailType, targetDetailName])
 
@@ -1672,10 +1690,102 @@ export default function App(){
               </div>
             )}
 
-            {/* Posts grid */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"16px"}} className="mobile-grid-2">
-              {targetPosts.map(p=><PostCard key={p.id} p={p}/>)}
+            {/* Live Stats Panel */}
+            {targetLiveStats && (
+              <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"24px",display:"flex",gap:"16px",flexWrap:"wrap",alignItems:"center"}}>
+                <div style={{fontSize:"11px",color:"#5a7b9a",textTransform:"uppercase",marginRight:"8px"}}>Live Stats</div>
+                {[
+                  {label:"Today",value:targetLiveStats.posts_today,color:"#35c5f4"},
+                  {label:"This Week",value:targetLiveStats.posts_this_week,color:"#7ab3e0"},
+                  {label:"Queued",value:targetLiveStats.queue_length,color:"#f9c300"},
+                  {label:"Pending",value:targetLiveStats.pending_media,color:"#f9c300"},
+                  {label:"Failed",value:targetLiveStats.failed_media,color:targetLiveStats.failed_media>0?"#ff6666":"#46d160"},
+                ].map(s=>(
+                  <div key={s.label} style={{background:"#161d2f",padding:"8px 14px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
+                    <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",marginBottom:"2px"}}>{s.label}</div>
+                    <div style={{fontSize:"16px",fontWeight:"700",color:s.color,fontVariantNumeric:"tabular-nums"}}>{typeof s.value === "number" ? s.value.toLocaleString() : s.value}</div>
+                  </div>
+                ))}
+                {targetLiveStats.last_posted_at && (
+                  <div style={{fontSize:"11px",color:"#5a7b9a",marginLeft:"auto"}}>
+                    Last post: {new Date(targetLiveStats.last_posted_at).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Filter/Sort Bar */}
+            <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"20px",flexWrap:"wrap"}}>
+              <div style={{position:"relative",flex:"1",minWidth:"200px",maxWidth:"300px"}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5a7b9a" strokeWidth="2" style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)"}}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" placeholder="Search posts..." autoComplete="off" spellCheck={false} value={targetDetailSearch}
+                  onChange={e=>{setTargetDetailSearch(e.target.value);clearTimeout(targetDetailSearchTimeout.current);targetDetailSearchTimeout.current=setTimeout(()=>setTargetDetailSearchResults(null),300)}}
+                  style={{padding:"8px 12px 8px 34px",borderRadius:"3px",border:"1px solid #2a2a2a",width:"100%",background:"#0b1728",color:"#dfe6ed",fontSize:"13px",outline:"none"}}/>
+              </div>
+              <select value={targetDetailSortBy} onChange={e=>setTargetDetailSortBy(e.target.value)}
+                style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#8aa4bd",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+                <option value="title_asc">Title A → Z</option>
+                <option value="title_desc">Title Z → A</option>
+              </select>
+              <select value={targetDetailFilterMediaType} onChange={e=>setTargetDetailFilterMediaType(e.target.value)}
+                style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#8aa4bd",fontSize:"13px",cursor:"pointer",outline:"none"}}>
+                <option value="all">All Media</option>
+                <option value="image">Images</option>
+                <option value="video">Videos</option>
+                <option value="text">Text</option>
+              </select>
+              {(targetDetailSearch || targetDetailFilterMediaType !== "all") && (
+                <button onClick={()=>{setTargetDetailSearch("");setTargetDetailFilterMediaType("all");setTargetDetailSortBy("newest");setTargetDetailSearchResults(null)}} 
+                  style={{padding:"6px 12px",background:"#1c2a3f",border:"1px solid #35c5f444",borderRadius:"3px",color:"#5fd4f8",cursor:"pointer",fontSize:"12px"}}>
+                  ✕ Clear
+                </button>
+              )}
             </div>
+
+            {/* Apply client-side filtering/sorting */}
+            {(()=>{
+              let filteredPosts = [...targetPosts]
+              if(targetDetailSearch){
+                const q = targetDetailSearch.toLowerCase()
+                filteredPosts = filteredPosts.filter(p => 
+                  (p.title||"").toLowerCase().includes(q) || 
+                  (p.subreddit||"").toLowerCase().includes(q) ||
+                  (p.author||"").toLowerCase().includes(q)
+                )
+              }
+              if(targetDetailFilterMediaType !== "all"){
+                filteredPosts = filteredPosts.filter(p => {
+                  if(targetDetailFilterMediaType === "image") return !p.is_video && (p.url || p.image_urls?.length > 0)
+                  if(targetDetailFilterMediaType === "video") return p.is_video || p.video_url
+                  if(targetDetailFilterMediaType === "text") return !p.url && !p.image_urls?.length && !p.is_video && p.selftext
+                  return true
+                })
+              }
+              filteredPosts.sort((a,b) => {
+                if(targetDetailSortBy === "newest") return new Date(b.created_utc) - new Date(a.created_utc)
+                if(targetDetailSortBy === "oldest") return new Date(a.created_utc) - new Date(b.created_utc)
+                if(targetDetailSortBy === "title_asc") return (a.title||"").localeCompare(b.title||"")
+                if(targetDetailSortBy === "title_desc") return (b.title||"").localeCompare(a.title||"")
+                return 0
+              })
+              return (
+              <>
+                {filteredPosts.length > 0 && (
+                  <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"16px",padding:"0 4px"}}>
+                    Showing {filteredPosts.length.toLocaleString()} of {targetPosts.length.toLocaleString()} posts
+                  </div>
+                )}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"16px"}} className="mobile-grid-2">
+                  {filteredPosts.map(p=><PostCard key={p.id} p={p}/>)}
+                </div>
+                {filteredPosts.length === 0 && targetPosts.length > 0 && (
+                  <div style={{padding:"40px",textAlign:"center",color:"#5a7b9a"}}>No posts match the current filters.</div>
+                )}
+              </>
+              )
+            })()}
             {targetPostsLoading && (
               <div style={{padding:"40px",textAlign:"center",color:"#35c5f4",fontSize:"14px"}}>
                 <span style={{width:"20px",height:"20px",border:"2px solid #333",borderTopColor:"#35c5f4",borderRadius:"50%",display:"inline-block",animation:"spin 1s linear infinite"}}/>
@@ -1862,7 +1972,7 @@ export default function App(){
               <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
                 <div style={{position:"relative",display:"inline-block"}}>
                   <button onClick={()=>{const m=document.getElementById("global-sync-menu");m.style.display=m.style.display==="none"?"block":"none"}} style={{padding:"8px 14px",background:scrapeTriggered?"#46d160":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:scrapeTriggered?"#000":"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
-                    {scrapeTriggered ? "✓ Syncing…" : "⚡ Sync All ▼"}
+                    {scrapeTriggered ? "✓ Fetching…" : "⚡ Fetch New Posts ▼"}
                   </button>
                   <div id="global-sync-menu" style={{display:"none",position:"absolute",top:"100%",left:0,zIndex:100,background:"#1a2234",border:"1px solid #333",borderRadius:"3px",minWidth:"140px",marginTop:"4px",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}>
                     <div onClick={()=>{document.getElementById("global-sync-menu").style.display="none";scrapeNow()}} style={{padding:"10px 14px",cursor:"pointer",color:"#f5f7fa",fontSize:"12px",borderBottom:"1px solid #222"}}>Get Latest</div>
@@ -1870,7 +1980,7 @@ export default function App(){
                   </div>
                 </div>
                 <button onClick={runArchiveAll} disabled={!!archiveJob} style={{padding:"8px 14px",background:archiveJob?"#243447":"linear-gradient(135deg,#46d160,#2ea84e)",border:"none",borderRadius:"3px",color:archiveJob?"#5a7b9a":"#000",cursor:archiveJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"700"}}>
-                  {archiveJob ? "⏳ Archiving…" : "📦 Archive All"}
+                  {archiveJob ? "⏳ Hiding…" : "📦 Hide All Posts"}
                 </button>
               </div>
             </div>
@@ -1902,9 +2012,9 @@ export default function App(){
                     </div>
                   )}
                   <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
-                    <button onClick={runThumbBackfill} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#f5f7fa",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>⬇ Backfill Missing</button>
-                    <button onClick={runThumbRebuildAll} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Rebuild All</button>
-                    <button onClick={runThumbPurgeOrphans} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>🗑 Purge Orphans</button>
+                    <button onClick={runThumbBackfill} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#f5f7fa",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>⬇ Generate Missing</button>
+                    <button onClick={runThumbRebuildAll} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"#1e3a5f",border:"1px solid #2a5a8a",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#7ab3e0",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>🔄 Regenerate All</button>
+                    <button onClick={runThumbPurgeOrphans} disabled={!!thumbJob} style={{padding:"10px 18px",background:thumbJob?"#243447":"#2a0000",border:"1px solid #550000",borderRadius:"3px",color:thumbJob?"#5a7b9a":"#ff6b6b",cursor:thumbJob?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>🗑 Delete Orphans</button>
                   </div>
                   {thumbJob && (()=>{
                     const pct = thumbJob.total>0?Math.round(thumbJob.done/thumbJob.total*100):0
@@ -1929,9 +2039,9 @@ export default function App(){
               {adminSections.media && (
                 <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
                   <button onClick={()=>{if(!window.confirm("Scan ALL posts for missing media?"))return;axios.post("/api/admin/media/rescan").then(r=>toastSuccess(`Scanned ${r.data.posts_scanned} posts, queued ${r.data.newly_queued} new`)).catch(err=>toastError("Scan failed"))}}
-                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔍 Find New Media</button>
+                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔍 Scan for Missing</button>
                   <button onClick={()=>{if(!window.confirm("Retry ALL failed downloads?"))return;axios.post("/api/admin/media/rescrape").then(r=>toastSuccess(`Requeued ${r.data.requeued} items`)).catch(err=>toastError("Retry failed"))}}
-                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#f9c300,#e6b200)",border:"none",borderRadius:"3px",color:"#000",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔄 Retry Failed</button>
+                    style={{padding:"10px 20px",background:"linear-gradient(135deg,#f9c300,#e6b200)",border:"none",borderRadius:"3px",color:"#000",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔄 Retry Downloads</button>
                 </div>
               )}
             </div>

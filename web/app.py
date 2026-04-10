@@ -1944,6 +1944,60 @@ def audit_target(target_type: str, name: str):
     }
 
 
+@app.get("/api/admin/target/{target_type}/{name}/stats")
+def target_stats(target_type: str, name: str):
+    """Return per-target live statistics."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
+    col = "author" if target_type == "user" else "subreddit"
+    with get_db_cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*) FILTER (WHERE created_utc::date = CURRENT_DATE) AS posts_today,
+                COUNT(*) FILTER (WHERE created_utc::date >= CURRENT_DATE - INTERVAL '7 days') AS posts_this_week,
+                COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'pending' OR m.status IS NULL) AS pending_media,
+                COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'failed') AS failed_media,
+                MAX(p.created_utc) AS last_posted_at
+            FROM posts p
+            LEFT JOIN media m ON m.post_id = p.id
+            WHERE LOWER(p.{col}) = LOWER(%s)
+            """,
+            (name,),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    (
+        posts_today,
+        posts_this_week,
+        pending_media,
+        failed_media,
+        last_posted_at,
+    ) = row
+
+    queue_length = 0
+    if redis_client:
+        try:
+            rd = get_redis()
+            queue_key = f"queue:{target_type}:{name}"
+            queue_length = rd.llen(queue_key)
+        except Exception:
+            pass
+
+    return {
+        "posts_today": posts_today or 0,
+        "posts_this_week": posts_this_week or 0,
+        "pending_media": pending_media or 0,
+        "failed_media": failed_media or 0,
+        "last_posted_at": last_posted_at.isoformat() if last_posted_at else None,
+        "queue_length": queue_length,
+    }
+
+
 @app.post("/api/admin/target/{target_type}/{name}/scrape")
 def trigger_target_scrape(target_type: str, name: str):
     """Trigger an immediate scrape for a single target."""
