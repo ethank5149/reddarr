@@ -108,7 +108,7 @@ services:
       - ${THUMB_PATH}:${THUMB_PATH}
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
     ports:
-      - "${REDDIT_ARCHIVE_API_PORT:-8080}:8080"
+      - "${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
     restart: unless-stopped
 
   postgres-exporter:

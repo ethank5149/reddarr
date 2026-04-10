@@ -330,14 +330,12 @@ def startup():
         logger.warning(f"Redis not available (queue features disabled): {e}")
         redis_client = None
 
-    # Ensure archive directories exist
     for d in [HIDDEN_MEDIA_PATH, HIDDEN_THUMB_PATH]:
         try:
             os.makedirs(d, exist_ok=True)
         except Exception:
             pass
 
-    # Fetch target icons in background so startup isn't blocked
     threading.Thread(target=_refresh_target_icons, daemon=True).start()
 
 
