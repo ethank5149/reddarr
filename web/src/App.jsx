@@ -342,6 +342,7 @@ export default function App(){
       esRef.current = es
       es.onopen = () => setLiveConnected(true)
       es.onmessage = (e) => {
+        console.log("SSE message received:", e.data)
         try {
           const data = JSON.parse(e.data)
           if(data.error) return
@@ -375,7 +376,8 @@ export default function App(){
           }
           if(data.new_media && data.new_media.length > 0){
             if(filtersRef.current.sort === "last_added"){
-              refreshPosts()
+            console.log("SSE: calling refreshPosts for", data.new_posts.length, "new posts")
+            refreshPosts()
             }
           }
         } catch(err){
@@ -431,9 +433,11 @@ export default function App(){
     params.set(filterKey, name)
     params.set("sort_by","ingested_at")
     params.set("sort_order","desc")
+    console.log("loadTargetPosts fetching:", params.toString())
     axios.get(`/api/posts?${params.toString()}`)
       .then(r=>{
         const newPosts = r.data.posts?.map(mapPost) || []
+        console.log("loadTargetPosts got", newPosts.length, "posts")
         if(offset === 0) {
           setTargetPosts(newPosts)
         } else {
@@ -460,7 +464,9 @@ export default function App(){
   // Poll for new target posts every 10s
   useEffect(()=>{
     if(!targetDetailType || !targetDetailName) return
+    console.log("Starting target posts poll for", targetDetailType, targetDetailName)
     const poll = setInterval(()=>{
+      console.log("Polling target posts for", targetDetailName)
       loadTargetPosts(targetDetailType, targetDetailName, 0)
     }, 10000)
     return ()=> clearInterval(poll)
