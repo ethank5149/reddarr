@@ -349,7 +349,30 @@ def process_item(item, session=None):
                         break
 
                 if r.status_code != 200:
-                    logger.warning(f"HTTP {r.status_code} for {url}")
+                    logger.warning(f"HTTP {r.status_code} for {url}, recording failure")
+                    try:
+                        rd.lpush(
+                            "failed_media_downloads",
+                            json.dumps(
+                                {
+                                    "url": url,
+                                    "post_id": post_id,
+                                    "error": f"HTTP {r.status_code}",
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log failed download to Redis: {e}")
+                    conn = get_db()
+                    conn.rollback()
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
+                            (post_id, url),
+                        )
+                        conn.commit()
                     break
 
                 post_dir = get_post_dir(post_id, q_subreddit, q_author)
@@ -527,6 +550,15 @@ def process_item(item, session=None):
                         )
                     except Exception as e:
                         logger.warning(f"Failed to log failed video to Redis: {e}")
+                    conn = get_db()
+                    conn.rollback()
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
+                            (post_id, url),
+                        )
+                        conn.commit()
                 break
 
             elif url.startswith("https://preview.redd.it/") or url.startswith(
@@ -598,7 +630,16 @@ def process_item(item, session=None):
                         conn.commit()
                         logger.info(f"Saved preview: {path}")
                 else:
-                    logger.warning(f"Preview HTTP {r.status_code}")
+                    logger.warning(f"Preview HTTP {r.status_code}, recording failure")
+                    conn = get_db()
+                    conn.rollback()
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
+                            (post_id, url),
+                        )
+                        conn.commit()
                 break
 
             else:
@@ -665,10 +706,30 @@ def process_item(item, session=None):
                             conn.commit()
                             logger.info(f"Saved extracted image: {path}")
                     else:
-                        logger.info(f"Not an image, skipping: {content_type}")
+                        logger.info(
+                            f"Not an image, skipping: {content_type}, recording failure"
+                        )
+                        conn = get_db()
+                        conn.rollback()
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
+                                "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
+                                (post_id, url),
+                            )
+                            conn.commit()
                     break
                 except Exception as e:
-                    logger.warning(f"Extraction failed: {e}")
+                    logger.warning(f"Extraction failed: {e}, recording failure")
+                    conn = get_db()
+                    conn.rollback()
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
+                            (post_id, url),
+                        )
+                        conn.commit()
                     break
 
         rate_limiter.release(domain, success=(path is not None))

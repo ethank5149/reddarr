@@ -1883,6 +1883,7 @@ def audit_target(target_type: str, name: str):
                 COUNT(m.id)                                                     AS total_media,
                 COUNT(m.id) FILTER (WHERE m.status='done' AND m.file_path IS NOT NULL AND m.file_path != '') AS media_ok,
                 COUNT(m.id) FILTER (WHERE m.status='error')                    AS media_error,
+                COUNT(m.id) FILTER (WHERE m.status='failed')                   AS media_failed,
                 COUNT(m.id) FILTER (WHERE m.status='pending' OR m.status IS NULL) AS media_pending,
                 COUNT(DISTINCT p.id) FILTER (
                     WHERE NOT EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
@@ -1920,6 +1921,7 @@ def audit_target(target_type: str, name: str):
         total_media,
         media_ok,
         media_error,
+        media_failed,
         media_pending,
         posts_no_media,
         posts_ok,
@@ -1932,6 +1934,7 @@ def audit_target(target_type: str, name: str):
         "total_media": total_media or 0,
         "media_ok": media_ok or 0,
         "media_error": media_error or 0,
+        "media_failed": media_failed or 0,
         "media_pending": media_pending or 0,
         "media_missing": media_missing,
         "posts_no_media": posts_no_media or 0,
@@ -2539,6 +2542,54 @@ def get_queue_status():
             pass
 
     return {"queue_length": queue_len, "recent_items": pending_items}
+
+
+@app.get("/api/admin/failed-media")
+def get_failed_media(limit: int = Query(50, ge=1, le=500)):
+    """Get list of failed media downloads from database."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT m.id, m.post_id, m.url, m.status, m.retries, m.downloaded_at
+            FROM media m
+            WHERE m.status = 'failed'
+            ORDER BY m.downloaded_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+
+    return {
+        "failed_count": len(rows),
+        "failed_media": [
+            {
+                "id": r[0],
+                "post_id": r[1],
+                "url": r[2],
+                "status": r[3],
+                "retries": r[4],
+                "failed_at": r[5].isoformat() if r[5] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/api/admin/failed-downloads")
+def get_failed_downloads_redis(limit: int = Query(50, ge=1, le=500)):
+    """Get failed downloads logged to Redis for debugging."""
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+
+    rd = get_redis()
+    video_failures = rd.lrange("failed_video_downloads", 0, limit - 1)
+    general_failures = rd.lrange("failed_media_downloads", 0, limit - 1)
+
+    return {
+        "video_failures": [json.loads(x) for x in video_failures],
+        "general_failures": [json.loads(x) for x in general_failures],
+    }
 
 
 @app.delete("/api/admin/queue")
@@ -3377,6 +3428,7 @@ def media_rescrape():
             WHERE (m.status IS NULL OR m.status = '')
                OR m.status = 'error'
                OR m.status = 'pending'
+               OR m.status = 'failed'
                OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
             ORDER BY m.id
         """)
