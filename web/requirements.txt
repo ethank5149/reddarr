@@ -3,3 +3,5 @@ uvicorn
 psycopg2-binary
 redis
 prometheus-client
+alembic
+sqlalchemy

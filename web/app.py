@@ -11,9 +11,8 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
-import psycopg2
-from psycopg2 import pool as pg_pool
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -83,7 +82,6 @@ app.add_middleware(
 
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
-    # --- Auth check ---
     path = request.url.path
     if path.startswith("/api/") and path != "/api/login":
         auth_header = request.headers.get("Authorization")
@@ -91,9 +89,13 @@ async def metrics_middleware(request: Request, call_next):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         token = auth_header.split(" ")[1]
 
-        if token == "admin-token-123":
+        _get_tokens()
+        is_admin = _ADMIN_TOKEN and token == _ADMIN_TOKEN
+        is_guest = _GUEST_TOKEN and token == _GUEST_TOKEN
+
+        if is_admin:
             pass
-        elif token == "guest-token-123":
+        elif is_guest:
             if request.method != "GET":
                 return JSONResponse(
                     status_code=403, content={"detail": "Forbidden: Admin required"}
@@ -133,15 +135,44 @@ async def metrics_middleware(request: Request, call_next):
     return response
 
 
-def get_admin_password():
-    secret_path = os.environ.get("ADMIN_PASSWORD_FILE", "/run/secrets/admin_password")
-    if os.path.exists(secret_path):
-        try:
-            with open(secret_path, "r") as f:
-                return f.read().strip()
-        except Exception:
-            pass
-    return os.environ.get("ADMIN_PASSWORD", "admin")
+def get_admin_password() -> str:
+    from shared.config import get_secret
+
+    return get_secret("admin_password", "admin")
+
+
+def get_guest_password() -> str:
+    from shared.config import get_secret
+
+    return get_secret("guest_password", "guest")
+
+
+def generate_token(role: str) -> str:
+    import hashlib
+    import secrets
+
+    raw = f"{role}:{secrets.token_urlsafe(32)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+_ADMIN_TOKEN: Optional[str] = None
+_GUEST_TOKEN: Optional[str] = None
+
+
+def _get_tokens():
+    global _ADMIN_TOKEN, _GUEST_TOKEN
+    from shared.config import get_secret
+
+    admin_pw = get_secret("admin_password")
+    guest_pw = get_secret("guest_password")
+    if admin_pw:
+        import hashlib
+
+        _ADMIN_TOKEN = hashlib.sha256(f"admin:{admin_pw}".encode()).hexdigest()[:32]
+    if guest_pw:
+        import hashlib
+
+        _GUEST_TOKEN = hashlib.sha256(f"guest:{guest_pw}".encode()).hexdigest()[:32]
 
 
 class LoginRequest(BaseModel):
@@ -152,9 +183,9 @@ class LoginRequest(BaseModel):
 @app.post("/api/login")
 def login(req: LoginRequest):
     if req.username == "admin" and req.password == get_admin_password():
-        return {"token": "admin-token-123", "role": "admin"}
-    elif req.username == "guest" and req.password == "guest":
-        return {"token": "guest-token-123", "role": "guest"}
+        return {"token": _ADMIN_TOKEN or generate_token("admin"), "role": "admin"}
+    elif req.username == "guest" and req.password == get_guest_password():
+        return {"token": _GUEST_TOKEN or generate_token("guest"), "role": "guest"}
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
@@ -262,21 +293,31 @@ def _run_migrations(pool):
 def startup():
     global connection_pool, redis_client
     try:
-        db_url = os.getenv("DB_URL")
-        connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=1, maxconn=10, dsn=db_url
-        )
+        from shared.database import init_pool
+
+        connection_pool = init_pool(minconn=1, maxconn=10)
         logger.info("Database connection pool initialized")
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         raise
 
-    # Run schema migrations so older databases get the new columns
     try:
-        _run_migrations(connection_pool)
-        logger.info("Schema migrations complete")
-    except Exception as e:
-        logger.error(f"Migration error (non-fatal): {e}")
+        from shared.config import get_secret
+
+        run_migrations = get_secret("RUN_MIGRATIONS", "true").lower() == "true"
+        if run_migrations:
+            try:
+                _run_migrations(connection_pool)
+                logger.info("Schema migrations complete")
+            except Exception as e:
+                logger.error(f"Migration error (non-fatal): {e}")
+    finally:
+        try:
+            from shared.config import get_secret
+
+            _get_tokens()
+        except Exception:
+            pass
 
     try:
         redis_host = os.getenv("REDIS_HOST", "localhost")
@@ -401,9 +442,15 @@ def _refresh_target_icons():
 @app.on_event("shutdown")
 def shutdown():
     global connection_pool
-    if connection_pool:
-        connection_pool.closeall()
+    try:
+        from shared.database import close_pool
+
+        close_pool()
         logger.info("Database connections closed")
+    except Exception:
+        if connection_pool:
+            connection_pool.closeall()
+            logger.info("Database connections closed")
 
 
 @contextmanager

@@ -35,6 +35,7 @@ services:
       - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
       REDDIT_USER_AGENT: ${REDDIT_USER_AGENT}
       TARGETS_FILE: /app/targets.txt
@@ -44,6 +45,7 @@ services:
     secrets:
       - reddit_client_id
       - reddit_client_secret
+      - postgres_password
     depends_on:
       db:
         condition: service_healthy
@@ -60,10 +62,13 @@ services:
       - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
       ARCHIVE_PATH: ${ARCHIVE_PATH}
       THUMB_PATH: ${THUMB_PATH}
       ARCHIVE_MEDIA_PATH: ${ARCHIVE_MEDIA_PATH}
+    secrets:
+      - postgres_password
     depends_on:
       db:
         condition: service_healthy
@@ -82,10 +87,13 @@ services:
       - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
     secrets:
       - api_key
       - admin_password
+      - guest_password
+      - postgres_password
     depends_on:
       db:
         condition: service_healthy
@@ -152,6 +160,7 @@ services:
     image: grafana/grafana
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/overview.json
     volumes:
@@ -174,3 +183,5 @@ secrets:
     file: ./secrets/api_key
   admin_password:
     file: ./secrets/admin_password
+  guest_password:
+    file: ./secrets/guest_password
