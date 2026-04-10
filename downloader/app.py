@@ -578,8 +578,10 @@ def process_item(item, session=None):
                             """
                            INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                            VALUES(%s,%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT (sha256) DO UPDATE SET 
-                             post_id = EXCLUDED.post_id,
+                           ON CONFLICT (post_id, url) DO UPDATE SET 
+                             file_path = EXCLUDED.file_path,
+                             thumb_path = EXCLUDED.thumb_path,
+                             sha256 = EXCLUDED.sha256,
                              downloaded_at = EXCLUDED.downloaded_at,
                              status = EXCLUDED.status
                            """,
@@ -643,8 +645,10 @@ def process_item(item, session=None):
                                 """
                                INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
                                VALUES(%s,%s,%s,%s,%s,%s,%s)
-                               ON CONFLICT (sha256) DO UPDATE SET 
-                                 post_id = EXCLUDED.post_id,
+                               ON CONFLICT (post_id, url) DO UPDATE SET 
+                                 file_path = EXCLUDED.file_path,
+                                 thumb_path = EXCLUDED.thumb_path,
+                                 sha256 = EXCLUDED.sha256,
                                  downloaded_at = EXCLUDED.downloaded_at,
                                  status = EXCLUDED.status
                                """,

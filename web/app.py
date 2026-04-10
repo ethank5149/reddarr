@@ -3590,11 +3590,11 @@ async def event_stream():
                 cur = conn.cursor()
                 if after_dt is None:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE hidden = FALSE ORDER BY ingested_at DESC LIMIT 1"
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE hidden = FALSE ORDER BY ingested_at DESC NULLS LAST LIMIT 1"
                     )
                 else:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE hidden = FALSE AND ingested_at > %s ORDER BY ingested_at DESC LIMIT 20",
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE hidden = FALSE AND ingested_at > %s ORDER BY ingested_at DESC NULLS LAST LIMIT 20",
                         (after_dt,),
                     )
                 return cur.fetchall()
