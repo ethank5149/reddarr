@@ -24,9 +24,20 @@ REDDIT_ARCHIVE_API_PORT="${REDDIT_ARCHIVE_API_PORT:-8011}"
 REDDIT_ARCHIVE_PROMETHEUS_PORT="${REDDIT_ARCHIVE_PROMETHEUS_PORT:-9011}"
 REDDIT_ARCHIVE_GRAFANA_PORT="${REDDIT_ARCHIVE_GRAFANA_PORT:-3011}"
 
-for secret in secrets/postgres_password secrets/reddit_client_id secrets/reddit_client_secret secrets/api_key; do
+for secret in secrets/postgres_password secrets/reddit_client_id secrets/reddit_client_secret secrets/api_key secrets/admin_password secrets/guest_password; do
     if [ ! -f "$secret" ]; then
-        echo "Warning: $secret not found (some services may fail)"
+        echo "Creating default $secret..."
+        case "$secret" in
+            secrets/admin_password)
+                echo "admin" > "$secret"
+                ;;
+            secrets/guest_password)
+                echo "guest" > "$secret"
+                ;;
+            *)
+                echo "Warning: $secret not found (some services may fail)"
+                ;;
+        esac
     fi
 done
 
@@ -47,6 +58,9 @@ echo "Prometheus: http://localhost:${REDDIT_ARCHIVE_PROMETHEUS_PORT}"
 echo "Grafana:    http://localhost:${REDDIT_ARCHIVE_GRAFANA_PORT}"
 echo ""
 echo "Grafana login: admin / admin"
+echo ""
+echo "=== Security Note ==="
+echo "Default credentials are set for admin/guest. Change these in secrets/ for production!"
 echo ""
 echo "=== Direct Usage URLs ==="
 DOCKER_BRIDGE=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
