@@ -30,7 +30,9 @@ services:
 
   ingester:
     container_name: reddit_archive_ingester
-    build: ./ingester
+    build:
+      context: ./ingester
+      dockerfile: Dockerfile
     env_file:
       - .env
     environment:
@@ -57,7 +59,9 @@ services:
 
   downloader:
     container_name: reddit_archive_downloader
-    build: ./downloader
+    build:
+      context: ./downloader
+      dockerfile: Dockerfile
     env_file:
       - .env
     environment:

@@ -24,22 +24,19 @@ REDDIT_ARCHIVE_API_PORT="${REDDIT_ARCHIVE_API_PORT:-8011}"
 REDDIT_ARCHIVE_PROMETHEUS_PORT="${REDDIT_ARCHIVE_PROMETHEUS_PORT:-9011}"
 REDDIT_ARCHIVE_GRAFANA_PORT="${REDDIT_ARCHIVE_GRAFANA_PORT:-3011}"
 
-for secret in secrets/postgres_password secrets/reddit_client_id secrets/reddit_client_secret secrets/api_key secrets/admin_password secrets/guest_password; do
+for secret in secrets/postgres_password secrets/reddit_client_id secrets/reddit_client_secret secrets/api_key; do
     if [ ! -f "$secret" ]; then
-        echo "Creating default $secret..."
-        case "$secret" in
-            secrets/admin_password)
-                echo "admin" > "$secret"
-                ;;
-            secrets/guest_password)
-                echo "guest" > "$secret"
-                ;;
-            *)
-                echo "Warning: $secret not found (some services may fail)"
-                ;;
-        esac
+        echo "Warning: $secret not found - some services may fail"
     fi
 done
+
+if [ ! -f secrets/admin_password ]; then
+    echo "admin" > secrets/admin_password
+fi
+
+if [ ! -f secrets/guest_password ]; then
+    echo "guest" > secrets/guest_password
+fi
 
 mkdir -p pgdata redisdata
 

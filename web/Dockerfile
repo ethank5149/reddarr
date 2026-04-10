@@ -23,13 +23,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt --no-cache-dir
 
-# Copy shared module
-COPY ../shared /app/shared
+COPY shared ./shared
 
-# Copy built frontend
 COPY --from=frontend /app/dist ./dist
 
-# Copy app
 COPY app.py .
 
 ENV PYTHONPATH=/app
