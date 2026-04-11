@@ -107,6 +107,7 @@ services:
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
       - ${THUMB_PATH}:${THUMB_PATH}
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
+      - ./logs:/mnt/user/scripts/reddarr/logs:ro
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
     restart: unless-stopped

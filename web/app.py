@@ -3639,6 +3639,22 @@ def media_rescrape():
     }
 
 
+LOG_DIR = "/mnt/user/scripts/reddarr/logs"
+
+
+@app.get("/logs/{filename}")
+def get_log_file(filename: str):
+    """Serve log files from the logs directory."""
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9_-]+\.log$", filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    log_path = os.path.join(LOG_DIR, filename)
+    if not os.path.exists(log_path):
+        raise HTTPException(status_code=404, detail="Log file not found")
+    return FileResponse(log_path)
+
+
 @app.get("/api/admin/health")
 def health_check():
     issues = []

@@ -67,6 +67,8 @@ export default function App(){
     activeTab = "system"
   } else if(pathParts[0] === "activity") {
     activeTab = "activity"
+  } else if(pathParts[0] === "logs") {
+    activeTab = "logs"
   }
 
   // Redirect bare / to /library
@@ -1298,6 +1300,7 @@ export default function App(){
     role === "admin" && {to:"/wanted",label:"Wanted",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>)},
     role === "admin" && {to:"/system",label:"System",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>)},
     role === "admin" && {to:"/activity",label:"Activity",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>)},
+    role === "admin" && {to:"/logs",label:"Logs",icon:(<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>)},
   ].filter(Boolean)
 
   // ── Shared components ──
@@ -1468,6 +1471,7 @@ export default function App(){
       case "wanted": return "Wanted"
       case "system": return "System"
       case "activity": return "Activity"
+      case "logs": return "Logs"
       default: return "Reddarr"
     }
   }
@@ -2311,6 +2315,92 @@ export default function App(){
           </div>
         </div>
       )}
+
+      {/* ── LOGS TAB ── */}
+      {activeTab === "logs" && role === "admin" && (() => {
+        const [logFiles, setLogFiles] = useState([])
+        const [selectedLog, setSelectedLog] = useState("api")
+        const [logs, setLogs] = useState([])
+        const [autoRefresh, setAutoRefresh] = useState(false)
+        const logsInterval = useRef(null)
+
+        const logNames = ["api", "db", "redis", "ingester", "downloader", "grafana", "prometheus"]
+
+        const loadLogs = useCallback(() => {
+          fetch(`/logs/${selectedLog}.log`).then(r => r.text()).then(t => {
+            setLogs(t.split("\n").filter(Boolean).slice(-200))
+          }).catch(() => setLogs([]))
+        }, [selectedLog])
+
+        useEffect(() => {
+          setLogFiles(logNames)
+        }, [])
+
+        useEffect(() => {
+          loadLogs()
+        }, [loadLogs])
+
+        useEffect(() => {
+          if (autoRefresh) {
+            logsInterval.current = setInterval(loadLogs, 3000)
+          } else if (logsInterval.current) {
+            clearInterval(logsInterval.current)
+          }
+          return () => { if (logsInterval.current) clearInterval(logsInterval.current) }
+        }, [autoRefresh, loadLogs])
+
+        const containerColors = {
+          api: "#35c5f4", db: "#ff6666", redis: "#a855f7",
+          ingester: "#46d160", downloader: "#f9c300", grafana: "#e74c3c", prometheus: "#e67e22"
+        }
+
+        return (
+          <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px",flexWrap:"wrap",gap:"12px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#a855f7,#9333ea)",borderRadius:"2px"}}/>
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Container Logs</h2>
+                <div style={{width:"6px",height:"6px",borderRadius:"50%",background:autoRefresh?"#46d160":"#3a5068",boxShadow:autoRefresh?"0 0 6px #46d160":"none"}}/>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:"12px",marginBottom:"20px",flexWrap:"wrap",alignItems:"center"}}>
+              <select value={selectedLog} onChange={e => setSelectedLog(e.target.value)}
+                style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#c8d6e0",fontSize:"13px",minWidth:"160px"}}>
+                {logFiles.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+              <button onClick={loadLogs} style={{padding:"8px 16px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
+              <button onClick={() => setAutoRefresh(!autoRefresh)} style={{padding:"8px 16px",background:autoRefresh?"#46d160":"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:autoRefresh?"#000":"#8aa4bd",cursor:"pointer",fontSize:"13px"}}>
+                {autoRefresh ? "⏸ Live" : "▶ Live"}
+              </button>
+            </div>
+
+            <div style={{background:"#0d0d0d",borderRadius:"3px",border:"1px solid #2a2a2a",overflow:"hidden",maxHeight:"calc(100vh - 250px)",overflowY:"auto"}}>
+              <div style={{padding:"12px",fontFamily:"'SF Mono',Monaco,'Courier New',monospace",fontSize:"11px",lineHeight:"1.6"}}>
+                {logs.length === 0 ? (
+                  <div style={{color:"#5a7b9a",padding:"20px",textAlign:"center"}}>No logs available</div>
+                ) : (
+                  logs.map((line, idx) => {
+                    const color = containerColors[selectedLog] || "#8aa4bd"
+                    const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*)\s*(.*)/)
+                    const ts = tsMatch ? tsMatch[1] : null
+                    const msg = tsMatch ? tsMatch[2] : line
+                    return (
+                      <div key={idx} style={{display:"flex",gap:"12px",padding:"2px 0",borderBottom:"1px solid #1a1a1a"}}>
+                        <span style={{color:"#3a5068",minWidth:"160px",fontVariantNumeric:"tabular-nums",flexShrink:0}}>{ts || "-"}</span>
+                        <span style={{color,minWidth:"80px",fontWeight:"500",flexShrink:0}}>{selectedLog}</span>
+                        <span style={{color:"#c8d6e0",wordBreak:"break-all"}}>{msg}</span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── LIBRARY TAB ── */}
       {activeTab === "library" && (<>
