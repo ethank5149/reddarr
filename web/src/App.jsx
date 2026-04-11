@@ -508,12 +508,25 @@ export default function App(){
       .catch(()=>setTargetLiveStats(null))
   }
 
+  const [targetScrapeFailures, setTargetScrapeFailures] = useState([])
+  const [targetScrapeFailuresLoading, setTargetScrapeFailuresLoading] = useState(false)
+
   function loadTargetFailures(ttype, name){
     setTargetFailuresLoading(true)
+    setTargetScrapeFailuresLoading(true)
     axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/failures?limit=20`)
-      .then(r=>setTargetFailures(r.data.failures||[]))
-      .catch(()=>setTargetFailures([]))
-      .finally(()=>setTargetFailuresLoading(false))
+      .then(r=>{
+        setTargetFailures(r.data.failures||[])
+        setTargetScrapeFailures(r.data.scrape_failures||[])
+      })
+      .catch(()=>{
+        setTargetFailures([])
+        setTargetScrapeFailures([])
+      })
+      .finally(()=>{
+        setTargetFailuresLoading(false)
+        setTargetScrapeFailuresLoading(false)
+      })
   }
 
   // Target detail infinite scroll
@@ -1871,23 +1884,35 @@ export default function App(){
             )}
 
             {/* Failures Panel */}
-            {targetLiveStats && (targetLiveStats.failed_media > 0 || targetLiveStats.error_media > 0) && (
+            {targetLiveStats && (targetLiveStats.failed_media > 0 || targetLiveStats.error_media > 0 || targetScrapeFailures.length > 0) && (
               <div style={{marginBottom:"24px"}}>
                 <div onClick={()=>setTargetFailuresOpen(o=>!o)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:targetFailuresOpen?"#2a1a1a":"#1c2a3f",borderRadius:"3px",border:"1px solid #3a2a2a",cursor:"pointer"}}>
                   <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                     <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4444,#cc0000)",borderRadius:"2px"}}/>
-                    <h3 style={{margin:0,fontSize:"14px",fontWeight:"600",color:"#ff6666"}}>Failures ({targetLiveStats.failed_media + targetLiveStats.error_media})</h3>
+                    <h3 style={{margin:0,fontSize:"14px",fontWeight:"600",color:"#ff6666"}}>Failures ({targetLiveStats.failed_media + targetLiveStats.error_media + targetScrapeFailures.length})</h3>
                   </div>
                   <span style={{color:"#ff6666",fontSize:"14px",transform:targetFailuresOpen?"rotate(0deg)":"rotate(-90deg)",transition:"transform 0.2s"}}>▼</span>
                 </div>
                 {targetFailuresOpen && (
                   <div style={{background:"#161d2f",borderRadius:"0 0 3px 3px",border:"1px solid #3a2a2a",borderTop:"none",padding:"12px",maxHeight:"300px",overflow:"auto"}}>
-                    {targetFailuresLoading ? (
+                    {targetFailuresLoading || targetScrapeFailuresLoading ? (
                       <div style={{padding:"20px",textAlign:"center",color:"#5a7b9a"}}>Loading failures...</div>
-                    ) : targetFailures.length === 0 ? (
+                    ) : targetFailures.length === 0 && targetScrapeFailures.length === 0 ? (
                       <div style={{padding:"20px",textAlign:"center",color:"#5a7b9a"}}>No failures recorded.</div>
                     ) : (
                       <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+                        {targetScrapeFailures.map(f=>(
+                          <div key={f.id} style={{background:"#0b1728",borderRadius:"3px",padding:"10px",border:"1px solid #2a2a2a"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>
+                              <span style={{background:"#3a1a3a",color:"#ff66ff",padding:"2px 8px",borderRadius:"3px",fontSize:"10px",fontWeight:"600"}}>
+                                SCRAPE ERROR
+                              </span>
+                              <span style={{fontSize:"10px",color:"#5a7b9a"}}>{f.created_at ? new Date(f.created_at).toLocaleString() : "-"}</span>
+                            </div>
+                            <div style={{fontSize:"11px",color:"#8aa4bd",marginBottom:"4px"}}>Post: {f.post_id}</div>
+                            {f.error_message && <div style={{fontSize:"10px",color:"#ff6666",fontFamily:"monospace"}}>{f.error_message}</div>}
+                          </div>
+                        ))}
                         {targetFailures.map(f=>(
                           <div key={f.id} style={{background:"#0b1728",borderRadius:"3px",padding:"10px",border:"1px solid #2a2a2a"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>

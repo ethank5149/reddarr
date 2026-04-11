@@ -2055,7 +2055,7 @@ def target_failures(
     limit: int = Query(50, ge=1, le=200),
     status: Optional[str] = None,
 ):
-    """Return failed/errored media items for a specific target."""
+    """Return failed/errored media items for a specific target, plus scrape failures."""
     if target_type not in ("subreddit", "user"):
         raise HTTPException(status_code=400, detail="Invalid target type")
 
@@ -2097,7 +2097,30 @@ def target_failures(
                 }
             )
 
-    return {"failures": failures}
+        cur.execute(
+            """
+            SELECT id, post_id, error_message, sort_method, created_at
+            FROM scrape_failures
+            WHERE target_type = %s AND LOWER(target_name) = LOWER(%s)
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (target_type, name, limit),
+        )
+        scrape_failures = []
+        for row in cur.fetchall():
+            scrape_failures.append(
+                {
+                    "id": row[0],
+                    "post_id": row[1],
+                    "error_message": row[2],
+                    "sort_method": row[3],
+                    "created_at": row[4].isoformat() if row[4] else None,
+                    "status": "scrape_error",
+                }
+            )
+
+    return {"failures": failures, "scrape_failures": scrape_failures}
 
 
 @app.get("/api/admin/target/{target_type}/{name}/scrape-failures")
