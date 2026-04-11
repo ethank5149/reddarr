@@ -7,7 +7,9 @@ redisdata/
 prometheus/data/
 grafana/data/
 node_modules/
+backups-borg-new/
 backups-borg/
+borg-cache/
 backups/
 
 # Logs

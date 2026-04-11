@@ -29,16 +29,21 @@ services:
       retries: 5
 
   backup:
+    image: ainullcode/borg-ui:latest
     container_name: reddit_archive_backup
-    image: ghcr.io/borgmatic-collective/borgmatic:latest
-    environment:
-      - TZ=UTC
-      - BORG_PASSPHRASE=changeme
-    volumes:
-      - ./backups-borg:/backups
-      - ${ARCHIVE_PATH}:/mnt/source:ro
-      - ./borgmatic:/etc/borgmatic:ro
     restart: unless-stopped
+    ports:
+      - "${REDDIT_ARCHIVE_BACKUP_PORT:-8091}:8081"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Chicago
+      - PORT=8081
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./backups-borg:/data
+      - ./borg-cache:/home/borg/.cache/borg
+      - ${ARCHIVE_PATH:-/mnt/user/scripts/reddarr/archive}:/local:ro   # your data to back up (read-only is safest)
     networks:
       - internal
 

@@ -295,6 +295,21 @@ def get_post_dir(post_id, subreddit=None, author=None):
     return MEDIA_DIR
 
 
+def check_existing_media(url):
+    """Check if media URL has already been successfully downloaded."""
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT file_path, thumb_path, sha256 FROM media WHERE url = %s AND status = 'done'",
+                (url,),
+            )
+            return cur.fetchone()
+    except Exception as e:
+        logger.error(f"Error checking existing media for {url}: {e}")
+        return None
+
+
 def process_item(item, session=None):
     post_id = item.get("post_id")
     url = item.get("url")
@@ -315,6 +330,42 @@ def process_item(item, session=None):
             return
 
     logger.info(f"Processing: post_id={post_id}, url={url[:60]}...")
+
+    # Pre-emptively check if this URL has been successfully downloaded before.
+    # This is a huge optimization for cross-posts.
+    existing = check_existing_media(url)
+    if existing:
+        file_path, thumb_path, sha256_hash = existing
+        logger.info(f"URL {url[:60]} already downloaded, creating new media entry.")
+        try:
+            conn = get_db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO media(post_id, url, file_path, thumb_path, sha256, downloaded_at, status)
+                    VALUES(%s, %s, %s, %s, %s, %s, 'done')
+                    ON CONFLICT (post_id, url) DO UPDATE SET
+                        file_path = EXCLUDED.file_path,
+                        thumb_path = EXCLUDED.thumb_path,
+                        sha256 = EXCLUDED.sha256,
+                        downloaded_at = EXCLUDED.downloaded_at,
+                        status = EXCLUDED.status
+                    """,
+                    (
+                        post_id,
+                        url,
+                        file_path,
+                        thumb_path,
+                        sha256_hash,
+                        datetime.now(timezone.utc),
+                    ),
+                )
+                conn.commit()
+            media_downloaded.labels(status="done").inc()
+            return
+        except Exception as e:
+            logger.error(f"Error creating duplicate media entry for {post_id}: {e}")
+            # If we fail here, it's better to proceed with a re-download than to lose the media.
 
     acquired, domain = rate_limiter.acquire(url)
     if not acquired:
