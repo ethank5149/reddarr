@@ -71,11 +71,11 @@ class RateLimiter:
     def __init__(self, base_delay=2, max_delay=60):
         self.base_delay = base_delay
         self.max_delay = max_delay
-        self.locks = {}
+        self.domain_locks = {}
         self.delays = {}
         self.counts = {}
         self.blocked_until = {}
-        self.lock = threading.Lock()
+        self._global_lock = threading.Lock()
 
     def _get_domain(self, url):
         try:
@@ -85,13 +85,17 @@ class RateLimiter:
 
     def acquire(self, url):
         domain = self._get_domain(url)
-        with self.lock:
-            if domain not in self.locks:
-                self.locks[domain] = threading.Lock()
+
+        # Safely get or create the domain-specific lock
+        with self._global_lock:
+            if domain not in self.domain_locks:
+                self.domain_locks[domain] = threading.Lock()
                 self.delays[domain] = self.base_delay
                 self.counts[domain] = 0
                 self.blocked_until[domain] = 0
 
+        # Acquire the domain-specific lock for rate limiting logic
+        with self.domain_locks[domain]:
             if time.time() < self.blocked_until[domain]:
                 wait_time = self.blocked_until[domain] - time.time()
                 if wait_time > 0:
@@ -99,13 +103,26 @@ class RateLimiter:
                         f"Rate limited for {domain}, waiting {wait_time:.1f}s"
                     )
                     time.sleep(wait_time)
-                    return False, domain
+                    # After sleeping, check again if still blocked or if another thread acquired the lock
+                    if time.time() < self.blocked_until[domain]:
+                        return False, domain  # Still blocked
+                else:  # Blocked time already passed while waiting for lock, proceed
+                    pass
 
             self.counts[domain] += 1
             return True, domain
 
     def backoff(self, domain, is_retry=False):
-        with self.lock:
+        with self._global_lock:
+            if domain not in self.domain_locks:
+                self.domain_locks[domain] = (
+                    threading.Lock()
+                )  # Ensure lock exists for consistency
+                self.delays[domain] = self.base_delay
+                self.counts[domain] = 0
+                self.blocked_until[domain] = 0
+
+        with self.domain_locks[domain]:
             if is_retry:
                 self.delays[domain] = min(self.delays[domain] * 2, self.max_delay)
             self.blocked_until[domain] = time.time() + self.delays[domain]
@@ -115,7 +132,16 @@ class RateLimiter:
             )
 
     def release(self, domain, success=False):
-        with self.lock:
+        with self._global_lock:
+            if domain not in self.domain_locks:
+                self.domain_locks[domain] = (
+                    threading.Lock()
+                )  # Ensure lock exists for consistency
+                self.delays[domain] = self.base_delay
+                self.counts[domain] = 0
+                self.blocked_until[domain] = 0
+
+        with self.domain_locks[domain]:
             if success:
                 self.delays[domain] = max(self.base_delay, self.delays[domain] // 2)
 
@@ -197,11 +223,12 @@ def make_thumb(path):
     )
     if result.returncode == 0:
         logger.info(f"Thumbnail created: {thumb}")
+        return thumb
     else:
         logger.warning(
             f"Thumbnail creation failed for {path}: {result.stderr.decode()[:200]}"
         )
-    return thumb
+        return None
 
 
 def get_best_image_url(url, session):
@@ -256,7 +283,6 @@ def get_post_dir(post_id, subreddit=None, author=None):
 
     try:
         conn = get_db()
-        conn.rollback()
         with conn.cursor() as cur:
             cur.execute("SELECT subreddit, author FROM posts WHERE id = %s", (post_id,))
             row = cur.fetchone()
@@ -278,7 +304,6 @@ def process_item(item, session=None):
 
     if not url:
         conn = get_db()
-        conn.rollback()
         with conn.cursor() as cur:
             cur.execute("SELECT url FROM posts WHERE id = %s", (post_id,))
             row = cur.fetchone()
@@ -324,7 +349,11 @@ def process_item(item, session=None):
 
             # Strip query parameters for consistency if it's a reddit preview
             if "preview.redd.it" in url or "external-preview.redd.it" in url:
-                url = url.split("?")[0]
+                if not url.lower().split("?")[0].endswith(".gif"):
+                    url = get_best_image_url(url, session)
+                    logger.info(f"Following preview to: {url[:60]}...")
+                else:
+                    url = url.split("?")[0]
 
             if (
                 any(
@@ -566,92 +595,6 @@ def process_item(item, session=None):
                                 url,
                                 "Video file not found after download",
                                 "Video file not found after download",
-                            ),
-                        )
-                        conn.commit()
-                break
-
-            elif url.startswith("https://preview.redd.it/") or url.startswith(
-                "https://external-preview"
-            ):
-                if not url.lower().split("?")[0].endswith(".gif"):
-                    url = get_best_image_url(url, session)
-                logger.info(f"Following preview to: {url[:60]}...")
-                r = session.get(url, stream=True, timeout=60)
-
-                if r.status_code == 429:
-                    rate_limiter.backoff(domain, is_retry=(retries > 0))
-                    retries += 1
-                    if retries < MAX_RETRIES:
-                        time.sleep(rate_limiter.delays.get(domain, 2))
-                        continue
-
-                if r.status_code == 200:
-                    post_dir = get_post_dir(post_id, q_subreddit, q_author)
-                    name = make_filename(q_subreddit, q_author, q_title, post_id, url)
-                    path = f"{post_dir}/{name}"
-                    bytes_written = 0
-                    with open(path, "wb") as f:
-                        for chunk in r.iter_content(8192):
-                            if chunk:
-                                f.write(chunk)
-                                bytes_written += len(chunk)
-                    media_download_bytes.inc(bytes_written)
-
-                    is_corrupted = detect_image_corruption(path)
-                    if is_corrupted:
-                        logger.warning(
-                            f"Corrupt preview detected for {post_id}, retrying..."
-                        )
-                        retries += 1
-                        if retries < MAX_RETRIES:
-                            time.sleep(1)
-                            continue
-                        logger.warning(f"Giving up on corrupt preview, keeping anyway")
-                        status = "corrupted"
-
-                    h = sha256(path)
-                    thumb = make_thumb(path)
-
-                    conn = get_db()
-                    conn.rollback()
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                           INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
-                           VALUES(%s,%s,%s,%s,%s,%s,%s)
-                           ON CONFLICT (post_id, url) DO UPDATE SET 
-                             file_path = EXCLUDED.file_path,
-                             thumb_path = EXCLUDED.thumb_path,
-                             sha256 = EXCLUDED.sha256,
-                             downloaded_at = EXCLUDED.downloaded_at,
-                             status = EXCLUDED.status
-                           """,
-                            (
-                                post_id,
-                                url,
-                                path,
-                                thumb,
-                                h,
-                                datetime.now(timezone.utc),
-                                status,
-                            ),
-                        )
-                        conn.commit()
-                        logger.info(f"Saved preview: {path}")
-                else:
-                    logger.warning(f"Preview HTTP {r.status_code}, recording failure")
-                    conn = get_db()
-                    conn.rollback()
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
-                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
-                            (
-                                post_id,
-                                url,
-                                f"Preview HTTP {r.status_code}",
-                                f"Preview HTTP {r.status_code}",
                             ),
                         )
                         conn.commit()

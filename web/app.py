@@ -1,13 +1,6 @@
 import asyncio
 import logging
-import os
-import json
-import time
-import redis
-import shutil
-import subprocess
-import threading
-import uuid
+import os, json, time, redis, shutil, subprocess, threading, uuid, hashlib, secrets
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -148,9 +141,6 @@ def get_guest_password() -> str:
 
 
 def generate_token(role: str) -> str:
-    import hashlib
-    import secrets
-
     raw = f"{role}:{secrets.token_urlsafe(32)}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
@@ -166,12 +156,8 @@ def _get_tokens():
     admin_pw = get_secret("admin_password")
     guest_pw = get_secret("guest_password")
     if admin_pw:
-        import hashlib
-
         _ADMIN_TOKEN = hashlib.sha256(f"admin:{admin_pw}".encode()).hexdigest()[:32]
     if guest_pw:
-        import hashlib
-
         _GUEST_TOKEN = hashlib.sha256(f"guest:{guest_pw}".encode()).hexdigest()[:32]
 
 
@@ -349,7 +335,8 @@ def _refresh_target_icons():
 
     try:
         os.makedirs(ICONS_DIR, exist_ok=True)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not create icon directory {ICONS_DIR}: {e}")
         return
 
     if not connection_pool:
@@ -847,7 +834,9 @@ def posts(
                             if remote_imgs:
                                 image_urls = remote_imgs
                 except Exception as e:
-                    logger.error(f"ERROR parsing raw for {post_id}: {e}")
+                    logger.error(
+                        f"ERROR parsing raw for {post_id}: {e}. Raw type: {type(raw).__name__}. Raw content (first 200 chars): {str(raw)[:200]}"
+                    )
 
             # Remove None values and deduplicate
             video_urls = list(
@@ -995,7 +984,9 @@ def get_post(post_id: str):
                         if remote_imgs:
                             image_urls = remote_imgs
             except Exception as e:
-                logger.error(f"ERROR parsing raw for {post_id}: {e}")
+                logger.error(
+                    f"ERROR parsing raw for {post_id}: {e}. Raw type: {type(raw).__name__}. Raw content (first 200 chars): {str(raw)[:200]}"
+                )
 
             # Remove None values and deduplicate
             video_urls = list(
