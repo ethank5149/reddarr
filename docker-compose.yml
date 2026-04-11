@@ -41,7 +41,6 @@ services:
       - ./backups-borg:/data
       - ./borg-cache:/home/borg/.cache/borg
       - ${ARCHIVE_PATH}:/local:ro
-      - ./pgdata:/local/pgdata:ro
     ports:
       - "${REDDIT_ARCHIVE_BACKUP_PORT:-8091}:8081"
     restart: unless-stopped
