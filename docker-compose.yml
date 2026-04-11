@@ -30,24 +30,20 @@ services:
 
   backup:
     container_name: reddit_archive_backup
-    image: borgbackup/borg:1.2
-    entrypoint: ["/app/entrypoint.sh"]
+    image: ainullcode/borg-ui:latest
     environment:
-      BORG_REPO: /backups/reddarr
-      BORG_PASSPHRASE_FILE: /run/secrets/backup_passphrase
-      BORG_LOG_LEVEL: INFO
-      BORG_REMOTE_PATH: borg
-      SCHEDULE: "daily"
-      BACKUP_SOURCES: /data /backups /pgdata
-      BORG_PRUNING: "--keep-daily=7 --keep-weekly=4 --keep-monthly=6"
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=${BACKUP_ADMIN_PASSWORD:-admin123}
     volumes:
-      - ./backups-borg:/backups
-      - ${ARCHIVE_PATH}:/data:ro
-      - ./backups:/data/backups:ro
-      - ./pgdata:/pgdata:ro
-      - ./backup/entrypoint.sh:/app/entrypoint.sh:ro
-    secrets:
-      - backup_passphrase
+      - ./backups-borg:/data
+      - ./borg-cache:/home/borg/.cache/borg
+      - ${ARCHIVE_PATH}:/local:ro
+      - ./pgdata:/local/pgdata:ro
+    ports:
+      - "${REDDIT_ARCHIVE_BACKUP_PORT:-8091}:8081"
     restart: unless-stopped
     networks:
       - internal
