@@ -42,15 +42,7 @@ services:
     networks:
       - internal
 
-  backup-viewer:
-    container_name: reddit_archive_backup_viewer
-    image: ghcr.io/szaimen/aio-borgbackup-viewer:v1
-    restart: always
-    ports:
-      - "5801:5801"
-    volumes:
-      - ./backups-borg:/mnt/backups:ro
-      - ./borgmatic:/mnt/keys:ro
+
 
   ingester:
     container_name: reddit_archive_ingester
