@@ -104,8 +104,9 @@ def extract_media_urls(post) -> list[str]:
     urls = []
     data = post.__dict__
 
-    if "media_metadata" in data:
-        for img_id, img_data in data["media_metadata"].items():
+    media_metadata = data.get("media_metadata")
+    if media_metadata and isinstance(media_metadata, dict):
+        for img_id, img_data in media_metadata.items():
             if "s" in img_data:
                 s = img_data["s"]
                 u = s.get("gif") or s.get("mp4") or s.get("u")
@@ -116,7 +117,65 @@ def extract_media_urls(post) -> list[str]:
             if u:
                 urls.append(u)
 
-    if "gallery_data" in data:
+    gallery_data = data.get("gallery_data")
+    if gallery_data and isinstance(gallery_data, dict):
+        for item in gallery_data.get("items", []):
+            media_id = item.get("media_id")
+            if media_id and media_metadata:
+                img_data = media_metadata.get(media_id)
+                if img_data:
+                    if "s" in img_data:
+                        s = img_data["s"]
+                        u = s.get("gif") or s.get("mp4") or s.get("u")
+                    elif img_data.get("p"):
+                        u = img_data["p"][-1].get("u")
+                    else:
+                        u = None
+                    if u:
+                        urls.append(u)
+
+    post_url = getattr(post, "url", None)
+    if post_url:
+        if is_direct_media_url(post_url):
+            urls.append(post_url)
+
+    preview = data.get("preview")
+    if preview and isinstance(preview, dict):
+        imgs = preview.get("images", [])
+        for img in imgs:
+            u = img.get("source", {}).get("url")
+            if u:
+                urls.append(u)
+            for var_type, var_imgs in img.get("variants", {}).items():
+                if isinstance(var_imgs, dict):
+                    vu = var_imgs.get("source", {}).get("url")
+                    if vu:
+                        urls.append(vu)
+                elif isinstance(var_imgs, list):
+                    for vi in var_imgs:
+                        vu = vi.get("source", {}).get("url")
+                        if vu:
+                            urls.append(vu)
+
+        rich_video = preview.get("rich_video_json")
+        if rich_video:
+            fallback = rich_video.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
+            dash_url = rich_video.get("dash_url")
+            if dash_url:
+                urls.append(dash_url)
+
+    poll_data = data.get("poll_data")
+    if poll_data and isinstance(poll_data, dict):
+        for option in poll_data.get("options", []):
+            img = option.get("image")
+            if img and isinstance(img, dict):
+                u = img.get("url")
+                if u:
+                    urls.append(u)
+
+    if data.get("gallery_data"):
         for item in data["gallery_data"].get("items", []):
             media_id = item.get("media_id")
             if media_id and "media_metadata" in data:
@@ -171,20 +230,24 @@ def extract_media_urls(post) -> list[str]:
                 if u:
                     urls.append(u)
 
-    if "crosspost_parent_list" in data:
-        for cp in data.get("crosspost_parent_list", []):
-            for img_id, img_data in cp.get("media_metadata", {}).items():
-                if "s" in img_data:
-                    s = img_data["s"]
-                    u = s.get("gif") or s.get("mp4") or s.get("u")
-                    if u:
-                        urls.append(u)
-                elif img_data.get("p"):
-                    u = img_data["p"][-1].get("u")
-                    if u:
-                        urls.append(u)
-            if "preview" in cp:
-                for img in cp["preview"].get("images", []):
+    crosspost_parent_list = data.get("crosspost_parent_list")
+    if crosspost_parent_list and isinstance(crosspost_parent_list, list):
+        for cp in crosspost_parent_list:
+            cp_media_metadata = cp.get("media_metadata")
+            if cp_media_metadata and isinstance(cp_media_metadata, dict):
+                for img_id, img_data in cp_media_metadata.items():
+                    if "s" in img_data:
+                        s = img_data["s"]
+                        u = s.get("gif") or s.get("mp4") or s.get("u")
+                        if u:
+                            urls.append(u)
+                    elif img_data.get("p"):
+                        u = img_data["p"][-1].get("u")
+                        if u:
+                            urls.append(u)
+            cp_preview = cp.get("preview")
+            if cp_preview and isinstance(cp_preview, dict):
+                for img in cp_preview.get("images", []):
                     u = img.get("source", {}).get("url")
                     if u:
                         urls.append(u)
@@ -199,23 +262,21 @@ def extract_media_urls(post) -> list[str]:
                                 if vu:
                                     urls.append(vu)
 
-    if "secure_media" in data:
-        secure = data["secure_media"]
-        if isinstance(secure, dict):
-            if "reddit_video" in secure:
-                rv = secure["reddit_video"]
-                fallback = rv.get("fallback_url")
-                if fallback:
-                    urls.append(fallback)
+    secure = data.get("secure_media")
+    if secure and isinstance(secure, dict):
+        if "reddit_video" in secure:
+            rv = secure["reddit_video"]
+            fallback = rv.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
 
-    if "media" in data:
-        media = data["media"]
-        if isinstance(media, dict):
-            if "reddit_video" in media:
-                rv = media["reddit_video"]
-                fallback = rv.get("fallback_url")
-                if fallback:
-                    urls.append(fallback)
+    media = data.get("media")
+    if media and isinstance(media, dict):
+        if "reddit_video" in media:
+            rv = media["reddit_video"]
+            fallback = rv.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
 
     seen = set()
     unique_urls = []

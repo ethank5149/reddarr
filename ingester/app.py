@@ -59,9 +59,11 @@ BACKFILL_PASSES = int(os.getenv("BACKFILL_PASSES", "2"))
 logger.info(f"POLL_INTERVAL set to: {POLL_INTERVAL}")
 logger.info(f"BACKFILL_MODE: {BACKFILL_MODE}")
 
+
 def _read_secret(path):
     with open(path) as f:
         return f.read().strip()
+
 
 reddit = praw.Reddit(
     client_id=_read_secret("/run/secrets/reddit_client_id"),
@@ -306,8 +308,9 @@ def extract_media_urls(post):
     data = post.__dict__
 
     # 1. media_metadata - Reddit's primary storage for uploaded images/galleries
-    if "media_metadata" in data:
-        for img_id, img_data in data["media_metadata"].items():
+    media_metadata = data.get("media_metadata")
+    if media_metadata and isinstance(media_metadata, dict):
+        for img_id, img_data in media_metadata.items():
             if "s" in img_data:
                 s = img_data["s"]
                 u = s.get("gif") or s.get("mp4") or s.get("u")
@@ -319,11 +322,12 @@ def extract_media_urls(post):
                 urls.append(u)
 
     # 2. gallery_data - Gallery posts reference media_metadata by ID
-    if "gallery_data" in data:
-        for item in data["gallery_data"].get("items", []):
+    gallery_data = data.get("gallery_data")
+    if gallery_data and isinstance(gallery_data, dict):
+        for item in gallery_data.get("items", []):
             media_id = item.get("media_id")
-            if media_id and "media_metadata" in data:
-                img_data = data["media_metadata"].get(media_id)
+            if media_id and media_metadata:
+                img_data = media_metadata.get(media_id)
                 if img_data:
                     if "s" in img_data:
                         s = img_data["s"]
@@ -347,8 +351,9 @@ def extract_media_urls(post):
                 urls.append(yt_url)
 
     # 4. Preview images (fallback when no media_metadata)
-    if "preview" in data:
-        imgs = data["preview"].get("images", [])
+    preview = data.get("preview")
+    if preview and isinstance(preview, dict):
+        imgs = preview.get("images", [])
         for img in imgs:
             # Source resolution
             u = img.get("source", {}).get("url")
@@ -367,7 +372,7 @@ def extract_media_urls(post):
                             urls.append(vu)
 
         # 5. rich_video_json - Embedded video in selftext/posts
-        rich_video = data["preview"].get("rich_video_json")
+        rich_video = preview.get("rich_video_json")
         if rich_video:
             # Reddit embeds often have fallback URLs
             fallback = rich_video.get("fallback_url")
@@ -379,8 +384,9 @@ def extract_media_urls(post):
                 urls.append(dash_url)
 
     # 6. Poll images (poll attachments)
-    if "poll_data" in data:
-        for option in data["poll_data"].get("options", []):
+    poll_data = data.get("poll_data")
+    if poll_data and isinstance(poll_data, dict):
+        for option in poll_data.get("options", []):
             img = option.get("image")
             if img and isinstance(img, dict):
                 u = img.get("url")
@@ -388,7 +394,7 @@ def extract_media_urls(post):
                     urls.append(u)
 
     # 7. Crosspost media (both media_metadata and preview)
-    if "crosspost_parent_list" in data:
+    if data.get("crosspost_parent_list"):
         for cp in data.get("crosspost_parent_list", []):
             # crosspost media_metadata
             for img_id, img_data in cp.get("media_metadata", {}).items():
@@ -402,7 +408,7 @@ def extract_media_urls(post):
                     if u:
                         urls.append(u)
             # crosspost preview images
-            if "preview" in cp:
+            if cp.get("preview"):
                 for img in cp["preview"].get("images", []):
                     u = img.get("source", {}).get("url")
                     if u:
@@ -419,59 +425,57 @@ def extract_media_urls(post):
                                     urls.append(vu)
 
     # 8. Secure media URL (Reddit's secure_media field)
-    if "secure_media" in data:
-        secure = data["secure_media"]
-        if isinstance(secure, dict):
-            secure_type = secure.get("type", "")
-            # Reddit video embed
-            if "reddit_video" in secure:
-                rv = secure["reddit_video"]
-                fallback = rv.get("fallback_url")
-                if fallback:
-                    urls.append(fallback)
-            # External video embed (RedGifs, YouTube, etc.)
-            elif "oembed" in secure:
-                oembed = secure["oembed"]
-                # RedGifs: fetch actual video URLs from API
-                if "redgifs" in secure_type.lower() or "redgifs" in str(oembed).lower():
-                    html = oembed.get("html", "")
-                    video_id = _extract_redgifs_video_id(html)
-                    if video_id:
-                        video_urls = _fetch_redgifs_video_urls(video_id)
-                        urls.extend(video_urls)
-                    else:
-                        thumbnail = oembed.get("thumbnail_url")
-                        if thumbnail:
-                            urls.append(thumbnail)
-                # YouTube: get the watch URL for best quality
-                elif (
-                    "youtube" in secure_type.lower()
-                    or "youtube" in str(oembed.get("provider_name", "")).lower()
-                ):
-                    yt_url = _fetch_youtube_video_url(
-                        post.url if hasattr(post, "url") else data.get("url", "")
-                    )
-                    if yt_url:
-                        urls.append(yt_url)
-                    else:
-                        thumbnail = oembed.get("thumbnail_url")
-                        if thumbnail:
-                            urls.append(thumbnail)
+    secure = data.get("secure_media")
+    if secure and isinstance(secure, dict):
+        secure_type = secure.get("type", "")
+        # Reddit video embed
+        if "reddit_video" in secure:
+            rv = secure["reddit_video"]
+            fallback = rv.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
+        # External video embed (RedGifs, YouTube, etc.)
+        elif "oembed" in secure:
+            oembed = secure["oembed"]
+            # RedGifs: fetch actual video URLs from API
+            if "redgifs" in secure_type.lower() or "redgifs" in str(oembed).lower():
+                html = oembed.get("html", "")
+                video_id = _extract_redgifs_video_id(html)
+                if video_id:
+                    video_urls = _fetch_redgifs_video_urls(video_id)
+                    urls.extend(video_urls)
                 else:
-                    # Generic external embed - just get thumbnail
                     thumbnail = oembed.get("thumbnail_url")
                     if thumbnail:
                         urls.append(thumbnail)
+            # YouTube: get the watch URL for best quality
+            elif (
+                "youtube" in secure_type.lower()
+                or "youtube" in str(oembed.get("provider_name", "")).lower()
+            ):
+                yt_url = _fetch_youtube_video_url(
+                    post.url if hasattr(post, "url") else data.get("url", "")
+                )
+                if yt_url:
+                    urls.append(yt_url)
+                else:
+                    thumbnail = oembed.get("thumbnail_url")
+                    if thumbnail:
+                        urls.append(thumbnail)
+            else:
+                # Generic external embed - just get thumbnail
+                thumbnail = oembed.get("thumbnail_url")
+                if thumbnail:
+                    urls.append(thumbnail)
 
     # 9. Media object (legacy field)
-    if "media" in data:
-        media = data["media"]
-        if isinstance(media, dict):
-            if "reddit_video" in media:
-                rv = media["reddit_video"]
-                fallback = rv.get("fallback_url")
-                if fallback:
-                    urls.append(fallback)
+    media = data.get("media")
+    if media and isinstance(media, dict):
+        if "reddit_video" in media:
+            rv = media["reddit_video"]
+            fallback = rv.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
 
     # Deduplicate
     seen: set = set()
