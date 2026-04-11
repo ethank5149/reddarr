@@ -445,8 +445,18 @@ export default function App(){
     if(activeTab === "backup" && role === "admin"){
       loadBackupStats()
       loadBackupList()
-      loadIntegrityReport()
+      // Poll for integrity result
+      const integrityPoll = setInterval(()=>{
+        axios.get("/api/admin/backup/integrity-result")
+          .then(r=>{
+            if(r.data && r.data.status !== "pending"){
+              setIntegrityReport(r.data)
+            }
+          })
+          .catch(()=>{})
+      }, 3000)
       loadAuditStatsData()
+      return ()=>clearInterval(integrityPoll)
     }
     if(activeTab === "wanted"){
       loadAuditSummary()
@@ -1047,13 +1057,39 @@ export default function App(){
     setIntegrityLoading(true)
     setIntegrityReport(null)
     axios.post("/api/admin/backup/integrity")
-      .then(r=>setIntegrityReport(r.data))
-      .catch(err=>toastError(err.response?.data?.detail||"Check failed"))
-      .finally(()=>setIntegrityLoading(false))
+      .then(r=>{
+        // Poll for result
+        const poll = setInterval(()=>{
+          axios.get("/api/admin/backup/integrity-result")
+            .then(res=>{
+              if(res.data && res.data.status !== "pending" && !res.data.error){
+                setIntegrityReport(res.data)
+                setIntegrityLoading(false)
+                clearInterval(poll)
+              }
+            })
+            .catch(()=>{
+              setIntegrityLoading(false)
+              clearInterval(poll)
+            })
+        }, 2000)
+        // Stop polling after 60 seconds
+        setTimeout(()=>{setIntegrityLoading(false);clearInterval(poll)}, 60000)
+      })
+      .catch(err=>{
+        toastError(err.response?.data?.detail||"Check failed")
+        setIntegrityLoading(false)
+      })
   }
 
   function loadAuditStatsData(){
     axios.get("/api/admin/backup/audit-stats").then(r=>setAuditStats(r.data)).catch(()=>setAuditStats(null))
+  }
+
+  function loadIntegrityReport(){
+    axios.post("/api/admin/backup/integrity")
+      .then(r=>setIntegrityReport(r.data))
+      .catch(()=>setIntegrityReport(null))
   }
 
   function createDbBackup(label){

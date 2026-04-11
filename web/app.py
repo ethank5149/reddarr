@@ -5219,13 +5219,43 @@ def backup_delete(name: str):
 @app.post("/api/admin/backup/integrity")
 def backup_integrity():
     """Run integrity check on media files."""
-    from shared.backup import verify_media_integrity
+    import threading
+    import time
 
-    try:
-        report = verify_media_integrity()
-        return report
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Integrity check failed: {e}")
+    # Run in background to avoid blocking
+    def run_check():
+        time.sleep(2)  # Small delay to let response return
+        try:
+            from shared.backup import verify_media_integrity
+
+            report = verify_media_integrity()
+            # Store result in a global for polling
+            global _last_integrity_report
+            _last_integrity_report = report
+        except Exception as e:
+            global _last_integrity_error
+            _last_integrity_error = str(e)
+
+    thread = threading.Thread(target=run_check, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Integrity check started in background"}
+
+
+_last_integrity_report = None
+_last_integrity_error = None
+
+
+@app.get("/api/admin/backup/integrity-result")
+def backup_integrity_result():
+    """Get integrity check result."""
+    global _last_integrity_report, _last_integrity_error
+
+    if _last_integrity_error:
+        return {"error": _last_integrity_error}
+    if _last_integrity_report:
+        return _last_integrity_report
+    return {"status": "pending"}
 
 
 @app.get("/api/admin/backup/audit-stats")
