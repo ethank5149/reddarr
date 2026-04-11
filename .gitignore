@@ -21,6 +21,8 @@ __pycache__/
 *.pyc
 .venv/
 
+.secret_key
+
 targets.txt
 git-purge-ignored.sh
 

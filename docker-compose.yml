@@ -30,22 +30,27 @@ services:
 
   backup:
     container_name: reddit_archive_backup
-    image: ainullcode/borg-ui:latest
+    image: ghcr.io/borgmatic-collective/borgmatic:latest
     environment:
-      - PUID=1000
-      - PGID=1000
       - TZ=UTC
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=${BACKUP_ADMIN_PASSWORD:-admin123}
+      - BORG_PASSPHRASE=changeme
     volumes:
-      - ./backups-borg:/data
-      - ./borg-cache:/home/borg/.cache/borg
-      - ${ARCHIVE_PATH}:/local:ro
-    ports:
-      - "${REDDIT_ARCHIVE_BACKUP_PORT:-8091}:8081"
+      - ./backups-borg:/backups
+      - ${ARCHIVE_PATH}:/mnt/source:ro
+      - ./borgmatic:/etc/borgmatic:ro
     restart: unless-stopped
     networks:
       - internal
+
+  backup-viewer:
+    container_name: reddit_archive_backup_viewer
+    image: ghcr.io/szaimen/aio-borgbackup-viewer:v1
+    restart: always
+    ports:
+      - "5801:5801"
+    volumes:
+      - ./backups-borg:/mnt/backups:ro
+      - ./borgmatic:/mnt/keys:ro
 
   ingester:
     container_name: reddit_archive_ingester
