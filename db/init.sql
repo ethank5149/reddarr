@@ -272,3 +272,18 @@ BEGIN
     );
     RETURN COALESCE(NEW, OLD);
 END $$ LANGUAGE plpgsql;
+
+-- SCRAPE_FAILURES: Track failed post scrapes per target for debugging
+CREATE TABLE IF NOT EXISTS scrape_failures (
+    id SERIAL PRIMARY KEY,
+    target_type TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    sort_method TEXT,
+    post_id TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_scrape_failures_target ON scrape_failures(target_type, target_name);
+CREATE INDEX IF NOT EXISTS idx_scrape_failures_post_id ON scrape_failures(post_id);
+CREATE INDEX IF NOT EXISTS idx_scrape_failures_created_at ON scrape_failures(created_at);

@@ -311,11 +311,22 @@ def extract_media_urls(post):
     media_metadata = data.get("media_metadata")
     if media_metadata and isinstance(media_metadata, dict):
         for img_id, img_data in media_metadata.items():
+            if not img_data or not isinstance(img_data, dict):
+                continue
             if "s" in img_data:
                 s = img_data["s"]
-                u = s.get("gif") or s.get("mp4") or s.get("u")
-            elif img_data.get("p"):
-                u = img_data["p"][-1].get("u")
+                if s and isinstance(s, dict):
+                    u = s.get("gif") or s.get("mp4") or s.get("u")
+                else:
+                    u = None
+            elif (
+                img_data.get("p") and isinstance(img_data["p"], list) and img_data["p"]
+            ):
+                u = (
+                    img_data["p"][-1].get("u")
+                    if isinstance(img_data["p"][-1], dict)
+                    else None
+                )
             else:
                 u = None
             if u:
@@ -325,15 +336,28 @@ def extract_media_urls(post):
     gallery_data = data.get("gallery_data")
     if gallery_data and isinstance(gallery_data, dict):
         for item in gallery_data.get("items", []):
+            if not item or not isinstance(item, dict):
+                continue
             media_id = item.get("media_id")
             if media_id and media_metadata:
                 img_data = media_metadata.get(media_id)
-                if img_data:
+                if img_data and isinstance(img_data, dict):
                     if "s" in img_data:
                         s = img_data["s"]
-                        u = s.get("gif") or s.get("mp4") or s.get("u")
-                    elif img_data.get("p"):
-                        u = img_data["p"][-1].get("u")
+                        if s and isinstance(s, dict):
+                            u = s.get("gif") or s.get("mp4") or s.get("u")
+                        else:
+                            u = None
+                    elif (
+                        img_data.get("p")
+                        and isinstance(img_data["p"], list)
+                        and img_data["p"]
+                    ):
+                        u = (
+                            img_data["p"][-1].get("u")
+                            if isinstance(img_data["p"][-1], dict)
+                            else None
+                        )
                     else:
                         u = None
                     if u:
@@ -726,9 +750,11 @@ def fetch_target_posts(ttype, name, sort_method="new"):
     db = get_db()
     new_posts_found = 0
     posts_processed = 0
+    posts_failed = 0
     oldest_seen = None
 
     rate_limited = False
+    failed_posts_list = []
 
     try:
         if ttype == "subreddit":
@@ -769,12 +795,43 @@ def fetch_target_posts(ttype, name, sort_method="new"):
                     rate_limited = True
                 logger.error(f"Failed to ingest post {p.id}: {e}")
                 ingester_errors_total.labels(error_type="ingest_post").inc()
+                posts_failed += 1
+                failed_posts_list.append({"post_id": p.id, "error": str(e)[:200]})
 
             if oldest_seen is None or created < oldest_seen:
                 oldest_seen = created
 
+        if posts_failed > 0:
+            try:
+                rd.lpush(
+                    f"failed_posts:{ttype}:{name}",
+                    json.dumps(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "sort_method": sort_method,
+                            "failed": posts_failed,
+                            "errors": failed_posts_list[-20:],
+                        }
+                    ),
+                )
+                rd.expire(f"failed_posts:{ttype}:{name}", 86400)
+            except Exception:
+                pass
+            try:
+                db = get_db()
+                cur = db.cursor()
+                for fp in failed_posts_list:
+                    cur.execute(
+                        "INSERT INTO scrape_failures(target_type, target_name, sort_method, post_id, error_message) VALUES(%s, %s, %s, %s, %s)",
+                        (ttype, name, sort_method, fp["post_id"], fp["error"]),
+                    )
+                db.commit()
+                cur.close()
+            except Exception as e:
+                logger.warning(f"Failed to log scrape failures to DB: {e}")
+
         logger.info(
-            f"[{sort_method}] {ttype}:{name} - {posts_processed} processed, {new_posts_found} new"
+            f"[{sort_method}] {ttype}:{name} - {posts_processed} fetched, {new_posts_found} new, {posts_failed} failed"
         )
 
     except Exception as e:
@@ -785,6 +842,32 @@ def fetch_target_posts(ttype, name, sort_method="new"):
         else:
             logger.error(f"Error scraping {ttype}:{name} ({sort_method}): {e}")
         ingester_errors_total.labels(error_type="fetch_target_posts").inc()
+        try:
+            rd.lpush(
+                f"failed_posts:{ttype}:{name}",
+                json.dumps(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "sort_method": sort_method,
+                        "failed": "target_error",
+                        "error": str(e)[:200],
+                    }
+                ),
+            )
+            rd.expire(f"failed_posts:{ttype}:{name}", 86400)
+        except Exception:
+            pass
+        try:
+            db = get_db()
+            cur = db.cursor()
+            cur.execute(
+                "INSERT INTO scrape_failures(target_type, target_name, sort_method, error_message) VALUES(%s, %s, %s, %s)",
+                (ttype, name, sort_method, str(e)[:200]),
+            )
+            db.commit()
+            cur.close()
+        except Exception as db_err:
+            logger.warning(f"Failed to log target scrape failure to DB: {db_err}")
 
     return new_posts_found, posts_processed, rate_limited
 

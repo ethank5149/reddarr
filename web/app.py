@@ -292,6 +292,19 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc DESC)",
     "CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author, created_utc DESC)",
     "CREATE INDEX IF NOT EXISTS idx_posts_hidden_created ON posts(hidden, created_utc DESC)",
+    # v10: scrape_failures table for tracking failed scrapes
+    """CREATE TABLE IF NOT EXISTS scrape_failures (
+        id SERIAL PRIMARY KEY,
+        target_type TEXT NOT NULL,
+        target_name TEXT NOT NULL,
+        sort_method TEXT,
+        post_id TEXT,
+        error_message TEXT,
+        created_at TIMESTAMP DEFAULT now()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_scrape_failures_target ON scrape_failures(target_type, target_name)",
+    "CREATE INDEX IF NOT EXISTS idx_scrape_failures_post_id ON scrape_failures(post_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scrape_failures_created_at ON scrape_failures(created_at)",
 ]
 
 
@@ -2085,6 +2098,43 @@ def target_failures(
             )
 
     return {"failures": failures}
+
+
+@app.get("/api/admin/target/{target_type}/{name}/scrape-failures")
+def target_scrape_failures(
+    target_type: str,
+    name: str,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Return scrape failures (failed post ingestions) for a specific target."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, post_id, error_message, sort_method, created_at
+            FROM scrape_failures
+            WHERE target_type = %s AND LOWER(target_name) = LOWER(%s)
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (target_type, name, limit),
+        )
+
+        failures = []
+        for row in cur.fetchall():
+            failures.append(
+                {
+                    "id": row[0],
+                    "post_id": row[1],
+                    "error_message": row[2],
+                    "sort_method": row[3],
+                    "created_at": row[4].isoformat() if row[4] else None,
+                }
+            )
+
+    return {"scrape_failures": failures}
 
 
 @app.post("/api/admin/target/{target_type}/{name}/scrape")
