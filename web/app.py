@@ -108,6 +108,9 @@ async def metrics_middleware(request: Request, call_next):
                 "/api/media",
                 "/api/admin/stats",
                 "/api/events",
+                "/api/admin/containers",
+                "/api/admin/container-logs",
+                "/api/admin/all-logs",
             ]
             if not any(path.startswith(p) for p in allowed_guest_get):
                 return JSONResponse(
@@ -3890,7 +3893,148 @@ async def event_stream():
                     issues.append(f"Thumb path not accessible: {THUMB_PATH}")
             except Exception as e:
                 issues.append(f"Thumb path: {str(e)}")
-            return {"status": "healthy" if not issues else "degraded", "issues": issues}
+    return {"status": "healthy" if not issues else "degraded", "issues": issues}
+
+
+@app.get("/api/admin/containers")
+def list_containers():
+    """List all containers and their basic info."""
+    import subprocess
+
+    CONTAINERS = [
+        "reddit_archive_db",
+        "reddit_archive_redis",
+        "reddit_archive_ingester",
+        "reddit_archive_downloader",
+        "reddit_archive_api",
+        "reddit_archive_postgres_exporter",
+        "reddit_archive_redis_exporter",
+        "reddit_archive_node_exporter",
+        "reddit_archive_prometheus",
+        "reddit_archive_grafana",
+    ]
+
+    result = []
+    for name in CONTAINERS:
+        try:
+            proc = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", name],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            status = "running" if proc.returncode == 0 and proc.stdout.strip() == "running" else "stopped"
+        except Exception:
+            status = "unknown"
+
+        result.append({"name": name, "status": status})
+
+    return result
+
+
+@app.get("/api/admin/container-logs")
+def get_container_logs(
+    container: str = Query(..., description="Container name"),
+    lines: int = Query(100, ge=1, le=1000, description="Number of lines to fetch"),
+    since: Optional[str] = Query(None, description="ISO timestamp to fetch logs since"),
+):
+    """Get logs from a specific container."""
+    import subprocess
+
+    CONTAINERS = [
+        "reddit_archive_db",
+        "reddit_archive_redis",
+        "reddit_archive_ingester",
+        "reddit_archive_downloader",
+        "reddit_archive_api",
+        "reddit_archive_postgres_exporter",
+        "reddit_archive_redis_exporter",
+        "reddit_archive_node_exporter",
+        "reddit_archive_prometheus",
+        "reddit_archive_grafana",
+    ]
+
+    if container not in CONTAINERS:
+        raise HTTPException(status_code=400, detail="Invalid container name")
+
+    cmd = ["docker", "logs", "--tail", str(lines), "--timestamps", container]
+    if since:
+        cmd.extend(["--since", since])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        output = result.stdout + result.stderr
+        log_lines = output.strip().split("\n") if output else []
+
+        parsed_logs = []
+        for line in log_lines:
+            if not line.strip():
+                continue
+            parts = line.split(" ", 1)
+            if len(parts) >= 2:
+                parsed_logs.append({"timestamp": parts[0], "message": parts[1]})
+            else:
+                parsed_logs.append({"timestamp": None, "message": line})
+
+        return {"container": container, "logs": parsed_logs[-lines:], "total": len(parsed_logs)}
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Log fetch timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch logs: {str(e)}")
+
+
+@app.get("/api/admin/all-logs")
+def get_all_logs(
+    lines: int = Query(100, ge=1, le=1000, description="Lines per container"),
+    since: Optional[str] = Query(None, description="ISO timestamp"),
+):
+    """Get fused logs from all containers, sorted by timestamp."""
+    import subprocess
+    from datetime import datetime
+
+    CONTAINERS = [
+        "reddit_archive_db",
+        "reddit_archive_redis",
+        "reddit_archive_ingester",
+        "reddit_archive_downloader",
+        "reddit_archive_api",
+    ]
+
+    all_logs = []
+
+    for container in CONTAINERS:
+        cmd = ["docker", "logs", "--tail", str(lines), "--timestamps", container]
+        if since:
+            cmd.extend(["--since", since])
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = result.stdout + result.stderr
+            log_lines = output.strip().split("\n") if output else []
+
+            for line in log_lines:
+                if not line.strip():
+                    continue
+                parts = line.split(" ", 1)
+                ts = parts[0] if len(parts) >= 2 else None
+                msg = parts[1] if len(parts) >= 2 else line
+                all_logs.append({"container": container, "timestamp": ts, "message": msg})
+        except Exception:
+            pass
+
+    all_logs.sort(key=lambda x: x["timestamp"] or "0")
+
+    return {"logs": all_logs[-lines*len(CONTAINERS):], "total": len(all_logs)}
 
         return await asyncio.to_thread(_check)
 

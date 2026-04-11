@@ -2,6 +2,11 @@ services:
   db:
     container_name: reddit_archive_db
     image: postgres:16
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_DB: reddit
       POSTGRES_USER: reddit
@@ -20,6 +25,11 @@ services:
   redis:
     container_name: reddit_archive_redis
     image: redis:7
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./redisdata:/data
     healthcheck:
@@ -33,6 +43,11 @@ services:
     build:
       context: ./ingester
       dockerfile: Dockerfile
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -62,6 +77,11 @@ services:
     build:
       context: ./downloader
       dockerfile: Dockerfile
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -87,6 +107,11 @@ services:
   api:
     container_name: reddit_archive_api
     build: ./web
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -114,6 +139,11 @@ services:
   postgres-exporter:
     container_name: reddit_archive_postgres_exporter
     image: prometheuscommunity/postgres-exporter:latest
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       DATA_SOURCE_NAME: "postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit?sslmode=disable"
     depends_on:
@@ -124,6 +154,11 @@ services:
   redis-exporter:
     container_name: reddit_archive_redis_exporter
     image: oliver006/redis_exporter:latest
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       REDIS_ADDR: "redis://redis:6379"
     depends_on:
@@ -134,6 +169,11 @@ services:
   node-exporter:
     container_name: reddit_archive_node_exporter
     image: prom/node-exporter:latest
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     command:
       - "--path.rootfs=/host"
       - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
@@ -145,6 +185,11 @@ services:
   prometheus:
     container_name: reddit_archive_prometheus
     image: prom/prometheus
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus/data:/prometheus
@@ -162,6 +207,11 @@ services:
   grafana:
     container_name: reddit_archive_grafana
     image: grafana/grafana
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_SECURITY_ADMIN_USER: admin

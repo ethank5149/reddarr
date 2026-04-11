@@ -368,9 +368,14 @@ def process_item(item, session=None):
                     conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
-                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
-                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
-                            (post_id, url),
+                            "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
+                            (
+                                post_id,
+                                url,
+                                f"HTTP {r.status_code}",
+                                f"HTTP {r.status_code}",
+                            ),
                         )
                         conn.commit()
                     break
@@ -554,9 +559,14 @@ def process_item(item, session=None):
                     conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
-                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
-                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
-                            (post_id, url),
+                            "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
+                            (
+                                post_id,
+                                url,
+                                "Video file not found after download",
+                                "Video file not found after download",
+                            ),
                         )
                         conn.commit()
                 break
@@ -635,9 +645,14 @@ def process_item(item, session=None):
                     conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
-                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
-                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
-                            (post_id, url),
+                            "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
+                            (
+                                post_id,
+                                url,
+                                f"Preview HTTP {r.status_code}",
+                                f"Preview HTTP {r.status_code}",
+                            ),
                         )
                         conn.commit()
                 break
@@ -713,9 +728,14 @@ def process_item(item, session=None):
                         conn.rollback()
                         with conn.cursor() as cur:
                             cur.execute(
-                                "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
-                                "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
-                                (post_id, url),
+                                "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
+                                "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
+                                (
+                                    post_id,
+                                    url,
+                                    f"Not an image: {content_type}",
+                                    f"Not an image: {content_type}",
+                                ),
                             )
                             conn.commit()
                     break
@@ -725,9 +745,9 @@ def process_item(item, session=None):
                     conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
-                            "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',0) "
-                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
-                            (post_id, url),
+                            "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
+                            "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
+                            (post_id, url, str(e)[:500], str(e)[:500]),
                         )
                         conn.commit()
                     break
@@ -767,9 +787,9 @@ def process_item(item, session=None):
                 conn.rollback()
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO media(post_id,url,status,retries) VALUES(%s,%s,'failed',1) "
-                        "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1",
-                        (post_id, url),
+                        "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',1,%s) "
+                        "ON CONFLICT (post_id, url) DO UPDATE SET status='failed', retries=media.retries + 1, error_message=%s",
+                        (post_id, url, str(e)[:500], str(e)[:500]),
                     )
                     conn.commit()
                     logger.info(f"Marked as failed in DB: {post_id}")

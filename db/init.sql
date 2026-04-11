@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS media (
     downloaded_at TIMESTAMP,
     status TEXT,
     retries INT DEFAULT 0,
+    error_message TEXT,
     UNIQUE(post_id, url)
 );
 
