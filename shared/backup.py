@@ -22,7 +22,7 @@ import tarfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from .database import get_connection
 from .config import get_db_url
@@ -41,15 +41,44 @@ def get_backup_cursor():
             cur.close()
 
 
+ALLOWED_TABLES = frozenset(
+    {
+        "posts",
+        "comments",
+        "media",
+        "targets",
+        "users",
+        "posts_history",
+        "comments_history",
+        "audit_log",
+        "backup_runs",
+        "integrity_checks",
+        "schema_version",
+        "scrape_failures",
+    }
+)
+
+ALLOWED_COLUMNS_CACHE: Dict[str, Set[str]] = {}
+
+
+def _validate_table_name(table: str) -> str:
+    """Validate table name to prevent SQL injection."""
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table name: {table}")
+    return table
+
+
 def get_table_row_count(table: str) -> int:
     """Get the total row count for a table."""
+    table = _validate_table_name(table)
     with get_backup_cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        cur.execute("SELECT COUNT(*) FROM %s", (table,))
         return cur.fetchone()[0]
 
 
 def get_table_columns(table: str) -> List[str]:
     """Get column names for a table."""
+    table = _validate_table_name(table)
     with get_backup_cursor() as cur:
         cur.execute(
             """
@@ -70,9 +99,11 @@ def export_table(
     limit: Optional[int] = None,
 ) -> int:
     """Export a table to JSONL format."""
+    table = _validate_table_name(table)
     columns = get_table_columns(table)
 
-    query = f"SELECT {','.join(columns)} FROM {table}"
+    col_list = ",".join(f'"{c}"' for c in columns)
+    query = f"SELECT {col_list} FROM {table}"
 
     if where_clause:
         query += f" WHERE {where_clause}"
@@ -98,6 +129,10 @@ def import_table(
     conflict_action: str = "update",
 ) -> int:
     """Import data from JSONL format."""
+    table = _validate_table_name(table)
+    if conflict_action not in ("update", "skip", "insert"):
+        raise ValueError(f"Invalid conflict_action: {conflict_action}")
+
     imported = 0
 
     with get_backup_cursor() as cur:
@@ -112,12 +147,14 @@ def import_table(
             col_names = ",".join(f'"{c}"' for c in cols)
 
             if conflict_action == "update":
-                set_clause = ",".join(f'"{c}=EXCLUDED.{c}' for c in cols if c != "id")
-                query = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO UPDATE SET {set_clause}"
+                set_clause = ",".join(
+                    f'"{c}"=EXCLUDED."{c}"' for c in cols if c.lower() != "id"
+                )
+                query = f'INSERT INTO "{table}" ({col_names}) VALUES ({placeholders}) ON CONFLICT DO UPDATE SET {set_clause}'
             elif conflict_action == "skip":
-                query = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+                query = f'INSERT INTO "{table}" ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING'
             else:
-                query = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})"
+                query = f'INSERT INTO "{table}" ({col_names}) VALUES ({placeholders})'
 
             cur.execute(query, vals)
             imported += 1
@@ -509,8 +546,8 @@ def get_audit_stats() -> Dict[str, Any]:
         """)
         stats["media_by_status"] = {row[0]: row[1] for row in cur.fetchall()}
 
-        cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = true")
-        stats["hidden_posts"] = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = true")
+        stats["excluded_posts"] = cur.fetchone()[0]
 
     return stats
 
@@ -529,7 +566,8 @@ def vacuum_analyze(tables: Optional[List[str]] = None) -> None:
 
     with get_backup_cursor() as cur:
         for table in tables:
-            cur.execute(f"VACUUM ANALYZE {table}")
+            table = _validate_table_name(table)
+            cur.execute(f'VACUUM ANALYZE "{table}"')
             logger.info(f"Vacuumed and analyzed: {table}")
 
 

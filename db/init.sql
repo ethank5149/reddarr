@@ -36,23 +36,29 @@ CREATE TABLE IF NOT EXISTS posts (
     raw JSONB,
     tsv tsvector,
     ingested_at TIMESTAMP DEFAULT now(),
-    hidden BOOLEAN DEFAULT FALSE NOT NULL,
-    hidden_at TIMESTAMP
+    excluded BOOLEAN DEFAULT FALSE NOT NULL,  -- Excluded from public view (like a blacklist)
+    excluded_at TIMESTAMP,
+    archived BOOLEAN DEFAULT FALSE NOT NULL, -- Archived for long-term preservation
+    archived_at TIMESTAMP
 );
 
--- Add columns to existing installations
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP DEFAULT now();
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE NOT NULL;
-ALTER TABLE posts ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMP;
+-- Add columns to existing installations (with migration from legacy 'hidden')
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS excluded BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS excluded_at TIMESTAMP;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
 
--- Migrate legacy 'archived' column if it exists
+-- Migrate legacy 'hidden' column to 'excluded' if it exists
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'posts' AND column_name = 'archived'
+        WHERE table_name = 'posts' AND column_name = 'hidden'
     ) THEN
-        UPDATE posts SET hidden = archived WHERE hidden IS NULL;
+        -- Migrate existing hidden data to excluded
+        UPDATE posts SET excluded = COALESCE(hidden, FALSE) WHERE excluded IS NULL OR excluded = FALSE;
+        -- For backward compatibility, also set archived for already-hidden posts
+        UPDATE posts SET archived = hidden WHERE archived IS NULL OR archived = FALSE;
     END IF;
 END $$;
 
@@ -96,11 +102,56 @@ CREATE INDEX IF NOT EXISTS idx_posts_created_utc ON posts(created_utc);
 CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets(enabled);
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit_lower ON posts(LOWER(subreddit));
 CREATE INDEX IF NOT EXISTS idx_posts_author_lower ON posts(LOWER(author));
-CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden);
+CREATE INDEX IF NOT EXISTS idx_posts_excluded ON posts(excluded);
+CREATE INDEX IF NOT EXISTS idx_posts_archived ON posts(archived);
 CREATE INDEX IF NOT EXISTS idx_media_status ON media(status);
 CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author, created_utc DESC);
-CREATE INDEX IF NOT EXISTS idx_posts_hidden_created ON posts(hidden, created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_excluded_created ON posts(excluded, created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_archived_created ON posts(archived, created_utc DESC);
+CREATE INDEX IF NOT EXISTS idx_media_post_id_url ON media(post_id, url);
+
+-- Foreign Key Constraints (CRITICAL for data integrity)
+ALTER TABLE posts DROP CONSTRAINT IF EXISTS fk_posts_subreddit;
+ALTER TABLE posts ADD CONSTRAINT fk_posts_subreddit 
+    FOREIGN KEY (subreddit) REFERENCES targets(name) ON DELETE SET NULL;
+
+ALTER TABLE comments DROP CONSTRAINT IF EXISTS fk_comments_post;
+ALTER TABLE comments ADD CONSTRAINT fk_comments_post 
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+
+ALTER TABLE media DROP CONSTRAINT IF EXISTS fk_media_post;
+ALTER TABLE media ADD CONSTRAINT fk_media_post 
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+
+ALTER TABLE posts_history DROP CONSTRAINT IF EXISTS fk_posts_history_post;
+ALTER TABLE posts_history ADD CONSTRAINT fk_posts_history_post 
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+
+ALTER TABLE comments_history DROP CONSTRAINT IF EXISTS fk_comments_history_comment;
+ALTER TABLE comments_history ADD CONSTRAINT fk_comments_history_comment 
+    FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE;
+
+ALTER TABLE comments_history DROP CONSTRAINT IF EXISTS fk_comments_history_post;
+ALTER TABLE comments_history ADD CONSTRAINT fk_comments_history_post 
+    FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE;
+
+-- Add check constraints for data validation
+ALTER TABLE posts DROP CONSTRAINT IF EXISTS chk_posts_created_utc_future;
+ALTER TABLE posts ADD CONSTRAINT chk_posts_created_utc_future 
+    CHECK (created_utc IS NULL OR created_utc <= now() + interval '1 day');
+
+ALTER TABLE comments DROP CONSTRAINT IF EXISTS chk_comments_created_utc_future;
+ALTER TABLE comments ADD CONSTRAINT chk_comments_created_utc_future 
+    CHECK (created_utc IS NULL OR created_utc <= now() + interval '1 day');
+
+ALTER TABLE media DROP CONSTRAINT IF EXISTS chk_media_retries_nonnegative;
+ALTER TABLE media ADD CONSTRAINT chk_media_retries_nonnegative 
+    CHECK (retries >= 0);
+
+ALTER TABLE targets DROP CONSTRAINT IF EXISTS chk_targets_status_valid;
+ALTER TABLE targets ADD CONSTRAINT chk_targets_status_valid 
+    CHECK (status IN ('active', 'taken_down', 'deleted'));
 
 -- Full-text search triggers
 CREATE OR REPLACE FUNCTION posts_tsv_trigger() RETURNS trigger AS $$

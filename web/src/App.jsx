@@ -590,7 +590,7 @@ export default function App(){
           video_url: r.data.video_url ?? prev?.video_url,
           is_video: r.data.is_video ?? prev?.is_video,
           url: r.data.image_url ?? prev?.url,
-          hidden: r.data.hidden ?? prev?.hidden,
+          excluded: r.data.excluded ?? prev?.excluded,
           image_urls: r.data.image_urls ?? prev?.image_urls,
           video_urls: r.data.video_urls ?? prev?.video_urls,
         } : prev)
@@ -598,10 +598,10 @@ export default function App(){
       .catch(()=>{})
   },[selectedPost?.id])
 
-  function buildPostsQuery(offset, filtersOverride, hiddenFlag=false){
+  function buildPostsQuery(offset, filtersOverride, excludedFlag=false){
     const f = filtersOverride || filtersRef.current
     const params = new URLSearchParams({ limit:"50", offset:String(offset), _t: Date.now().toString() })
-    if(hiddenFlag) params.set("hidden","true")
+    if(excludedFlag) params.set("excluded","true")
     if(f.subreddit) params.set("subreddit", f.subreddit)
     if(f.author) params.set("author", f.author)
     if(f.mediaTypes && f.mediaTypes.length > 0){
@@ -624,7 +624,7 @@ export default function App(){
       is_video:p.is_video, selftext:p.selftext,
       subreddit:p.subreddit, author:p.author,
       created_utc:p.created_utc, thumb_url:p.thumb_url, preview_url:p.preview_url,
-      hidden:p.hidden, ingested_at:p.ingested_at
+      excluded:p.excluded, ingested_at:p.ingested_at
     }
   }
 
@@ -719,8 +719,8 @@ export default function App(){
         setPosts(prev=>prev.filter(p=>p.id!==postId))
         setTargetPosts(prev=>prev.filter(p=>p.id!==postId))
         setArchivePosts([]); archiveOffsetRef.current=0
-        if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,hidden:true}))
-        toastSuccess("Post hidden")
+        if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,excluded:true}))
+        toastSuccess("Post excluded")
       })
       .catch(()=>toastError("Failed to hide post"))
   }
@@ -730,8 +730,8 @@ export default function App(){
       .then(()=>{
         setArchivePosts(prev=>prev.filter(p=>p.id!==postId))
         setPosts([]); offsetRef.current=0
-        if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,hidden:false}))
-        toastSuccess("Post unhidden")
+        if(selectedPost?.id===postId) setSelectedPost(prev=>({...prev,excluded:false}))
+        toastSuccess("Post included")
       })
       .catch(()=>toastError("Failed to unhide post"))
   }
@@ -760,7 +760,7 @@ export default function App(){
     clearTimeout(archiveSearchTimeout.current)
     if(!e.target.value.trim()){ setArchiveSearchResults(null); return }
     archiveSearchTimeout.current=setTimeout(()=>{
-      axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}&hidden=true`)
+      axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}&excluded=true`)
         .then(r=>setArchiveSearchResults(r.data.map(p=>({id:p.id,title:p.title,subreddit:p.subreddit,author:p.author,created_utc:p.created_utc}))))
     },300)
   }
@@ -1247,7 +1247,7 @@ export default function App(){
   }
 
   function runArchiveAll(){
-    if(!window.confirm(`Archive ALL unhidden posts?`)) return
+    if(!window.confirm(`Archive ALL non-archived posts?`)) return
     setArchiveJobResult(null)
     axios.post("/api/admin/archive/all")
       .then(r=>{
@@ -2078,7 +2078,7 @@ export default function App(){
                 ))}
               </tbody>
             </table>
-            {auditPosts.length===0 && !auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#5a7b9a"}}>No hidden posts.</div>}
+            {auditPosts.length===0 && !auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#5a7b9a"}}>No audit issues found.</div>}
             {auditLoading && <div style={{padding:"30px",textAlign:"center",color:"#5a7b9a"}}>Loading…</div>}
           </div>
           {auditPosts.length > 0 && (
@@ -2153,7 +2153,7 @@ export default function App(){
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:"12px",marginBottom:"24px"}}>
               {[
                 {label:"Visible",value:adminData.total_posts,color:"#35c5f4"},
-                {label:"Hidden",value:adminData.hidden_posts,color:"#8aa4bd"},
+                {label:"Excluded",value:adminData.excluded_posts,color:"#8aa4bd"},
                 {label:"Comments",value:adminData.total_comments,color:"#7193ff"},
                 {label:"Downloaded",value:adminData.downloaded_media,color:"#46d160"},
                 {label:"Queued",value:adminData.pending_media,color:"#f9c300"},
@@ -2844,7 +2844,7 @@ export default function App(){
                 {hasActiveArchiveFilters() && <button onClick={clearArchiveFilters} style={{padding:"8px 12px",background:"#1c2a3f",border:"1px solid #35c5f444",borderRadius:"3px",color:"#5fd4f8",cursor:"pointer",fontSize:"12px",fontWeight:"500"}}>✕ Clear</button>}
                 <div style={{position:"relative"}}>
                   <span style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",color:"#5a7b9a",fontSize:"15px"}}>⌕</span>
-                  <input type="search" placeholder="Search hidden…" autoComplete="off" spellCheck={false} value={archiveSearch} onChange={handleArchiveSearch}
+                  <input type="search" placeholder="Search archived…" autoComplete="off" spellCheck={false} value={archiveSearch} onChange={handleArchiveSearch}
                     style={{padding:"8px 12px 8px 36px",borderRadius:"3px",border:"1px solid #333",width:"200px",background:"#161d2f",color:"#f5f7fa",fontSize:"13px",outline:"none"}}/>
                 </div>
               </div>
@@ -2866,7 +2866,7 @@ export default function App(){
         <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
           {!archiveSearchResults && (
             <>
-              {archivePosts.length===0 && !archiveIsLoading && <div style={{padding:"60px",textAlign:"center",color:"#5a7b9a"}}>No hidden posts yet.</div>}
+              {archivePosts.length===0 && !archiveIsLoading && <div style={{padding:"60px",textAlign:"center",color:"#5a7b9a"}}>No archived posts yet.</div>}
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:"16px"}}>
                 {archivePosts.map(p=><PostCard key={p.id} p={p} isArchive/>)}
               </div>
@@ -2979,7 +2979,7 @@ export default function App(){
                 {role === "admin" && (
                   <>
                     <button onClick={()=>deletePost(selectedPost.id)} style={{padding:"11px 18px",background:"#3a1a1a",border:"1px solid #5a2a2a",borderRadius:"3px",color:"#ff6666",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>🗑 Delete</button>
-                    {selectedPost.hidden ? (
+                    {selectedPost.excluded ? (
                       <button onClick={()=>unhidePost(selectedPost.id)} style={{padding:"11px 18px",background:"#1e3a1e",border:"1px solid #2a5a2a",borderRadius:"3px",color:"#46d160",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>↩ Unhide</button>
                     ) : (
                       <button onClick={()=>hidePost(selectedPost.id)} style={{padding:"11px 18px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px",fontWeight:"600",minHeight:"44px"}}>👁 Hide</button>

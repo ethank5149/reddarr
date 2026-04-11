@@ -249,8 +249,8 @@ def get_audit_stats() -> Dict[str, Any]:
         """)
         stats["media_by_status"] = {row[0]: row[1] for row in cur.fetchall()}
 
-        cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = true")
-        stats["hidden_posts"] = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = true")
+        stats["excluded_posts"] = cur.fetchone()[0]
 
     return stats
 

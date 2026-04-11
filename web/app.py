@@ -221,12 +221,12 @@ THUMB_PATH = os.getenv("THUMB_PATH", os.path.join(ARCHIVE_PATH, ".thumbs"))
 FAILED_TARGETS_FILE = os.getenv(
     "FAILED_TARGETS_FILE", os.path.join(ARCHIVE_PATH, "failed_targets.txt")
 )
-# Path where hidden posts' media files are moved to
-HIDDEN_MEDIA_PATH = os.getenv(
-    "HIDDEN_MEDIA_PATH", os.path.join(ARCHIVE_PATH, ".hidden")
+# Path where excluded posts' media files are moved to
+EXCLUDED_MEDIA_PATH = os.getenv(
+    "EXCLUDED_MEDIA_PATH", os.path.join(ARCHIVE_PATH, ".excluded")
 )
-# Thumbnails for hidden posts mirror under THUMB_PATH/.hidden
-HIDDEN_THUMB_PATH = os.path.join(THUMB_PATH, ".hidden")
+# Thumbnails for excluded posts mirror under THUMB_PATH/.excluded
+EXCLUDED_THUMB_PATH = os.path.join(THUMB_PATH, ".excluded")
 
 connection_pool = None
 redis_client = None
@@ -235,9 +235,9 @@ redis_client = None
 _MIGRATIONS = [
     # Ensure columns added in v4 exist on databases initialised before this version
     "ALTER TABLE posts ADD COLUMN IF NOT EXISTS ingested_at TIMESTAMP DEFAULT now()",
-    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE NOT NULL",
-    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS hidden_at TIMESTAMP",
-    "CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts(hidden)",
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS excluded BOOLEAN DEFAULT FALSE NOT NULL",
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS excluded_at TIMESTAMP",
+    "CREATE INDEX IF NOT EXISTS idx_posts_excluded ON posts(excluded)",
     "CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts(ingested_at)",
     # v5: History tables for preserving all post/comment versions
     """CREATE TABLE IF NOT EXISTS posts_history (
@@ -291,7 +291,7 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_media_status ON media(status)",
     "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts(subreddit, created_utc DESC)",
     "CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author, created_utc DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_posts_hidden_created ON posts(hidden, created_utc DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_posts_excluded_created ON posts(excluded, created_utc DESC)",
     # v10: scrape_failures table for tracking failed scrapes
     """CREATE TABLE IF NOT EXISTS scrape_failures (
         id SERIAL PRIMARY KEY,
@@ -382,7 +382,7 @@ def startup():
         logger.warning(f"Redis not available (queue features disabled): {e}")
         redis_client = None
 
-    for d in [HIDDEN_MEDIA_PATH, HIDDEN_THUMB_PATH]:
+    for d in [EXCLUDED_MEDIA_PATH, EXCLUDED_THUMB_PATH]:
         try:
             os.makedirs(d, exist_ok=True)
         except Exception:
@@ -557,9 +557,9 @@ def media(path: str):
     return _safe_file_response(ARCHIVE_PATH, path)
 
 
-@app.get("/hidden-media/{path:path}")
-def hidden_media(path: str):
-    return _safe_file_response(HIDDEN_MEDIA_PATH, path)
+@app.get("/excluded-media/{path:path}")
+def excluded_media(path: str):
+    return _safe_file_response(EXCLUDED_MEDIA_PATH, path)
 
 
 @app.get("/thumb/{path:path}")
@@ -567,9 +567,9 @@ def thumb(path: str):
     return _safe_file_response(THUMB_PATH, path)
 
 
-@app.get("/hidden-thumb/{path:path}")
-def hidden_thumb(path: str):
-    return _safe_file_response(HIDDEN_THUMB_PATH, path)
+@app.get("/excluded-thumb/{path:path}")
+def excluded_thumb(path: str):
+    return _safe_file_response(EXCLUDED_THUMB_PATH, path)
 
 
 @app.get("/")
@@ -648,12 +648,12 @@ def _extract_video_url(url: Optional[str], raw: Optional[dict]) -> Optional[str]
 
 
 def _build_media_url(file_path: str) -> Optional[str]:
-    """Return the API URL for a media file, handling both regular and hidden paths."""
+    """Return the API URL for a media file, handling both regular and excluded paths."""
     if not file_path:
         return None
-    if file_path.startswith(HIDDEN_MEDIA_PATH):
-        rel = os.path.relpath(file_path, HIDDEN_MEDIA_PATH)
-        return f"/hidden-media/{rel}"
+    if file_path.startswith(EXCLUDED_MEDIA_PATH):
+        rel = os.path.relpath(file_path, EXCLUDED_MEDIA_PATH)
+        return f"/excluded-media/{rel}"
     else:
         try:
             rel = os.path.relpath(file_path, ARCHIVE_PATH)
@@ -663,12 +663,12 @@ def _build_media_url(file_path: str) -> Optional[str]:
 
 
 def _build_thumb_url(thumb_path: str) -> Optional[str]:
-    """Return the API URL for a thumbnail, handling both regular and hidden paths."""
+    """Return the API URL for a thumbnail, handling both regular and excluded paths."""
     if not thumb_path:
         return None
-    if thumb_path.startswith(HIDDEN_THUMB_PATH):
-        rel = os.path.relpath(thumb_path, HIDDEN_THUMB_PATH)
-        return f"/hidden-thumb/{rel}"
+    if thumb_path.startswith(EXCLUDED_THUMB_PATH):
+        rel = os.path.relpath(thumb_path, EXCLUDED_THUMB_PATH)
+        return f"/excluded-thumb/{rel}"
     else:
         try:
             rel = os.path.relpath(thumb_path, THUMB_PATH)
@@ -688,7 +688,7 @@ def posts(
     has_media: Optional[bool] = None,
     media_type: Optional[List[str]] = Query(None),
     nsfw: Optional[str] = None,  # "include" | "exclude" | None (show all)
-    hidden: Optional[bool] = Query(None),  # default: all posts (None shows all)
+    excluded: Optional[bool] = Query(None),  # default: all posts (None shows all)
 ):
     # Whitelist sort fields to prevent SQL injection
     allowed_sort_by = {"created_utc", "title", "ingested_at"}
@@ -702,12 +702,12 @@ def posts(
         where_clauses = []
         params: list[Any] = []
 
-        # Archive/Hidden filter - None shows all, True shows hidden, False shows visible
-        if hidden is not None:
-            if hidden:
-                where_clauses.append("p.hidden = TRUE")
+        # Archive/Excluded filter - None shows all, True shows excluded, False shows visible
+        if excluded is not None:
+            if excluded:
+                where_clauses.append("p.excluded = TRUE")
             else:
-                where_clauses.append("p.hidden = FALSE")
+                where_clauses.append("p.excluded = FALSE")
 
         if subreddit:
             where_clauses.append("LOWER(subreddit) = LOWER(%s)")
@@ -774,7 +774,7 @@ def posts(
 
         # Main query
         query = f"""
-            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.excluded,
                    p.raw->>'selftext' as selftext,
                    p.raw->>'created_utc' as raw_created_utc,
                    p.ingested_at
@@ -812,7 +812,7 @@ def posts(
                 subreddit,
                 author,
                 created_utc,
-                is_hidden,
+                is_excluded,
                 selftext,
                 raw_created_ts,
                 ingested_at,
@@ -931,7 +931,7 @@ def posts(
                     "ingested_at": ingested_at.isoformat() if ingested_at else None,
                     "thumb_url": thumb_url,
                     "preview_url": preview_url,
-                    "hidden": is_hidden,
+                    "excluded": is_excluded,
                 }
             )
 
@@ -943,7 +943,7 @@ def get_post(post_id: str):
     with get_db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, url, media_url, raw, subreddit, author, created_utc, hidden
+            SELECT id, title, url, media_url, raw, subreddit, author, created_utc, excluded
             FROM posts WHERE id = %s
         """,
             (post_id,),
@@ -961,7 +961,7 @@ def get_post(post_id: str):
             subreddit,
             author,
             created_utc,
-            is_hidden,
+            is_excluded,
         ) = row
 
         cur.execute(
@@ -1078,7 +1078,7 @@ def get_post(post_id: str):
             "subreddit": subreddit,
             "author": author,
             "created_utc": created_utc.isoformat() if created_utc else None,
-            "hidden": is_hidden,
+            "excluded": is_excluded,
             "comments": comments,
         }
 
@@ -1172,13 +1172,13 @@ def _move_post_media(post_id: str, archive: bool):
     Returns (files_moved, errors)."""
     if archive:
         src_media_root = ARCHIVE_PATH
-        dst_media_root = HIDDEN_MEDIA_PATH
+        dst_media_root = EXCLUDED_MEDIA_PATH
         src_thumb_root = THUMB_PATH
-        dst_thumb_root = HIDDEN_THUMB_PATH
+        dst_thumb_root = EXCLUDED_THUMB_PATH
     else:
-        src_media_root = HIDDEN_MEDIA_PATH
+        src_media_root = EXCLUDED_MEDIA_PATH
         dst_media_root = ARCHIVE_PATH
-        src_thumb_root = HIDDEN_THUMB_PATH
+        src_thumb_root = EXCLUDED_THUMB_PATH
         dst_thumb_root = THUMB_PATH
 
     files_moved = 0
@@ -1247,22 +1247,22 @@ def _move_post_media(post_id: str, archive: bool):
 
 @app.post("/api/post/{post_id}/hide")
 def hide_post(post_id: str):
-    """Mark a post as hidden and move its media files to the hidden storage directory."""
+    """Mark a post as excluded and move its media files to the excluded storage directory."""
     with get_db_cursor() as cur:
-        cur.execute("SELECT id, hidden FROM posts WHERE id = %s", (post_id,))
+        cur.execute("SELECT id, excluded FROM posts WHERE id = %s", (post_id,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Post not found")
         if row[1]:
-            return {"status": "already_hidden", "post_id": post_id}
+            return {"status": "already_excluded", "post_id": post_id}
 
     # Move media files
     files_moved, errors = _move_post_media(post_id, archive=True)
 
-    # Update post hidden flag
+    # Update post excluded flag
     with get_db_cursor() as cur:
         cur.execute(
-            "UPDATE posts SET hidden = TRUE, hidden_at = now() WHERE id = %s",
+            "UPDATE posts SET excluded = TRUE, excluded_at = now() WHERE id = %s",
             (post_id,),
         )
 
@@ -1278,20 +1278,20 @@ def hide_post(post_id: str):
 def unhide_post(post_id: str):
     """Unhide a post and move its media files back to the active directory."""
     with get_db_cursor() as cur:
-        cur.execute("SELECT id, hidden FROM posts WHERE id = %s", (post_id,))
+        cur.execute("SELECT id, excluded FROM posts WHERE id = %s", (post_id,))
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Post not found")
         if not row[1]:
-            return {"status": "not_hidden", "post_id": post_id}
+            return {"status": "not_excluded", "post_id": post_id}
 
     # Move media files back
     files_moved, errors = _move_post_media(post_id, archive=False)
 
-    # Update post hidden flag
+    # Update post excluded flag
     with get_db_cursor() as cur:
         cur.execute(
-            "UPDATE posts SET hidden = FALSE, hidden_at = NULL WHERE id = %s",
+            "UPDATE posts SET excluded = FALSE, excluded_at = NULL WHERE id = %s",
             (post_id,),
         )
 
@@ -1353,7 +1353,7 @@ def _delete_post_media(post_id: str):
 @app.delete("/api/post/{post_id}")
 def delete_post(post_id: str):
     """Delete a post and all its media from the database and disk.
-    Does NOT blacklist the post - it can be re-hidden on next scrape."""
+    Does NOT blacklist the post - it can be re-excluded on next scrape."""
     conn = None
     cur = None
     try:
@@ -1418,7 +1418,7 @@ def search(
     q: str,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    hidden: Optional[bool] = Query(False),
+    excluded: Optional[bool] = Query(False),
 ):
     with get_db_cursor() as cur:
         cur.execute(
@@ -1426,11 +1426,11 @@ def search(
             SELECT id, title, subreddit, author, created_utc, url, media_url, raw
             FROM posts
             WHERE tsv @@ plainto_tsquery(%s)
-              AND hidden = %s
+              AND excluded = %s
             ORDER BY created_utc DESC
             LIMIT %s OFFSET %s
         """,
-            (q, hidden, limit, offset),
+            (q, excluded, limit, offset),
         )
 
         results = []
@@ -1682,11 +1682,11 @@ def admin_stats():
 
         cur.execute("""
             SELECT
-                COUNT(*) FILTER (WHERE hidden = FALSE),
-                COUNT(*) FILTER (WHERE hidden = TRUE)
+                COUNT(*) FILTER (WHERE excluded = FALSE),
+                COUNT(*) FILTER (WHERE excluded = TRUE)
             FROM posts
         """)
-        total_posts, hidden_posts = cur.fetchone()
+        total_posts, excluded_posts = cur.fetchone()
 
         cur.execute("""
             SELECT
@@ -1704,7 +1704,7 @@ def admin_stats():
             SELECT DATE(created_utc) as day, COUNT(*)
             FROM posts
             WHERE created_utc > now() - INTERVAL '7 days'
-              AND hidden = FALSE
+              AND excluded = FALSE
             GROUP BY DATE(created_utc)
             ORDER BY day
         """)
@@ -1713,7 +1713,7 @@ def admin_stats():
         return {
             "targets": targets,
             "total_posts": total_posts,
-            "hidden_posts": hidden_posts,
+            "excluded_posts": excluded_posts,
             "total_comments": total_comments,
             "downloaded_media": downloaded_media,
             "total_media": total_media,
@@ -2294,10 +2294,10 @@ def backfill_status():
 def audit_summary():
     """Get summary statistics for the audit dashboard.
 
-    Shows all posts since all scraped content is considered fully hidden.
+    Shows all posts since all scraped content is considered fully excluded.
     """
     with get_db_cursor() as cur:
-        # Total posts (all are considered hidden since they're fully scraped)
+        # Total posts (all are considered excluded since they're fully scraped)
         cur.execute("SELECT COUNT(*) FROM posts")
         total_posts = cur.fetchone()[0] or 0
 
@@ -2345,7 +2345,9 @@ def audit_summary():
         media_missing = cur.fetchone()[0] or 0
 
         return {
-            "total_hidden_posts": total_posts,
+            "total_posts": total_posts,
+            "total_hidden_posts": total_posts,  # Legacy name for backward compatibility
+            "total_excluded_posts": total_posts,
             "posts_with_media": posts_with_media,
             "posts_all_ok": posts_all_downloaded,
             "posts_with_issues": posts_with_missing,
@@ -2503,7 +2505,7 @@ def audit_post_detail(post_id: str):
         cur.execute(
             """
             SELECT id, title, subreddit, author, created_utc, url, raw
-            FROM posts WHERE id = %s AND hidden = TRUE
+            FROM posts WHERE id = %s AND excluded = TRUE
         """,
             (post_id,),
         )
@@ -2909,13 +2911,13 @@ _thumb_jobs_lock = threading.Lock()
 def _make_thumb(src_path: str) -> str:
     """Generate a .thumb.jpg for *src_path* inside THUMB_PATH, mirroring the
     directory structure relative to ARCHIVE_PATH.  Returns the thumb path."""
-    # Handle hidden files (in HIDDEN_MEDIA_PATH) -> put thumbs in HIDDEN_THUMB_PATH
-    if src_path.startswith(HIDDEN_MEDIA_PATH):
+    # Handle excluded files (in EXCLUDED_MEDIA_PATH) -> put thumbs in EXCLUDED_THUMB_PATH
+    if src_path.startswith(EXCLUDED_MEDIA_PATH):
         try:
-            rel = os.path.relpath(src_path, HIDDEN_MEDIA_PATH)
+            rel = os.path.relpath(src_path, EXCLUDED_MEDIA_PATH)
         except ValueError:
             rel = Path(src_path).name
-        thumb_subdir = Path(HIDDEN_THUMB_PATH) / Path(rel).parent
+        thumb_subdir = Path(EXCLUDED_THUMB_PATH) / Path(rel).parent
     else:
         try:
             rel = os.path.relpath(src_path, ARCHIVE_PATH)
@@ -3048,7 +3050,7 @@ def thumb_stats():
     # Count .thumb.jpg files across both thumb directories
     thumb_files_on_disk = 0
     thumb_bytes = 0
-    for thumb_root in [THUMB_PATH, HIDDEN_THUMB_PATH]:
+    for thumb_root in [THUMB_PATH, EXCLUDED_THUMB_PATH]:
         try:
             for dirpath, _, filenames in os.walk(thumb_root):
                 for fn in filenames:
@@ -3158,7 +3160,7 @@ def thumb_purge_orphans():
     freed_bytes = 0
     errors = []
 
-    for thumb_root in [THUMB_PATH, HIDDEN_THUMB_PATH]:
+    for thumb_root in [THUMB_PATH, EXCLUDED_THUMB_PATH]:
         try:
             for dirpath, _, filenames in os.walk(thumb_root):
                 for fn in filenames:
@@ -3225,12 +3227,12 @@ def _run_bulk_archive_job(job_id: str, post_ids: list, archive: bool):
                 cur = conn.cursor()
                 if archive:
                     cur.execute(
-                        "UPDATE posts SET hidden = TRUE, hidden_at = now() WHERE id = %s",
+                        "UPDATE posts SET excluded = TRUE, excluded_at = now() WHERE id = %s",
                         (post_id,),
                     )
                 else:
                     cur.execute(
-                        "UPDATE posts SET hidden = FALSE, hidden_at = NULL WHERE id = %s",
+                        "UPDATE posts SET excluded = FALSE, excluded_at = NULL WHERE id = %s",
                         (post_id,),
                     )
                 conn.commit()
@@ -3276,32 +3278,36 @@ def _run_bulk_archive_job(job_id: str, post_ids: list, archive: bool):
 
 @app.get("/api/admin/archive/stats")
 def archive_stats():
-    """Return unhidden post counts broken down by target and date buckets."""
+    """Return excluded and archived post counts broken down by target and date buckets."""
     with get_db_cursor() as cur:
-        # Total unhidden / hidden
-        cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = FALSE")
-        total_unhidden = cur.fetchone()[0]
+        # Total excluded / archived
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
+        total_unexcluded = cur.fetchone()[0]
 
-        cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = TRUE")
-        total_hidden = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = TRUE")
+        total_excluded = cur.fetchone()[0]
 
-        # Per subreddit target breakdown (unhidden)
+        # Archived posts (archived for long-term preservation)
+        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
+        total_archived = cur.fetchone()[0]
+
+        # Per subreddit target breakdown (unexcluded -> excluded)
         cur.execute("""
             SELECT p.subreddit, COUNT(*) as cnt
             FROM posts p
-            WHERE p.hidden = FALSE
+            WHERE p.excluded = FALSE
             GROUP BY p.subreddit
             ORDER BY cnt DESC
             LIMIT 50
         """)
         by_subreddit = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
 
-        # Per user target breakdown (unhidden)
+        # Per user target breakdown (unexcluded -> excluded)
         cur.execute("""
             SELECT p.author, COUNT(*) as cnt
             FROM posts p
             JOIN targets t ON t.type = 'user' AND LOWER(t.name) = LOWER(p.author)
-            WHERE p.hidden = FALSE
+            WHERE p.excluded = FALSE
             GROUP BY p.author
             ORDER BY cnt DESC
             LIMIT 50
@@ -3320,7 +3326,7 @@ def archive_stats():
                                    AND created_utc >= now() - INTERVAL '90 days') as age_1m_3m,
                 COUNT(*) FILTER (WHERE created_utc >= now() - INTERVAL '30 days') as newer_than_1m
             FROM posts
-            WHERE hidden = FALSE
+            WHERE excluded = FALSE
         """)
         row = cur.fetchone()
         by_age = {
@@ -3340,11 +3346,11 @@ def archive_stats():
             ]
 
     return {
-        "total_unhidden": total_unhidden,
-        "total_hidden": total_hidden,
-        "total_posts": total_unhidden + total_hidden,
+        "total_excluded": total_excluded,
+        "total_archived": total_archived,
+        "total_posts": total_excluded + total_archived,
         "archive_pct": round(
-            total_hidden / max(1, total_unhidden + total_hidden) * 100, 1
+            total_archived / max(1, total_excluded + total_archived) * 100, 1
         ),
         "by_subreddit": by_subreddit,
         "by_user": by_user,
@@ -3369,7 +3375,7 @@ def bulk_archive(
     - before_days: only posts older than N days
     - media_status: 'done' | 'pending' | 'none' (posts with no media)
     """
-    conditions = ["hidden = FALSE"]
+    conditions = ["excluded = FALSE"]
     params = []
 
     if target_type and target_name:
@@ -3444,15 +3450,15 @@ def bulk_archive(
 
 @app.post("/api/admin/archive/all")
 def archive_all_posts():
-    """Archive every unhidden post. Starts a background job."""
+    """Archive every unexcluded -> excluded post. Starts a background job."""
     with get_db_cursor() as cur:
         cur.execute(
-            "SELECT id FROM posts WHERE hidden = FALSE ORDER BY created_utc ASC"
+            "SELECT id FROM posts WHERE excluded = FALSE ORDER BY created_utc ASC"
         )
         post_ids = [r[0] for r in cur.fetchall()]
 
     if not post_ids:
-        return {"job_id": None, "total": 0, "message": "All posts are already hidden"}
+        return {"job_id": None, "total": 0, "message": "All posts are already excluded"}
 
     job_id = str(uuid.uuid4())
     with _archive_jobs_lock:
@@ -3478,19 +3484,19 @@ def archive_all_posts():
 
 @app.post("/api/admin/target/{target_type}/{name}/archive-all")
 def archive_all_target(target_type: str, name: str):
-    """Archive all unhidden posts belonging to a specific target."""
+    """Archive all unexcluded -> excluded posts belonging to a specific target."""
     if target_type not in ("subreddit", "user"):
         raise HTTPException(status_code=400, detail="Invalid target type")
 
     with get_db_cursor() as cur:
         if target_type == "subreddit":
             cur.execute(
-                "SELECT id FROM posts WHERE hidden = FALSE AND LOWER(subreddit) = LOWER(%s) ORDER BY created_utc ASC",
+                "SELECT id FROM posts WHERE excluded = FALSE AND LOWER(subreddit) = LOWER(%s) ORDER BY created_utc ASC",
                 (name,),
             )
         else:
             cur.execute(
-                "SELECT id FROM posts WHERE hidden = FALSE AND LOWER(author) = LOWER(%s) ORDER BY created_utc ASC",
+                "SELECT id FROM posts WHERE excluded = FALSE AND LOWER(author) = LOWER(%s) ORDER BY created_utc ASC",
                 (name,),
             )
         post_ids = [r[0] for r in cur.fetchall()]
@@ -3499,7 +3505,7 @@ def archive_all_target(target_type: str, name: str):
         return {
             "job_id": None,
             "total": 0,
-            "message": f"No unhidden posts for {target_type}:{name}",
+            "message": f"No unexcluded -> excluded posts for {target_type}:{name}",
         }
 
     job_id = str(uuid.uuid4())
@@ -3818,7 +3824,7 @@ def health_check():
     for label, path in [
         ("Archive path", ARCHIVE_PATH),
         ("Thumb path", THUMB_PATH),
-        ("Archive media path", HIDDEN_MEDIA_PATH),
+        ("Archive media path", EXCLUDED_MEDIA_PATH),
     ]:
         try:
             if not os.path.exists(path):
@@ -3841,7 +3847,7 @@ async def event_stream():
                 if not connection_pool:
                     return {
                         "total_posts": 0,
-                        "hidden_posts": 0,
+                        "excluded_posts": 0,
                         "total_comments": 0,
                         "downloaded_media": 0,
                         "pending_media": 0,
@@ -3849,10 +3855,10 @@ async def event_stream():
                     }
                 conn = connection_pool.getconn()
                 cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = FALSE")
+                cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
                 total_posts = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = TRUE")
-                hidden_posts = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = TRUE")
+                excluded_posts = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM comments")
                 total_comments = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM media WHERE status='done'")
@@ -3863,7 +3869,7 @@ async def event_stream():
                 tot_media = cur.fetchone()[0]
                 return {
                     "total_posts": total_posts,
-                    "hidden_posts": hidden_posts,
+                    "excluded_posts": excluded_posts,
                     "total_comments": total_comments,
                     "downloaded_media": dl_media,
                     "pending_media": pend_media,
@@ -3977,11 +3983,11 @@ async def event_stream():
                 cur = conn.cursor()
                 if after_dt is None:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE hidden = FALSE ORDER BY ingested_at DESC NULLS LAST LIMIT 1"
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE excluded = FALSE ORDER BY ingested_at DESC NULLS LAST LIMIT 1"
                     )
                 else:
                     cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE hidden = FALSE AND ingested_at > %s ORDER BY ingested_at DESC NULLS LAST LIMIT 20",
+                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE excluded = FALSE AND ingested_at > %s ORDER BY ingested_at DESC NULLS LAST LIMIT 20",
                         (after_dt,),
                     )
                 return cur.fetchall()
@@ -4282,7 +4288,7 @@ def get_media(
 
 @app.delete("/api/admin/reset")
 def reset_all(confirm: str = Query(...)):
-    """Wipe all hidden data: files on disk, every DB table, and the Redis queue."""
+    """Wipe all excluded data: files on disk, every DB table, and the Redis queue."""
     if confirm != "RESET":
         raise HTTPException(status_code=400, detail="Pass confirm=RESET to proceed")
 
@@ -4301,7 +4307,7 @@ def reset_all(confirm: str = Query(...)):
         tracked = []
         errors.append(f"Could not read media table: {e}")
 
-    # 2. Delete tracked files from disk (both active and hidden)
+    # 2. Delete tracked files from disk (both active and excluded)
     for file_path, thumb_path in tracked:
         for p in [file_path, thumb_path]:
             if p and os.path.exists(p):
@@ -4313,7 +4319,12 @@ def reset_all(confirm: str = Query(...)):
                     errors.append(f"Delete failed {p}: {e}")
 
     # 3. Remove organised subdirectories left empty after file deletion
-    for base_dir in [ARCHIVE_PATH, THUMB_PATH, HIDDEN_MEDIA_PATH, HIDDEN_THUMB_PATH]:
+    for base_dir in [
+        ARCHIVE_PATH,
+        THUMB_PATH,
+        EXCLUDED_MEDIA_PATH,
+        EXCLUDED_THUMB_PATH,
+    ]:
         for subdir in ["r", "u"]:
             top = os.path.join(base_dir, subdir)
             if os.path.isdir(top):
@@ -5043,8 +5054,8 @@ def partial_restore(
                     if not cur.fetchone():
                         cur.execute(
                             """
-                            INSERT INTO posts (id, subreddit, author, title, created_utc, url, selftext, raw, media_url, hidden, hidden_at, ingested_at)
-                            SELECT id, subreddit, author, title, created_utc, url, selftext, raw, media_url, hidden, hidden_at, ingested_at
+                            INSERT INTO posts (id, subreddit, author, title, created_utc, url, selftext, raw, media_url, excluded, excluded_at, ingested_at)
+                            SELECT id, subreddit, author, title, created_utc, url, selftext, raw, media_url, excluded, excluded_at, ingested_at
                             FROM posts WHERE id = %s
                         """,
                             (post_match["id"],),
@@ -5099,11 +5110,11 @@ def posts_by_date(
     end_date: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    hidden: Optional[bool] = Query(False),
+    excluded: Optional[bool] = Query(False),
 ):
     with get_db_cursor() as cur:
-        query = "SELECT id, title, subreddit, author, created_utc FROM posts WHERE hidden = %s"
-        params: list[Any] = [hidden]
+        query = "SELECT id, title, subreddit, author, created_utc FROM posts WHERE excluded = %s"
+        params: list[Any] = [excluded]
 
         if start_date:
             query += " AND created_utc >= %s"
@@ -5369,9 +5380,9 @@ def spa_catchall(full_path: str):
         (
             "api/",
             "media/",
-            "hidden-media/",
+            "excluded-media/",
             "thumb/",
-            "hidden-thumb/",
+            "excluded-thumb/",
             "static/",
             "icon.png",
         )
