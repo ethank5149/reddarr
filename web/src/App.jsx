@@ -156,6 +156,9 @@ export default function App(){
   const [targetDetailFilterMediaType, setTargetDetailFilterMediaType] = useState("all")
   const [targetDetailSearchResults, setTargetDetailSearchResults] = useState(null)
   const [targetLiveStats, setTargetLiveStats] = useState(null)
+  const [targetFailures, setTargetFailures] = useState([])
+  const [targetFailuresLoading, setTargetFailuresLoading] = useState(false)
+  const [targetFailuresOpen, setTargetFailuresOpen] = useState(false)
 
   const targetIndexSearchTimeout = useRef()
 
@@ -470,6 +473,14 @@ export default function App(){
       .catch(()=>setTargetLiveStats(null))
   }
 
+  function loadTargetFailures(ttype, name){
+    setTargetFailuresLoading(true)
+    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/failures?limit=20`)
+      .then(r=>setTargetFailures(r.data.failures||[]))
+      .catch(()=>setTargetFailures([]))
+      .finally(()=>setTargetFailuresLoading(false))
+  }
+
   // Target detail infinite scroll
   useEffect(()=>{
     if(!targetDetailType || !targetDetailName) return
@@ -497,11 +508,13 @@ export default function App(){
   useEffect(()=>{
     if(!targetDetailType || !targetDetailName) return
     loadTargetStats(targetDetailType, targetDetailName)
+    loadTargetFailures(targetDetailType, targetDetailName)
     const poll = setInterval(()=>{
       loadTargetStats(targetDetailType, targetDetailName)
+      if(targetFailuresOpen) loadTargetFailures(targetDetailType, targetDetailName)
     }, 15000)
     return ()=> clearInterval(poll)
-  },[targetDetailType, targetDetailName])
+  },[targetDetailType, targetDetailName, targetFailuresOpen])
 
   // Polling fallback every 10s on system and activity tabs
   useEffect(()=>{
@@ -510,7 +523,7 @@ export default function App(){
       axios.get("/api/admin/stats").then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
       axios.get("/api/admin/queue").then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
       axios.get("/api/admin/health").then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
-      axios.get("/api/admin/activity?limit=50").then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
+      axios.get("/api/admin/activity?limit=50&include_failures=true").then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
       setLastUpdated(new Date())
     }, 10000)
     return ()=> clearInterval(poll)
@@ -708,7 +721,7 @@ export default function App(){
     setAdminLoading(true)
     Promise.all([
       axios.get("/api/admin/stats").catch(()=>({data:null})),
-      axios.get("/api/admin/activity?limit=50").catch(()=>({data:[]})),
+      axios.get("/api/admin/activity?limit=50&include_failures=true").catch(()=>({data:[]})),
       axios.get("/api/admin/queue").catch(()=>({data:null})),
       axios.get("/api/admin/health").catch(()=>({data:null}))
     ]).then(([statsRes,logsRes,queueRes,healthRes])=>{
@@ -1700,6 +1713,7 @@ export default function App(){
                   {label:"Queued",value:targetLiveStats.queue_length,color:"#f9c300"},
                   {label:"Pending",value:targetLiveStats.pending_media,color:"#f9c300"},
                   {label:"Failed",value:targetLiveStats.failed_media,color:targetLiveStats.failed_media>0?"#ff6666":"#46d160"},
+                  {label:"Error",value:targetLiveStats.error_media,color:targetLiveStats.error_media>0?"#ff6666":"#46d160"},
                 ].map(s=>(
                   <div key={s.label} style={{background:"#161d2f",padding:"8px 14px",borderRadius:"3px",border:"1px solid #2a2a2a"}}>
                     <div style={{fontSize:"10px",color:"#5a7b9a",textTransform:"uppercase",marginBottom:"2px"}}>{s.label}</div>
@@ -1709,6 +1723,43 @@ export default function App(){
                 {targetLiveStats.last_posted_at && (
                   <div style={{fontSize:"11px",color:"#5a7b9a",marginLeft:"auto"}}>
                     Last post: {new Date(targetLiveStats.last_posted_at).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Failures Panel */}
+            {targetLiveStats && (targetLiveStats.failed_media > 0 || targetLiveStats.error_media > 0) && (
+              <div style={{marginBottom:"24px"}}>
+                <div onClick={()=>setTargetFailuresOpen(o=>!o)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:targetFailuresOpen?"#2a1a1a":"#1c2a3f",borderRadius:"3px",border:"1px solid #3a2a2a",cursor:"pointer"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                    <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4444,#cc0000)",borderRadius:"2px"}}/>
+                    <h3 style={{margin:0,fontSize:"14px",fontWeight:"600",color:"#ff6666"}}>Failures ({targetLiveStats.failed_media + targetLiveStats.error_media})</h3>
+                  </div>
+                  <span style={{color:"#ff6666",fontSize:"14px",transform:targetFailuresOpen?"rotate(0deg)":"rotate(-90deg)",transition:"transform 0.2s"}}>▼</span>
+                </div>
+                {targetFailuresOpen && (
+                  <div style={{background:"#161d2f",borderRadius:"0 0 3px 3px",border:"1px solid #3a2a2a",borderTop:"none",padding:"12px",maxHeight:"300px",overflow:"auto"}}>
+                    {targetFailuresLoading ? (
+                      <div style={{padding:"20px",textAlign:"center",color:"#5a7b9a"}}>Loading failures...</div>
+                    ) : targetFailures.length === 0 ? (
+                      <div style={{padding:"20px",textAlign:"center",color:"#5a7b9a"}}>No failures recorded.</div>
+                    ) : (
+                      <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+                        {targetFailures.map(f=>(
+                          <div key={f.id} style={{background:"#0b1728",borderRadius:"3px",padding:"10px",border:"1px solid #2a2a2a"}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}>
+                              <span style={{background:f.status==="failed"?"#3a1a1a":"#3a2a1a",color:f.status==="failed"?"#ff6666":"#ffaa00",padding:"2px 8px",borderRadius:"3px",fontSize:"10px",fontWeight:"600"}}>
+                                {f.status?.toUpperCase()}
+                              </span>
+                              <span style={{fontSize:"10px",color:"#5a7b9a"}}>{f.created_at ? new Date(f.created_at).toLocaleString() : "-"}</span>
+                            </div>
+                            <div style={{fontSize:"11px",color:"#8aa4bd",marginBottom:"4px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.url}</div>
+                            {f.error_message && <div style={{fontSize:"10px",color:"#ff6666",fontFamily:"monospace"}}>{f.error_message}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -2228,18 +2279,31 @@ export default function App(){
           <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:"1px solid #2a2a2a",overflow:"hidden"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
               <thead><tr style={{background:"#131b2e",borderBottom:"1px solid #2a2a2a"}}>
-                {["Time","Subreddit","Author","Title"].map(h=>(
+                {["Time","Type","Subreddit","Author","Title"].map(h=>(
                   <th key={h} style={{padding:"12px 14px",textAlign:"left",color:"#5a7b9a",fontWeight:"500",fontSize:"11px",textTransform:"uppercase"}}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
-                <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}`}</style>
+                <style>{`@keyframes rowFlash{0%{background:#1c2e00}60%{background:#111c00}100%{background:transparent}}.row-new{animation:rowFlash 4s ease-out forwards}.row-failure{background:#2a1a1a}.row-failure:hover{background:#3a2a2a}`}</style>
                 {logs && logs.map(l=>(
-                  <tr key={l.id} className={highlightedRows.has(l.id)?"row-new":""} style={{borderBottom:"1px solid #222"}}>
-                    <td style={{padding:"12px 14px",color:"#5a7b9a"}}>{l.created_utc?new Date(l.created_utc).toLocaleTimeString():"-"}</td>
+                  <tr key={`${l.type}-${l.id}`} className={l.type === "failure" ? "row-failure" : (highlightedRows.has(l.id) ? "row-new" : "")} style={{borderBottom:"1px solid #222"}}>
+                    <td style={{padding:"12px 14px",color:"#5a7b9a",fontSize:"12px"}}>
+                      {l.type === "failure" ? (l.created_at ? new Date(l.created_at).toLocaleTimeString() : "-") : (l.created_utc ? new Date(l.created_utc).toLocaleTimeString() : "-")}
+                    </td>
+                    <td style={{padding:"12px 14px"}}>
+                      {l.type === "failure" ? (
+                        <span style={{background:l.status==="failed"?"#3a1a1a":"#3a2a1a",color:l.status==="failed"?"#ff6666":"#ffaa00",padding:"2px 8px",borderRadius:"3px",fontSize:"10px",fontWeight:"600"}}>
+                          {l.status?.toUpperCase()}
+                        </span>
+                      ) : (
+                        <span style={{background:"rgba(53,197,244,0.13)",color:"#35c5f4",padding:"4px 8px",borderRadius:"3px",fontSize:"10px",fontWeight:"500"}}>POST</span>
+                      )}
+                    </td>
                     <td style={{padding:"12px 14px"}}><span style={{background:"rgba(53,197,244,0.13)",color:"#35c5f4",padding:"4px 8px",borderRadius:"3px",fontSize:"12px",fontWeight:"500"}}>{l.subreddit||"-"}</span></td>
                     <td style={{padding:"12px 14px",color:"#8aa4bd"}}>{l.author||"-"}</td>
-                    <td style={{padding:"12px 14px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:"#c8d6e0"}}>{l.title||"-"}</td>
+                    <td style={{padding:"12px 14px",maxWidth:"400px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:l.type==="failure"?"#ff6666":"#c8d6e0"}}>
+                      {l.type === "failure" ? (l.post_title || l.url) : l.title}
+                    </td>
                   </tr>
                 ))}
               </tbody>

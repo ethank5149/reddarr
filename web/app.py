@@ -1959,6 +1959,7 @@ def target_stats(target_type: str, name: str):
                 COUNT(*) FILTER (WHERE created_utc::date >= CURRENT_DATE - INTERVAL '7 days') AS posts_this_week,
                 COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'pending' OR m.status IS NULL) AS pending_media,
                 COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'failed') AS failed_media,
+                COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'error') AS error_media,
                 MAX(p.created_utc) AS last_posted_at
             FROM posts p
             LEFT JOIN media m ON m.post_id = p.id
@@ -1976,6 +1977,7 @@ def target_stats(target_type: str, name: str):
         posts_this_week,
         pending_media,
         failed_media,
+        error_media,
         last_posted_at,
     ) = row
 
@@ -1993,9 +1995,62 @@ def target_stats(target_type: str, name: str):
         "posts_this_week": posts_this_week or 0,
         "pending_media": pending_media or 0,
         "failed_media": failed_media or 0,
+        "error_media": error_media or 0,
         "last_posted_at": last_posted_at.isoformat() if last_posted_at else None,
         "queue_length": queue_length,
     }
+
+
+@app.get("/api/admin/target/{target_type}/{name}/failures")
+def target_failures(
+    target_type: str,
+    name: str,
+    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = None,
+):
+    """Return failed/errored media items for a specific target."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
+    col = "author" if target_type == "user" else "subreddit"
+    with get_db_cursor() as cur:
+        where_clause = f"LOWER(p.{col}) = LOWER(%s) AND m.status IN ('failed', 'error')"
+        params = [name]
+
+        if status:
+            where_clause += " AND m.status = %s"
+            params.append(status)
+
+        cur.execute(
+            f"""
+            SELECT m.id, m.url, m.status, m.error_message, m.created_at,
+                   p.id AS post_id, p.title, p.subreddit, p.author
+            FROM media m
+            JOIN posts p ON p.id = m.post_id
+            WHERE {where_clause}
+            ORDER BY m.created_at DESC
+            LIMIT %s
+            """,
+            params + [limit],
+        )
+
+        failures = []
+        for row in cur.fetchall():
+            failures.append(
+                {
+                    "id": row[0],
+                    "url": row[1],
+                    "status": row[2],
+                    "error_message": row[3],
+                    "created_at": row[4].isoformat() if row[4] else None,
+                    "post_id": row[5],
+                    "post_title": row[6],
+                    "subreddit": row[7],
+                    "author": row[8],
+                }
+            )
+
+    return {"failures": failures}
 
 
 @app.post("/api/admin/target/{target_type}/{name}/scrape")
@@ -2516,9 +2571,13 @@ def delete_target(
 
 
 @app.get("/api/admin/activity")
-def admin_activity(limit: int = Query(50, ge=1, le=200)):
-    """Activity stream endpoint - returns recent posts sorted by ingestion time."""
+def admin_activity(
+    limit: int = Query(50, ge=1, le=200), include_failures: bool = Query(False)
+):
+    """Activity stream endpoint - returns recent posts and optionally failures sorted by time."""
+    events = []
     with get_db_cursor() as cur:
+        # Get recent posts
         cur.execute(
             """
             SELECT p.id, p.subreddit, p.author, p.created_utc, p.title, p.ingested_at
@@ -2528,17 +2587,57 @@ def admin_activity(limit: int = Query(50, ge=1, le=200)):
         """,
             (limit,),
         )
-        return [
-            {
-                "id": r[0],
-                "subreddit": r[1],
-                "author": r[2],
-                "created_utc": r[3].isoformat() if r[3] else None,
-                "title": r[4],
-                "ingested_at": r[5].isoformat() if r[5] else None,
-            }
-            for r in cur.fetchall()
-        ]
+        for r in cur.fetchall():
+            events.append(
+                {
+                    "type": "post",
+                    "id": r[0],
+                    "subreddit": r[1],
+                    "author": r[2],
+                    "created_utc": r[3].isoformat() if r[3] else None,
+                    "title": r[4],
+                    "ingested_at": r[5].isoformat() if r[5] else None,
+                }
+            )
+
+        # Get recent failures if requested
+        if include_failures:
+            cur.execute(
+                """
+                SELECT m.id, m.url, m.status, m.error_message, m.created_at,
+                       p.id AS post_id, p.title, p.subreddit, p.author
+                FROM media m
+                JOIN posts p ON p.id = m.post_id
+                WHERE m.status IN ('failed', 'error')
+                ORDER BY m.created_at DESC
+                LIMIT %s
+                """,
+                (min(limit, 20),),
+            )
+            for r in cur.fetchall():
+                events.append(
+                    {
+                        "type": "failure",
+                        "id": r[0],
+                        "url": r[1],
+                        "status": r[2],
+                        "error_message": r[3],
+                        "created_at": r[4].isoformat() if r[4] else None,
+                        "post_id": r[5],
+                        "post_title": r[6],
+                        "subreddit": r[7],
+                        "author": r[8],
+                    }
+                )
+
+    # Sort by time, interleaving posts and failures
+    def sort_key(e):
+        if e["type"] == "post":
+            return e.get("ingested_at") or e.get("created_utc") or ""
+        return e.get("created_at") or ""
+
+    events.sort(key=sort_key, reverse=True)
+    return events[:limit]
 
 
 @app.get("/api/admin/logs")
