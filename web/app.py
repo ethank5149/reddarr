@@ -3839,7 +3839,7 @@ def health_check():
 async def event_stream():
     """Server-Sent Events endpoint for real-time UI updates."""
 
-    async def db_stats():
+async def db_stats():
         def _query() -> Dict[str, Any]:
             conn = None
             cur = None
@@ -3847,7 +3847,7 @@ async def event_stream():
                 if not connection_pool:
                     return {
                         "total_posts": 0,
-                        "excluded_posts": 0,
+                        "hidden_posts": 0,
                         "total_comments": 0,
                         "downloaded_media": 0,
                         "pending_media": 0,
@@ -3855,7 +3855,7 @@ async def event_stream():
                     }
                 conn = connection_pool.getconn()
                 cur = conn.cursor()
-                 cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = FALSE")
+                cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = FALSE")
                 total_posts = cur.fetchone()[0]
                 cur.execute("SELECT COUNT(*) FROM posts WHERE hidden = TRUE")
                 hidden_posts = cur.fetchone()[0]
@@ -3880,7 +3880,6 @@ async def event_stream():
                     cur.close()
                 if conn and connection_pool:
                     connection_pool.putconn(conn)
-
         return await asyncio.to_thread(_query)
 
     async def db_target_stats():
@@ -4037,11 +4036,11 @@ async def event_stream():
                     try:
                         cur = conn.cursor()
                         cur.execute("SELECT 1")
-                    finally:
-                        if cur:
-                            cur.close()
-                        if conn and connection_pool:
-                            connection_pool.putconn(conn)
+            finally:
+                if cur:
+                    cur.close()
+                if conn and connection_pool:
+                    connection_pool.putconn(conn)
             except Exception as e:
                 issues.append(f"Database: {str(e)}")
             try:
