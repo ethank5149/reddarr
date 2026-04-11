@@ -1883,13 +1883,13 @@ export default function App(){
               </div>
             )}
 
-            {/* Failures Panel */}
-            {targetLiveStats && (targetLiveStats.failed_media > 0 || targetLiveStats.error_media > 0 || targetScrapeFailures.length > 0) && (
+            {/* Failures Panel - always show when a target is selected */}
+            {targetDetailName && (
               <div style={{marginBottom:"24px"}}>
                 <div onClick={()=>setTargetFailuresOpen(o=>!o)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:targetFailuresOpen?"#2a1a1a":"#1c2a3f",borderRadius:"3px",border:"1px solid #3a2a2a",cursor:"pointer"}}>
                   <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
                     <div style={{width:"4px",height:"20px",background:"linear-gradient(180deg,#ff4444,#cc0000)",borderRadius:"2px"}}/>
-                    <h3 style={{margin:0,fontSize:"14px",fontWeight:"600",color:"#ff6666"}}>Failures ({targetLiveStats.failed_media + targetLiveStats.error_media + targetScrapeFailures.length})</h3>
+                    <h3 style={{margin:0,fontSize:"14px",fontWeight:"600",color:"#ff6666"}}>Failures ({targetLiveStats ? targetLiveStats.failed_media + targetLiveStats.error_media : 0} media + {targetScrapeFailures.length} scrape)</h3>
                   </div>
                   <span style={{color:"#ff6666",fontSize:"14px",transform:targetFailuresOpen?"rotate(0deg)":"rotate(-90deg)",transition:"transform 0.2s"}}>▼</span>
                 </div>

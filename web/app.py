@@ -305,6 +305,9 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_scrape_failures_target ON scrape_failures(target_type, target_name)",
     "CREATE INDEX IF NOT EXISTS idx_scrape_failures_post_id ON scrape_failures(post_id)",
     "CREATE INDEX IF NOT EXISTS idx_scrape_failures_created_at ON scrape_failures(created_at)",
+    # v10b: schema_version table
+    "CREATE TABLE IF NOT EXISTS schema_version (version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT now())",
+    "INSERT INTO schema_version (version) VALUES ('v10') ON CONFLICT (version) DO NOTHING",
 ]
 
 
@@ -348,6 +351,18 @@ def startup():
                 logger.info("Schema migrations complete")
             except Exception as e:
                 logger.error(f"Migration error (non-fatal): {e}")
+
+        # Validate critical tables exist
+        critical_tables = ["posts", "media", "targets", "comments", "scrape_failures"]
+        conn = connection_pool.getconn()
+        cur = conn.cursor()
+        for tbl in critical_tables:
+            try:
+                cur.execute(f"SELECT 1 FROM {tbl} LIMIT 1")
+            except Exception:
+                logger.error(f"CRITICAL TABLE MISSING: {tbl} - run migrations!")
+        cur.close()
+        connection_pool.putconn(conn)
     finally:
         try:
             from shared.config import get_secret
@@ -2097,28 +2112,31 @@ def target_failures(
                 }
             )
 
-        cur.execute(
-            """
-            SELECT id, post_id, error_message, sort_method, created_at
-            FROM scrape_failures
-            WHERE target_type = %s AND LOWER(target_name) = LOWER(%s)
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (target_type, name, limit),
-        )
         scrape_failures = []
-        for row in cur.fetchall():
-            scrape_failures.append(
-                {
-                    "id": row[0],
-                    "post_id": row[1],
-                    "error_message": row[2],
-                    "sort_method": row[3],
-                    "created_at": row[4].isoformat() if row[4] else None,
-                    "status": "scrape_error",
-                }
+        try:
+            cur.execute(
+                """
+                SELECT id, post_id, error_message, sort_method, created_at
+                FROM scrape_failures
+                WHERE target_type = %s AND LOWER(target_name) = LOWER(%s)
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (target_type, name, limit),
             )
+            for row in cur.fetchall():
+                scrape_failures.append(
+                    {
+                        "id": row[0],
+                        "post_id": row[1],
+                        "error_message": row[2],
+                        "sort_method": row[3],
+                        "created_at": row[4].isoformat() if row[4] else None,
+                        "status": "scrape_error",
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"scrape_failures table may not exist: {e}")
 
     return {"failures": failures, "scrape_failures": scrape_failures}
 

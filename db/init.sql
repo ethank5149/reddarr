@@ -258,6 +258,12 @@ CREATE TABLE IF NOT EXISTS integrity_checks (
 CREATE INDEX IF NOT EXISTS idx_integrity_checks_status ON integrity_checks(status);
 CREATE INDEX IF NOT EXISTS idx_integrity_checks_type ON integrity_checks(check_type);
 
+-- SCHEMA_VERSION: Track migration state
+CREATE TABLE IF NOT EXISTS schema_version (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT now()
+);
+
 -- Function to create audit entries for table changes
 CREATE OR REPLACE FUNCTION update_audit_trigger()
 RETURNS trigger AS $$
