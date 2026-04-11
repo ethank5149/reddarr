@@ -38,12 +38,13 @@ services:
       BORG_LOG_LEVEL: INFO
       BORG_REMOTE_PATH: borg
       SCHEDULE: "daily"
-      BACKUP_SOURCES: /data /backups
+      BACKUP_SOURCES: /data /backups /pgdata
       BORG_PRUNING: "--keep-daily=7 --keep-weekly=4 --keep-monthly=6"
     volumes:
-      - ./backupdata:/backups
+      - ./backups-borg:/backups
       - ${ARCHIVE_PATH}:/data:ro
       - ./backups:/data/backups:ro
+      - ./pgdata:/pgdata:ro
       - ./backup/entrypoint.sh:/app/entrypoint.sh:ro
     secrets:
       - backup_passphrase
