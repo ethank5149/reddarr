@@ -154,7 +154,7 @@ export default function App(){
   const [targetIndexFilterStatus, setTargetIndexFilterStatus] = useState("all")
 
   const [targetDetailSearch, setTargetDetailSearch] = useState("")
-  const [targetDetailSortBy, setTargetDetailSortBy] = useState("newest")
+  const [targetDetailSortBy, setTargetDetailSortBy] = useState("last_added")
   const [targetDetailFilterMediaType, setTargetDetailFilterMediaType] = useState("all")
   const [targetDetailSearchResults, setTargetDetailSearchResults] = useState(null)
   const [targetLiveStats, setTargetLiveStats] = useState(null)
@@ -213,6 +213,7 @@ export default function App(){
       if(targetDetailSortBy === "oldest") return new Date(a.created_utc) - new Date(b.created_utc)
       if(targetDetailSortBy === "title_asc") return (a.title||"").localeCompare(b.title||"")
       if(targetDetailSortBy === "title_desc") return (b.title||"").localeCompare(a.title||"")
+      if(targetDetailSortBy === "last_added") return new Date(b.ingested_at||0) - new Date(a.ingested_at||0)
       return 0
     })
     return filtered
@@ -578,7 +579,7 @@ export default function App(){
       is_video:p.is_video, selftext:p.selftext,
       subreddit:p.subreddit, author:p.author,
       created_utc:p.created_utc, thumb_url:p.thumb_url, preview_url:p.preview_url,
-      hidden:p.hidden
+      hidden:p.hidden, ingested_at:p.ingested_at
     }
   }
 
@@ -1781,8 +1782,9 @@ export default function App(){
               </div>
               <select value={targetDetailSortBy} onChange={e=>setTargetDetailSortBy(e.target.value)}
                 style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#8aa4bd",fontSize:"13px",cursor:"pointer",outline:"none"}}>
-                <option value="newest">Newest First</option>
-                <option value="oldest">Oldest First</option>
+                <option value="last_added">Last added</option>
+                <option value="newest">Reddit date ↓</option>
+                <option value="oldest">Reddit date ↑</option>
                 <option value="title_asc">Title A → Z</option>
                 <option value="title_desc">Title Z → A</option>
               </select>
@@ -1794,7 +1796,7 @@ export default function App(){
                 <option value="text">Text</option>
               </select>
               {(targetDetailSearch || targetDetailFilterMediaType !== "all") && (
-                <button onClick={()=>{setTargetDetailSearch("");setTargetDetailFilterMediaType("all");setTargetDetailSortBy("newest");setTargetDetailSearchResults(null)}} 
+                <button onClick={()=>{setTargetDetailSearch("");setTargetDetailFilterMediaType("all");setTargetDetailSortBy("last_added");setTargetDetailSearchResults(null)}} 
                   style={{padding:"6px 12px",background:"#1c2a3f",border:"1px solid #35c5f444",borderRadius:"3px",color:"#5fd4f8",cursor:"pointer",fontSize:"12px"}}>
                   ✕ Clear
                 </button>
@@ -1825,6 +1827,7 @@ export default function App(){
                 if(targetDetailSortBy === "oldest") return new Date(a.created_utc) - new Date(b.created_utc)
                 if(targetDetailSortBy === "title_asc") return (a.title||"").localeCompare(b.title||"")
                 if(targetDetailSortBy === "title_desc") return (b.title||"").localeCompare(a.title||"")
+                if(targetDetailSortBy === "last_added") return new Date(b.ingested_at||0) - new Date(a.ingested_at||0)
                 return 0
               })
               return (

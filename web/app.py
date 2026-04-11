@@ -161,6 +161,41 @@ def _get_tokens():
         _GUEST_TOKEN = hashlib.sha256(f"guest:{guest_pw}".encode()).hexdigest()[:32]
 
 
+def _verify_target_exists(target_type: str, name: str) -> Optional[bool]:
+    """Check if a subreddit or user exists on Reddit by fetching their about page."""
+    import urllib.request
+    import urllib.error
+
+    ua = "Mozilla/5.0 (compatible; Reddarr/1.0)"
+    try:
+        if target_type == "subreddit":
+            url = f"https://www.reddit.com/r/{name}/about.json"
+        else:
+            url = f"https://www.reddit.com/user/{name}/about.json"
+
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return data.get("data", {}).get("name") is not None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        logger.warning(f"HTTP error verifying {target_type}:{name}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error verifying {target_type}:{name}: {e}")
+        return None
+
+
+def _append_failed_target(target_type: str, name: str):
+    """Append a failed target to the failed targets file."""
+    try:
+        with open(FAILED_TARGETS_FILE, "a") as f:
+            f.write(f"{target_type}:{name}\n")
+    except Exception as e:
+        logger.error(f"Failed to write to {FAILED_TARGETS_FILE}: {e}")
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -183,6 +218,9 @@ DIST_DIR = _HERE / "dist"
 
 ARCHIVE_PATH = os.getenv("ARCHIVE_PATH", "/data")
 THUMB_PATH = os.getenv("THUMB_PATH", os.path.join(ARCHIVE_PATH, ".thumbs"))
+FAILED_TARGETS_FILE = os.getenv(
+    "FAILED_TARGETS_FILE", os.path.join(ARCHIVE_PATH, "failed_targets.txt")
+)
 # Path where hidden posts' media files are moved to
 HIDDEN_MEDIA_PATH = os.getenv(
     "HIDDEN_MEDIA_PATH", os.path.join(ARCHIVE_PATH, ".hidden")
@@ -710,7 +748,8 @@ def posts(
         query = f"""
             SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.hidden,
                    p.raw->>'selftext' as selftext,
-                   p.raw->>'created_utc' as raw_created_utc
+                   p.raw->>'created_utc' as raw_created_utc,
+                   p.ingested_at
             FROM posts p
             WHERE 1=1{where_sql}
             ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
@@ -748,6 +787,7 @@ def posts(
                 is_hidden,
                 selftext,
                 raw_created_ts,
+                ingested_at,
             ) = row
             created_ts = raw_created_ts
             is_video = _is_video_url(url)
@@ -860,6 +900,7 @@ def posts(
                     "author": author,
                     "created_utc": created_ts
                     or (created_utc.isoformat() if created_utc else None),
+                    "ingested_at": ingested_at.isoformat() if ingested_at else None,
                     "thumb_url": thumb_url,
                     "preview_url": preview_url,
                     "hidden": is_hidden,
@@ -1949,14 +1990,15 @@ def target_stats(target_type: str, name: str):
                 COUNT(*) FILTER (WHERE created_utc::date = CURRENT_DATE) AS posts_today,
                 COUNT(*) FILTER (WHERE created_utc::date >= CURRENT_DATE - INTERVAL '7 days') AS posts_this_week,
                 COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'pending' OR m.status IS NULL) AS pending_media,
-                COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'failed') AS failed_media,
-                COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'error') AS error_media,
+                (SELECT COUNT(*) FROM media m2 JOIN posts p2 ON m2.post_id = p2.id WHERE LOWER(p2.{col}) = LOWER(%s) AND m2.status = 'pending') AS pending_media_count,
+                (SELECT COUNT(*) FROM media m2 JOIN posts p2 ON m2.post_id = p2.id WHERE LOWER(p2.{col}) = LOWER(%s) AND m2.status = 'failed') AS failed_media_count,
+                (SELECT COUNT(*) FROM media m2 JOIN posts p2 ON m2.post_id = p2.id WHERE LOWER(p2.{col}) = LOWER(%s) AND m2.status = 'error') AS error_media_count,
                 MAX(p.created_utc) AS last_posted_at
             FROM posts p
             LEFT JOIN media m ON m.post_id = p.id
             WHERE LOWER(p.{col}) = LOWER(%s)
             """,
-            (name,),
+            (name, name, name, name),
         )
         row = cur.fetchone()
 
@@ -1967,8 +2009,9 @@ def target_stats(target_type: str, name: str):
         posts_today,
         posts_this_week,
         pending_media,
-        failed_media,
-        error_media,
+        pending_media_count,
+        failed_media_count,
+        error_media_count,
         last_posted_at,
     ) = row
 
@@ -1984,9 +2027,9 @@ def target_stats(target_type: str, name: str):
     return {
         "posts_today": posts_today or 0,
         "posts_this_week": posts_this_week or 0,
-        "pending_media": pending_media or 0,
-        "failed_media": failed_media or 0,
-        "error_media": error_media or 0,
+        "pending_media": pending_media_count or 0,
+        "failed_media": failed_media_count or 0,
+        "error_media": error_media_count or 0,
         "last_posted_at": last_posted_at.isoformat() if last_posted_at else None,
         "queue_length": queue_length,
     }
@@ -2457,9 +2500,26 @@ def audit_post_detail(post_id: str):
 
 
 @app.post("/api/admin/target/{target_type}")
-def add_target(target_type: str, name: str):
+def add_target(
+    target_type: str,
+    name: str,
+    validate: bool = Query(
+        True, description="Verify target exists on Reddit before adding"
+    ),
+):
     if target_type not in ("subreddit", "user"):
         raise HTTPException(status_code=400, detail="Invalid target type")
+
+    if validate:
+        exists = _verify_target_exists(target_type, name)
+        if exists is False:
+            _append_failed_target(target_type, name)
+            raise HTTPException(
+                status_code=404,
+                detail=f"{target_type} '{name}' does not exist on Reddit",
+            )
+        elif exists is None:
+            logger.warning(f"Could not verify {target_type}:{name}, proceeding anyway")
 
     with get_db_cursor() as cur:
         # Check case-insensitively first to prevent pseudo-duplicates
