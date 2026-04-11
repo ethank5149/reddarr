@@ -5038,6 +5038,208 @@ def posts_by_date(
         ]
 
 
+# ─── NEW BACKUP TAB API ENDPOINTS ───
+
+
+@app.get("/api/admin/backup/stats")
+def backup_stats():
+    """Get database and backup statistics."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM posts")
+        posts = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM media")
+        media = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM posts_history")
+        audit_entries = cur.fetchone()[0]
+        cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
+        db_size = cur.fetchone()[0]
+
+        return {
+            "posts": posts,
+            "media": media,
+            "audit_entries": audit_entries,
+            "database_size": db_size,
+        }
+
+
+@app.get("/api/admin/backup/list")
+def backup_list():
+    """List all available backups."""
+    _ensure_backup_dirs()
+    backups = []
+
+    if os.path.exists(BACKUP_DIR):
+        for f in os.listdir(BACKUP_DIR):
+            fpath = os.path.join(BACKUP_DIR, f)
+            if os.path.isfile(fpath):
+                stat = os.stat(fpath)
+                meta = _get_backup_meta(f)
+                backups.append(
+                    {
+                        "name": f,
+                        "size": f"{stat.st_size / (1024 * 1024):.2f} MB",
+                        "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "label": meta.get("label", ""),
+                    }
+                )
+
+    return sorted(backups, key=lambda x: x["created_at"], reverse=True)
+
+
+@app.post("/api/admin/backup/create")
+def backup_create(
+    name: Optional[str] = Query(None),
+    subreddits: Optional[str] = Query(None),
+    targets: Optional[str] = Query(None),
+    before_date: Optional[str] = Query(None),
+    after_date: Optional[str] = Query(None),
+    include_media: bool = Query(True),
+):
+    """Create a new backup."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = name or f"backup_{timestamp}"
+
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not create backup dir: {e}")
+
+    backup_file = os.path.join(BACKUP_DIR, f"{backup_name}.sql")
+
+    try:
+        pg_user = os.environ.get("POSTGRES_USER", "reddit")
+        pg_host = os.environ.get("POSTGRES_HOST", "db")
+        pg_port = os.environ.get("POSTGRES_PORT", "5432")
+        pg_db = os.environ.get("POSTGRES_DB", "reddit")
+
+        cmd = [
+            "pg_dump",
+            "-h",
+            pg_host,
+            "-p",
+            str(pg_port),
+            "-U",
+            pg_user,
+            "-d",
+            pg_db,
+            "-f",
+            backup_file,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
+            raise Exception(f"pg_dump failed: {result.stderr}")
+
+        stat = os.stat(backup_file)
+        _save_backup_meta(
+            f"{backup_name}.sql",
+            {
+                "label": name or "",
+                "subreddits": subreddits,
+                "targets": targets,
+                "before_date": before_date,
+                "after_date": after_date,
+                "include_media": include_media,
+                "size_bytes": stat.st_size,
+                "created_at": datetime.now().isoformat(),
+            },
+        )
+
+        return {
+            "name": backup_name,
+            "size": f"{stat.st_size / (1024 * 1024):.2f} MB",
+            "status": "ok",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+
+
+@app.post("/api/admin/backup/restore")
+def backup_restore(
+    name: str = Query(...),
+    confirm: Optional[str] = Query(None),
+):
+    """Restore from a backup."""
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    if not confirm:
+        with open(backup_path, "r") as f:
+            lines = f.readlines()[:50]
+        post_count = sum(1 for l in lines if l.startswith("\t") and "posts" not in l)
+        return {
+            "status": "preview",
+            "would_restore": post_count,
+            "message": "Add confirm=RESTORE to restore",
+        }
+
+    try:
+        pg_user = os.environ.get("POSTGRES_USER", "reddit")
+        pg_host = os.environ.get("POSTGRES_HOST", "db")
+        pg_port = os.environ.get("POSTGRES_PORT", "5432")
+        pg_db = os.environ.get("POSTGRES_DB", "reddit")
+
+        cmd = [
+            "psql",
+            "-h",
+            pg_host,
+            "-p",
+            str(pg_port),
+            "-U",
+            pg_user,
+            "-d",
+            pg_db,
+            "-f",
+            backup_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+        return {
+            "status": "ok",
+            "restored": "done",
+            "message": "Restore completed",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+
+
+@app.delete("/api/admin/backup/{name}")
+def backup_delete(name: str):
+    """Delete a backup."""
+    backup_path = os.path.join(BACKUP_DIR, name)
+    if not os.path.exists(backup_path):
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    os.remove(backup_path)
+    _delete_backup_meta(name)
+    return {"status": "ok", "deleted": name}
+
+
+@app.post("/api/admin/backup/integrity")
+def backup_integrity():
+    """Run integrity check on media files."""
+    from shared.backup import verify_media_integrity
+
+    try:
+        report = verify_media_integrity()
+        return report
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Integrity check failed: {e}")
+
+
+@app.get("/api/admin/backup/audit-stats")
+def backup_audit_stats():
+    """Get audit trail statistics."""
+    from shared.backup import get_audit_stats
+
+    try:
+        stats = get_audit_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Audit stats failed: {e}")
+
+
 # SPA catch-all: serve index.html for all client-side routes
 # MUST be the last route so it doesn't shadow /api/* handlers
 @app.get("/{full_path:path}")

@@ -208,3 +208,67 @@ SELECT DISTINCT ON (ch.comment_id)
     ch.captured_at
 FROM comments_history ch
 ORDER BY ch.comment_id, ch.version DESC;
+
+-- AUDIT LOG: General audit trail for all data changes
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    action TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    record_id TEXT,
+    old_value JSONB,
+    new_value JSONB,
+    username TEXT,
+    created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_table_name ON audit_log(table_name);
+CREATE INDEX IF NOT EXISTS idx_audit_log_record_id ON audit_log(record_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);
+
+-- BACKUP RUNS: Track backup operations
+CREATE TABLE IF NOT EXISTS backup_runs (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT DEFAULT 'started',
+    tables JSONB,
+    subreddits JSONB,
+    rows_backed_up INT DEFAULT 0,
+    media_files INT DEFAULT 0,
+    media_bytes BIGINT DEFAULT 0,
+    error_message TEXT,
+    started_at TIMESTAMP DEFAULT now(),
+    completed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_backup_runs_status ON backup_runs(status);
+CREATE INDEX IF NOT EXISTS idx_backup_runs_started_at ON backup_runs(started_at);
+
+-- INTEGRITY CHECKS: Track integrity verification runs
+CREATE TABLE IF NOT EXISTS integrity_checks (
+    id SERIAL PRIMARY KEY,
+    check_type TEXT NOT NULL,
+    status TEXT DEFAULT 'started',
+    total_items INT DEFAULT 0,
+    issues_found INT DEFAULT 0,
+    details JSONB,
+    started_at TIMESTAMP DEFAULT now(),
+    completed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_integrity_checks_status ON integrity_checks(status);
+CREATE INDEX IF NOT EXISTS idx_integrity_checks_type ON integrity_checks(check_type);
+
+-- Function to create audit entries for table changes
+CREATE OR REPLACE FUNCTION update_audit_trigger()
+RETURNS trigger AS $$
+BEGIN
+    INSERT INTO audit_log (action, table_name, record_id, old_value, new_value)
+    VALUES (
+        TG_OP,
+        TG_TABLE_NAME,
+        COALESCE(NEW.id::text, OLD.id::text),
+        CASE WHEN TG_OP = 'DELETE' THEN row_to_json(OLD)::jsonb ELSE NULL END,
+        CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN row_to_json(NEW)::jsonb ELSE NULL END
+    );
+    RETURN COALESCE(NEW, OLD);
+END $$ LANGUAGE plpgsql;
