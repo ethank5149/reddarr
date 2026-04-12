@@ -450,7 +450,7 @@ def ingest_post(db, p):
                  selftext = EXCLUDED.selftext,
                  url = EXCLUDED.url,
                  raw = EXCLUDED.raw,
-                 ingested_at = COALESCE(posts.ingested_at, EXCLUDED.ingested_at)""",
+                 ingested_at = EXCLUDED.ingested_at""",
             (
                 p.id,
                 subreddit,

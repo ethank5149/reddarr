@@ -200,16 +200,22 @@ _tls = threading.local()
 
 
 def get_db():
-    if not hasattr(_tls, "conn") or _tls.conn is None:
+    if not hasattr(_tls, "conn") or _tls.conn is None or _tls.conn.closed:
+        if hasattr(_tls, "conn") and _tls.conn:
+            try:
+                _tls.conn.close()
+            except Exception:
+                pass
         _tls.conn = psycopg2.connect(_DB_URL)
         logger.debug("Thread-local DB connection created")
         return _tls.conn
 
     try:
+        # Check if connection is still valid
         with _tls.conn.cursor() as cur:
             cur.execute("SELECT 1")
         return _tls.conn
-    except Exception:
+    except (psycopg2.InterfaceError, psycopg2.OperationalError):
         logger.warning("DB connection lost in thread, reconnecting...")
         try:
             _tls.conn.close()
@@ -222,8 +228,10 @@ def get_db():
 
 for _attempt in range(10):
     try:
-        _tls.conn = psycopg2.connect(_DB_URL)
-        logger.info("DB initial connection established")
+        # Initialize for main thread
+        conn = psycopg2.connect(_DB_URL)
+        conn.close()
+        logger.info("DB initial connection successful")
         break
     except Exception as _e:
         logger.warning(f"DB connection attempt {_attempt + 1}/10 failed: {_e}")
@@ -519,7 +527,6 @@ def process_item(item, session=None):
                     except Exception as e:
                         logger.warning(f"Failed to log failed download to Redis: {e}")
                     conn = get_db()
-                    conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
                             "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
@@ -565,7 +572,6 @@ def process_item(item, session=None):
                     status = "corrupted"
 
                 conn = get_db()
-                conn.rollback()
                 with conn.cursor() as cur:
                     cur.execute("SELECT file_path FROM media WHERE sha256=%s", (h,))
                     existing = cur.fetchone()
@@ -656,7 +662,6 @@ def process_item(item, session=None):
                     thumb = make_thumb(path)
 
                     conn = get_db()
-                    conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute("SELECT file_path FROM media WHERE sha256=%s", (h,))
                         existing = cur.fetchone()
@@ -710,7 +715,6 @@ def process_item(item, session=None):
                     except Exception as e:
                         logger.warning(f"Failed to log failed video to Redis: {e}")
                     conn = get_db()
-                    conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
                             "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
@@ -763,19 +767,18 @@ def process_item(item, session=None):
                         thumb = make_thumb(path)
 
                         conn = get_db()
-                        conn.rollback()
                         with conn.cursor() as cur:
                             cur.execute(
                                 """
-                               INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
-                               VALUES(%s,%s,%s,%s,%s,%s,%s)
-                               ON CONFLICT (post_id, url) DO UPDATE SET 
-                                 file_path = EXCLUDED.file_path,
-                                 thumb_path = EXCLUDED.thumb_path,
-                                 sha256 = EXCLUDED.sha256,
-                                 downloaded_at = EXCLUDED.downloaded_at,
-                                 status = EXCLUDED.status
-                               """,
+                                INSERT INTO media(post_id,url,file_path,thumb_path,sha256,downloaded_at,status)
+                                VALUES(%s,%s,%s,%s,%s,%s,%s)
+                                ON CONFLICT (post_id, url) DO UPDATE SET 
+                                  file_path = EXCLUDED.file_path,
+                                  thumb_path = EXCLUDED.thumb_path,
+                                  sha256 = EXCLUDED.sha256,
+                                  downloaded_at = EXCLUDED.downloaded_at,
+                                  status = EXCLUDED.status
+                                """,
                                 (
                                     post_id,
                                     url,
@@ -793,7 +796,6 @@ def process_item(item, session=None):
                             f"Not an image, skipping: {content_type}, recording failure"
                         )
                         conn = get_db()
-                        conn.rollback()
                         with conn.cursor() as cur:
                             cur.execute(
                                 "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
@@ -810,7 +812,6 @@ def process_item(item, session=None):
                 except Exception as e:
                     logger.warning(f"Extraction failed: {e}, recording failure")
                     conn = get_db()
-                    conn.rollback()
                     with conn.cursor() as cur:
                         cur.execute(
                             "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',0,%s) "
@@ -828,15 +829,15 @@ def process_item(item, session=None):
             media_downloaded.labels(status="done").inc()
             try:
                 conn = get_db()
-                conn.rollback()
                 with conn.cursor() as cur:
                     cur.execute(
                         "UPDATE posts SET ingested_at = %s WHERE id = %s",
                         (datetime.now(timezone.utc), post_id),
                     )
-                    conn.commit()
+                conn.commit()
             except Exception as db_err:
                 logger.error(f"Failed to update ingested_at for {post_id}: {db_err}")
+                conn.rollback()
 
     except Exception as e:
         logger.error(f"ERROR processing {post_id}: {e}", exc_info=True)
@@ -872,7 +873,6 @@ def process_item(item, session=None):
                 pass
             try:
                 conn = get_db()
-                conn.rollback()
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO media(post_id,url,status,retries,error_message) VALUES(%s,%s,'failed',1,%s) "
