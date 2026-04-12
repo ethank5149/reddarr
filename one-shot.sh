@@ -20,10 +20,12 @@ source .env
 ARCHIVE_PATH="${ARCHIVE_PATH:-/mnt/user/Archive/reddit}"
 THUMB_PATH="${THUMB_PATH:-/mnt/user/Archive/reddit/.thumbs}"
 ARCHIVE_MEDIA_PATH="${ARCHIVE_MEDIA_PATH:-/mnt/user/Archive/reddit/.archive}"
-REDDIT_ARCHIVE_API_PORT="${REDDIT_ARCHIVE_API_PORT:-8011}"
-REDDIT_ARCHIVE_PROMETHEUS_PORT="${REDDIT_ARCHIVE_PROMETHEUS_PORT:-9011}"
-REDDIT_ARCHIVE_GRAFANA_PORT="${REDDIT_ARCHIVE_GRAFANA_PORT:-3011}"
+ARCHIVE_BACKUP_PORT="${REDDIT_ARCHIVE_BACKUP_PORT:-8091}"
+REDDIT_ARCHIVE_API_PORT="${REDDIT_ARCHIVE_API_PORT:-8090}"
+REDDIT_ARCHIVE_PROMETHEUS_PORT="${REDDIT_ARCHIVE_PROMETHEUS_PORT:-9090}"
+REDDIT_ARCHIVE_GRAFANA_PORT="${REDDIT_ARCHIVE_GRAFANA_PORT:-3000}"
 
+echo "Checking secrets..."
 for secret in secrets/postgres_password secrets/reddit_client_id secrets/reddit_client_secret secrets/api_key; do
     if [ ! -f "$secret" ]; then
         echo "Warning: $secret not found - some services may fail"
@@ -38,11 +40,58 @@ if [ ! -f secrets/guest_password ]; then
     echo "guest" > secrets/guest_password
 fi
 
-mkdir -p pgdata redisdata
+if [ ! -f secrets/backup_passphrase ]; then
+    openssl rand -base64 32 > secrets/backup_passphrase
+fi
+
+echo "Creating required directories..."
+mkdir -p pgdata redisdata backups-borg borg-cache borgmatic grafana/data prometheus/data logs
+
+if [ ! -f targets.txt ]; then
+    echo "Warning: targets.txt not found - ingester may not work"
+fi
+
+if [ ! -f borgmatic/config.yml ]; then
+    if [ -f borgmatic/config.yaml ]; then
+        cp borgmatic/config.yaml borgmatic/config.yml
+    else
+        echo "Warning: borgmatic config not found"
+    fi
+fi
+
+if [ ! -f prometheus/prometheus.yml ]; then
+    if [ -f prometheus/prometheus.yml.example ]; then
+        cp prometheus/prometheus.yml.example prometheus/prometheus.yml
+    else
+        echo "Warning: prometheus config not found"
+    fi
+fi
 
 echo "Building and starting containers..."
 docker-compose build
-docker-compose up -d
+docker-compose up -d --remove-orphans
+
+echo "Waiting for services to be healthy..."
+MAX_WAIT=120
+INTERVAL=5
+ELAPSED=0
+
+services="db redis"
+for svc in $services; do
+    echo -n "Waiting for $svc..."
+    while [ $ELAPSED -lt $MAX_WAIT ]; do
+        if docker inspect --format='{{.State.Health.Status}}' reddit_archive_$svc 2>/dev/null | grep -q "healthy"; then
+            echo " ready"
+            break
+        fi
+        sleep $INTERVAL
+        ELAPSED=$((ELAPSED + INTERVAL))
+    done
+    if [ $ELAPSED -ge $MAX_WAIT ]; then
+        echo " timeout - continuing anyway"
+    fi
+    ELAPSED=0
+done
 
 echo ""
 echo "=== Services ==="
@@ -50,9 +99,10 @@ docker-compose ps
 
 echo ""
 echo "=== URLs ==="
-echo "Web UI/API: http://localhost:${REDDIT_ARCHIVE_API_PORT}"
-echo "Prometheus: http://localhost:${REDDIT_ARCHIVE_PROMETHEUS_PORT}"
-echo "Grafana:    http://localhost:${REDDIT_ARCHIVE_GRAFANA_PORT}"
+echo "Web UI/API:  http://localhost:${REDDIT_ARCHIVE_API_PORT}"
+echo "Prometheus:  http://localhost:${REDDIT_ARCHIVE_PROMETHEUS_PORT}"
+echo "Grafana:     http://localhost:${REDDIT_ARCHIVE_GRAFANA_PORT}"
+echo "Backup UI:   http://localhost:${ARCHIVE_BACKUP_PORT}"
 echo ""
 echo "Grafana login: admin / admin"
 echo ""
@@ -62,7 +112,7 @@ echo ""
 echo "=== Direct Usage URLs ==="
 DOCKER_BRIDGE=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
 echo "API Health:   curl http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_API_PORT}/health"
-echo "Prometheus:   http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_PROMETHEUS_PORT}/graph"
-echo "Grafana:      http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_GRAFANA_PORT}/dashboard"
+echo "Prometheus:    http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_PROMETHEUS_PORT}/graph"
+echo "Grafana:       http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_GRAFANA_PORT}/dashboard"
 echo ""
 echo "(If localhost doesn't work, use the Docker bridge IP above)"
