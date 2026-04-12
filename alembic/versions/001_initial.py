@@ -18,134 +18,160 @@ depends_on = None
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
-    op.create_table(
-        "users",
-        sa.Column("username", sa.Text(), primary_key=True),
-        sa.Column("created_at", sa.TIMESTAMP(), server_default="now()"),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT NOT NULL,
+            created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT now(),
+            PRIMARY KEY (username)
+        )
+        """
     )
 
-    op.create_table(
-        "targets",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("type", sa.Text()),
-        sa.Column("name", sa.Text(), unique=True),
-        sa.Column("enabled", sa.Boolean(), server_default="true"),
-        sa.Column("status", sa.Text(), server_default="active"),
-        sa.Column("last_created", sa.TIMESTAMP()),
-        sa.Column("icon_url", sa.Text()),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS targets (
+            id SERIAL PRIMARY KEY,
+            type TEXT,
+            name TEXT UNIQUE,
+            enabled BOOLEAN DEFAULT true,
+            status TEXT DEFAULT 'active',
+            last_created TIMESTAMP,
+            icon_url TEXT
+        )
+        """
     )
 
-    op.create_table(
-        "posts",
-        sa.Column("id", sa.Text(), primary_key=True),
-        sa.Column("subreddit", sa.Text()),
-        sa.Column("author", sa.Text()),
-        sa.Column("created_utc", sa.TIMESTAMP()),
-        sa.Column("title", sa.Text()),
-        sa.Column("selftext", sa.Text()),
-        sa.Column("url", sa.Text()),
-        sa.Column("media_url", sa.Text()),
-        sa.Column("raw", postgresql.JSONB()),
-        sa.Column("tsv", sa.Text()),
-        sa.Column("ingested_at", sa.TIMESTAMP(), server_default="now()"),
-        sa.Column("hidden", sa.Boolean(), server_default="false"),
-        sa.Column("hidden_at", sa.TIMESTAMP()),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS posts (
+            id TEXT PRIMARY KEY,
+            subreddit TEXT,
+            author TEXT,
+            created_utc TIMESTAMP,
+            title TEXT,
+            selftext TEXT,
+            url TEXT,
+            media_url TEXT,
+            raw JSONB,
+            tsv TEXT,
+            ingested_at TIMESTAMP DEFAULT now(),
+            hidden BOOLEAN DEFAULT false,
+            hidden_at TIMESTAMP
+        )
+        """
     )
 
-    op.create_table(
-        "comments",
-        sa.Column("id", sa.Text(), primary_key=True),
-        sa.Column("post_id", sa.Text()),
-        sa.Column("author", sa.Text()),
-        sa.Column("body", sa.Text()),
-        sa.Column("created_utc", sa.TIMESTAMP()),
-        sa.Column("raw", postgresql.JSONB()),
-        sa.Column("tsv", sa.Text()),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS comments (
+            id TEXT PRIMARY KEY,
+            post_id TEXT,
+            author TEXT,
+            body TEXT,
+            created_utc TIMESTAMP,
+            raw JSONB,
+            tsv TEXT
+        )
+        """
     )
 
-    op.create_table(
-        "media",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("post_id", sa.Text()),
-        sa.Column("url", sa.Text()),
-        sa.Column("file_path", sa.Text()),
-        sa.Column("thumb_path", sa.Text()),
-        sa.Column("sha256", sa.Text()),
-        sa.Column("downloaded_at", sa.TIMESTAMP()),
-        sa.Column("status", sa.Text()),
-        sa.Column("retries", sa.Integer(), server_default="0"),
-        sa.UniqueConstraint("post_id", "url", name="media_post_id_url_key"),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS media (
+            id SERIAL PRIMARY KEY,
+            post_id TEXT,
+            url TEXT,
+            file_path TEXT,
+            thumb_path TEXT,
+            sha256 TEXT,
+            downloaded_at TIMESTAMP,
+            status TEXT,
+            retries INTEGER DEFAULT 0,
+            UNIQUE(post_id, url)
+        )
+        """
     )
 
-    op.create_index("idx_posts_tsv", "posts", ["tsv"], postgresql_using="gin")
-    op.create_index("idx_comments_tsv", "comments", ["tsv"], postgresql_using="gin")
-    op.create_index("idx_media_post_id", "media", ["post_id"])
-    op.create_index("idx_comments_post_id", "comments", ["post_id"])
-    op.create_index("idx_posts_subreddit", "posts", ["subreddit"])
-    op.create_index("idx_posts_author", "posts", ["author"])
-    op.create_index("idx_posts_ingested_at", "posts", ["ingested_at"])
-    op.create_index("idx_posts_created_utc", "posts", ["created_utc"])
-    op.create_index("idx_targets_enabled", "targets", ["enabled"])
-    op.create_index("idx_posts_subreddit_lower", "posts", [sa.text("LOWER(subreddit)")])
-    op.create_index("idx_posts_author_lower", "posts", [sa.text("LOWER(author)")])
-    op.create_index("idx_posts_hidden", "posts", ["hidden"])
-    op.create_index("idx_media_status", "media", ["status"])
-    op.create_index(
-        "idx_posts_subreddit_created",
-        "posts",
-        ["subreddit", sa.text("created_utc DESC")],
+    op.execute("CREATE INDEX IF NOT EXISTS idx_posts_tsv ON posts USING gin (tsv)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_comments_tsv ON comments USING gin (tsv)"
     )
-    op.create_index(
-        "idx_posts_author_created", "posts", ["author", sa.text("created_utc DESC")]
+    op.execute("CREATE INDEX IF NOT EXISTS idx_media_post_id ON media (post_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments (post_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_posts_subreddit ON posts (subreddit)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON posts (author)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_ingested_at ON posts (ingested_at)"
     )
-    op.create_index(
-        "idx_posts_hidden_created", "posts", ["hidden", sa.text("created_utc DESC")]
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_created_utc ON posts (created_utc)"
     )
-
-    op.create_table(
-        "posts_history",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("post_id", sa.Text(), nullable=False),
-        sa.Column("version", sa.Integer(), server_default="1"),
-        sa.Column("subreddit", sa.Text()),
-        sa.Column("author", sa.Text()),
-        sa.Column("created_utc", sa.TIMESTAMP()),
-        sa.Column("title", sa.Text()),
-        sa.Column("selftext", sa.Text()),
-        sa.Column("url", sa.Text()),
-        sa.Column("media_url", sa.Text()),
-        sa.Column("raw", postgresql.JSONB()),
-        sa.Column("is_deleted", sa.Boolean(), server_default="false"),
-        sa.Column("version_hash", sa.Text()),
-        sa.Column("captured_at", sa.TIMESTAMP(), server_default="now()"),
-        sa.UniqueConstraint(
-            "post_id", "version", name="posts_history_post_id_version_key"
-        ),
+    op.execute("CREATE INDEX IF NOT EXISTS idx_targets_enabled ON targets (enabled)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_lower ON posts (LOWER(subreddit))"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_author_lower ON posts (LOWER(author))"
+    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_posts_hidden ON posts (hidden)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_media_status ON media (status)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts (subreddit, created_utc DESC)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts (author, created_utc DESC)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_hidden_created ON posts (hidden, created_utc DESC)"
     )
 
-    op.create_index("idx_posts_history_post_id", "posts_history", ["post_id"])
-    op.create_index(
-        "idx_posts_history_version",
-        "posts_history",
-        [sa.text("(post_id, version DESC)")],
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS posts_history (
+            id SERIAL PRIMARY KEY,
+            post_id TEXT NOT NULL,
+            version INTEGER DEFAULT 1,
+            subreddit TEXT,
+            author TEXT,
+            created_utc TIMESTAMP,
+            title TEXT,
+            selftext TEXT,
+            url TEXT,
+            media_url TEXT,
+            raw JSONB,
+            is_deleted BOOLEAN DEFAULT false NOT NULL,
+            version_hash TEXT,
+            captured_at TIMESTAMP DEFAULT now(),
+            UNIQUE(post_id, version)
+        )
+        """
     )
 
-    op.create_table(
-        "comments_history",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("comment_id", sa.Text(), nullable=False),
-        sa.Column("version", sa.Integer(), server_default="1"),
-        sa.Column("post_id", sa.Text()),
-        sa.Column("author", sa.Text()),
-        sa.Column("body", sa.Text()),
-        sa.Column("created_utc", sa.TIMESTAMP()),
-        sa.Column("raw", postgresql.JSONB()),
-        sa.Column("is_deleted", sa.Boolean(), server_default="false"),
-        sa.Column("version_hash", sa.Text()),
-        sa.Column("captured_at", sa.TIMESTAMP(), server_default="now()"),
-        sa.UniqueConstraint(
-            "comment_id", "version", name="comments_history_comment_id_version_key"
-        ),
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_history_post_id ON posts_history (post_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_history_version ON posts_history (post_id, version DESC)"
+    )
+
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS comments_history (
+            id SERIAL PRIMARY KEY,
+            comment_id TEXT NOT NULL,
+            version INTEGER DEFAULT 1,
+            post_id TEXT,
+            author TEXT,
+            body TEXT,
+            created_utc TIMESTAMP,
+            raw JSONB,
+            is_deleted BOOLEAN DEFAULT false NOT NULL,
+            version_hash TEXT,
+            captured_at TIMESTAMP DEFAULT now(),
+            UNIQUE(comment_id, version)
+        )
+        """
     )
 
     op.create_index(

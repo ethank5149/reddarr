@@ -141,6 +141,8 @@ services:
     ports:
       - "0.0.0.0:${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
     restart: unless-stopped
+    networks:
+      - internal
 
   postgres-exporter:
     container_name: reddit_archive_postgres_exporter
