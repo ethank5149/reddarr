@@ -136,40 +136,6 @@ async def metrics_middleware(request: Request, call_next):
                 headers={"Retry-After": "60", "X-RateLimit-Remaining": str(remaining)},
             )
 
-    if path.startswith("/api/") and path != "/api/login":
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-        token = auth_header.split(" ")[1]
-
-        _get_tokens()
-        is_admin = _ADMIN_TOKEN and token == _ADMIN_TOKEN
-        is_guest = _GUEST_TOKEN and token == _GUEST_TOKEN
-
-        if is_admin:
-            pass
-        elif is_guest:
-            if request.method != "GET":
-                return JSONResponse(
-                    status_code=403, content={"detail": "Forbidden: Admin required"}
-                )
-            allowed_guest_get = [
-                "/api/posts",
-                "/api/post/",
-                "/api/search",
-                "/api/comments",
-                "/api/media",
-                "/api/admin/stats",
-                "/api/events",
-            ]
-            if not any(path.startswith(p) for p in allowed_guest_get):
-                return JSONResponse(
-                    status_code=403, content={"detail": "Forbidden: Admin required"}
-                )
-        else:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-    # --- End Auth check ---
-
     start = time.monotonic()
     response = await call_next(request)
     duration = time.monotonic() - start
@@ -186,88 +152,6 @@ async def metrics_middleware(request: Request, call_next):
         endpoint=endpoint,
     ).observe(duration)
     return response
-
-
-def get_admin_password() -> str:
-    from shared.config import get_secret
-
-    return get_secret("admin_password", "admin")
-
-
-def get_guest_password() -> str:
-    from shared.config import get_secret
-
-    return get_secret("guest_password", "guest")
-
-
-def generate_token(role: str) -> str:
-    raw = f"{role}:{secrets.token_urlsafe(32)}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
-
-
-_ADMIN_TOKEN: Optional[str] = None
-_GUEST_TOKEN: Optional[str] = None
-
-
-def _get_tokens():
-    global _ADMIN_TOKEN, _GUEST_TOKEN
-    from shared.config import get_secret
-
-    admin_pw = get_secret("admin_password")
-    guest_pw = get_secret("guest_password")
-    if admin_pw:
-        _ADMIN_TOKEN = hashlib.sha256(f"admin:{admin_pw}".encode()).hexdigest()[:32]
-    if guest_pw:
-        _GUEST_TOKEN = hashlib.sha256(f"guest:{guest_pw}".encode()).hexdigest()[:32]
-
-
-def _verify_target_exists(target_type: str, name: str) -> Optional[bool]:
-    """Check if a subreddit or user exists on Reddit by fetching their about page."""
-    import urllib.request
-    import urllib.error
-
-    ua = "Mozilla/5.0 (compatible; Reddarr/1.0)"
-    try:
-        if target_type == "subreddit":
-            url = f"https://www.reddit.com/r/{name}/about.json"
-        else:
-            url = f"https://www.reddit.com/user/{name}/about.json"
-
-        req = urllib.request.Request(url, headers={"User-Agent": ua})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            return data.get("data", {}).get("name") is not None
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return False
-        logger.warning(f"HTTP error verifying {target_type}:{name}: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"Error verifying {target_type}:{name}: {e}")
-        return None
-
-
-def _append_failed_target(target_type: str, name: str):
-    """Append a failed target to the failed targets file."""
-    try:
-        with open(FAILED_TARGETS_FILE, "a") as f:
-            f.write(f"{target_type}:{name}\n")
-    except Exception as e:
-        logger.error(f"Failed to write to {FAILED_TARGETS_FILE}: {e}")
-
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-@app.post("/api/login")
-def login(req: LoginRequest):
-    if req.username == "admin" and req.password == get_admin_password():
-        return {"token": _ADMIN_TOKEN or generate_token("admin"), "role": "admin"}
-    elif req.username == "guest" and req.password == get_guest_password():
-        return {"token": _GUEST_TOKEN or generate_token("guest"), "role": "guest"}
-    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 logger.info("API STARTED - version 4.0.0")
@@ -427,12 +311,7 @@ def startup():
         cur.close()
         connection_pool.putconn(conn)
     finally:
-        try:
-            from shared.config import get_secret
-
-            _get_tokens()
-        except Exception:
-            pass
+        pass
 
     try:
         redis_host = os.getenv("REDIS_HOST", "localhost")
