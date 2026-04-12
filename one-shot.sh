@@ -47,6 +47,13 @@ fi
 echo "Creating required directories..."
 mkdir -p pgdata redisdata backups-borg borg-cache borgmatic grafana/data prometheus/data logs
 
+if [ -f docker-compose.override.yml ]; then
+    if grep -q '^services:[[:space:]]*$' docker-compose.override.yml 2>/dev/null; then
+        echo "Removing empty override file..."
+        rm docker-compose.override.yml
+    fi
+fi
+
 if [ ! -f targets.txt ]; then
     echo "Warning: targets.txt not found - ingester may not work"
 fi
@@ -68,34 +75,15 @@ if [ ! -f prometheus/prometheus.yml ]; then
 fi
 
 echo "Building and starting containers..."
-docker-compose build
-docker-compose up -d --remove-orphans
+docker compose build
+docker compose up -d --remove-orphans
 
-echo "Waiting for services to be healthy..."
-MAX_WAIT=120
-INTERVAL=5
-ELAPSED=0
-
-services="db redis"
-for svc in $services; do
-    echo -n "Waiting for $svc..."
-    while [ $ELAPSED -lt $MAX_WAIT ]; do
-        if docker inspect --format='{{.State.Health.Status}}' reddit_archive_$svc 2>/dev/null | grep -q "healthy"; then
-            echo " ready"
-            break
-        fi
-        sleep $INTERVAL
-        ELAPSED=$((ELAPSED + INTERVAL))
-    done
-    if [ $ELAPSED -ge $MAX_WAIT ]; then
-        echo " timeout - continuing anyway"
-    fi
-    ELAPSED=0
-done
+echo "Waiting for database and redis to be ready..."
+sleep 15
 
 echo ""
 echo "=== Services ==="
-docker-compose ps
+docker compose ps
 
 echo ""
 echo "=== URLs ==="

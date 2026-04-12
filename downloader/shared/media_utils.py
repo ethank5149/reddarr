@@ -2,8 +2,12 @@ import logging
 import os
 import re
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -206,21 +210,6 @@ def extract_media_urls(post) -> list[str]:
                                 vu = vi.get("source", {}).get("url")
                                 if vu:
                                     urls.append(vu)
-            if cp.get("preview"):
-                for img in cp["preview"].get("images", []):
-                    u = img.get("source", {}).get("url")
-                    if u:
-                        urls.append(u)
-                    for var_type, var_imgs in img.get("variants", {}).items():
-                        if isinstance(var_imgs, dict):
-                            vu = var_imgs.get("source", {}).get("url")
-                            if vu:
-                                urls.append(vu)
-                        elif isinstance(var_imgs, list):
-                            for vi in var_imgs:
-                                vu = vi.get("source", {}).get("url")
-                                if vu:
-                                    urls.append(vu)
 
     secure = data.get("secure_media")
     if secure and isinstance(secure, dict):
@@ -250,6 +239,95 @@ def extract_media_urls(post) -> list[str]:
                 unique_urls.append(u)
 
     return unique_urls
+
+
+_redgifs_token: str | None = None
+_redgifs_token_expiry: float = 0.0
+_redgifs_token_lock = threading.Lock()
+
+
+def _get_redgifs_token() -> str | None:
+    """Obtain (and cache) a temporary RedGifs API bearer token."""
+    global _redgifs_token, _redgifs_token_expiry
+    with _redgifs_token_lock:
+        if _redgifs_token and time.time() < _redgifs_token_expiry:
+            return _redgifs_token
+        try:
+            resp = requests.get(
+                "https://api.redgifs.com/v2/auth/temporary",
+                timeout=10,
+                headers={"User-Agent": "reddit-archive/1.0"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                _redgifs_token = data.get("token")
+                _redgifs_token_expiry = time.time() + 20 * 3600
+                return _redgifs_token
+            else:
+                logger.warning(f"RedGifs auth returned {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to obtain RedGifs token: {e}")
+        return _redgifs_token
+
+
+def _parse_redgifs_urls(data: dict) -> list[str]:
+    """Extract HD/SD URLs from RedGifs API response."""
+    urls = []
+    if "gif" in data:
+        gif = data["gif"]
+        hd = gif.get("urls", {}).get("hd")
+        sd = gif.get("urls", {}).get("sd")
+        if hd:
+            urls.append(hd)
+        if sd:
+            urls.append(sd)
+    return urls
+
+
+def fetch_redgifs_video_urls(video_id: str) -> list[str]:
+    """Fetch HD/SD video URLs from RedGifs API."""
+    urls = []
+    token = _get_redgifs_token()
+    headers = {"User-Agent": "reddit-archive/1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = requests.get(
+            f"https://api.redgifs.com/v2/gifs/{video_id}",
+            timeout=10,
+            headers=headers,
+        )
+        if resp.status_code == 200:
+            urls = _parse_redgifs_urls(resp.json())
+        elif resp.status_code == 401:
+            global _redgifs_token_expiry
+            _redgifs_token_expiry = 0.0
+            token = _get_redgifs_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+                resp = requests.get(
+                    f"https://api.redgifs.com/v2/gifs/{video_id}",
+                    timeout=10,
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    urls = _parse_redgifs_urls(resp.json())
+    except Exception as e:
+        logger.warning(f"Failed to fetch RedGifs video URLs for {video_id}: {e}")
+    return urls
+
+
+def fetch_youtube_video_url(post_url: str) -> str | None:
+    """Get YouTube video URL. Returns the canonical watch URL."""
+    if not post_url:
+        return None
+    match = re.search(
+        r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})", post_url
+    )
+    if match:
+        video_id = match.group(1)
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return None
 
 
 def make_thumb(
