@@ -66,8 +66,6 @@ services:
       redis:
         condition: service_healthy
     # Expose API on localhost only - use reverse proxy for external access
-    ports:
-      - "127.0.0.1:8080:8080"
     networks:
       - internal
     deploy:
@@ -80,15 +78,11 @@ services:
   # Disable public ports for monitoring - use reverse proxy
   prometheus:
     restart: always
-    ports:
-      - "127.0.0.1:9090:9090"
     networks:
       - internal
 
   grafana:
     restart: always
-    ports:
-      - "127.0.0.1:3000:3000"
     networks:
       - internal
     # Environment hardening for production

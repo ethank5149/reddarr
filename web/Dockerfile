@@ -31,4 +31,9 @@ COPY app.py .
 
 ENV PYTHONPATH=/app
 
-CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8080"]
+COPY alembic.ini ./
+COPY alembic ./alembic
+
+RUN chmod +x /app/alembic/versions 2>/dev/null || true
+
+CMD ["sh", "-c", "alembic upgrade head || true && uvicorn app:app --host 0.0.0.0 --port 8080"]

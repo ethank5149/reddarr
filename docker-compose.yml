@@ -44,6 +44,7 @@ services:
       - TZ=America/Chicago
       - PORT=8081
       - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379
     volumes:
       - ./backups-borg:/data
       - ./borg-cache:/home/borg/.cache/borg
@@ -99,6 +100,7 @@ services:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT}
       ARCHIVE_PATH: ${ARCHIVE_PATH}
       THUMB_PATH: ${THUMB_PATH}
       ARCHIVE_MEDIA_PATH: ${ARCHIVE_MEDIA_PATH}
@@ -148,7 +150,7 @@ services:
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
       - ./logs:/mnt/user/scripts/reddarr/logs:ro
     ports:
-      - "${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
+      - "127.0.0.1:${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
     restart: unless-stopped
     networks:
       - internal
@@ -156,8 +158,11 @@ services:
   postgres-exporter:
     container_name: reddit_archive_postgres_exporter
     image: prometheuscommunity/postgres-exporter:latest
+    command: --config.file=/etc/postgres_exporter/postgres_exporter.yml
     environment:
       DATA_SOURCE_NAME: "postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit?sslmode=disable"
+    volumes:
+      - ./prometheus/postgres_exporter.yml:/etc/postgres_exporter/postgres_exporter.yml
     depends_on:
       db:
         condition: service_healthy
