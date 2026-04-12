@@ -136,7 +136,7 @@ async def metrics_middleware(request: Request, call_next):
                 headers={"Retry-After": "60", "X-RateLimit-Remaining": str(remaining)},
             )
 
-    if path.startswith("/api/") and path != "/api/login" and path != "/api/events":
+    if path.startswith("/api/") and path != "/api/login":
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -1384,25 +1384,23 @@ def _delete_post_media(post_id: str):
         media_rows = cur.fetchall()
 
         for media_id, file_path, thumb_path in media_rows:
+            # Delete the main media file
             if file_path and os.path.exists(file_path):
                 try:
                     os.remove(file_path)
                     files_deleted += 1
                 except Exception as e:
                     errors.append(f"delete {file_path}: {e}")
-                    logger.error(f"Delete media error: {e}")
+                    logger.error(f"Delete error: {e}")
 
+            # Delete the thumbnail
             if thumb_path and os.path.exists(thumb_path):
                 try:
                     os.remove(thumb_path)
                 except Exception as e:
                     errors.append(f"delete thumb {thumb_path}: {e}")
                     logger.error(f"Delete thumb error: {e}")
-
-        conn.commit()
     except Exception as e:
-        if conn:
-            conn.rollback()
         errors.append(str(e))
     finally:
         if cur:
@@ -1413,67 +1411,63 @@ def _delete_post_media(post_id: str):
     return files_deleted, errors
 
 
-@app.delete("/api/post/{post_id}")
-def delete_post(post_id: str):
-    """Delete a post and all its media from the database and disk.
-    Does NOT blacklist the post - it can be re-excluded on next scrape."""
-    conn = None
-    cur = None
-    try:
-        conn = connection_pool.getconn()
-        cur = conn.cursor()
+@app.post("/api/post/{post_id}/delete")
+def delete_post(post_id: str, delete_media: bool = Query(True)):
+    """Delete a post and its associated data (comments, media records).
+    If delete_media is true, also deletes the files from disk."""
 
-        cur.execute("SELECT id FROM posts WHERE id = %s", (post_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Post not found")
+    if delete_media:
+        files_deleted, errors = _delete_post_media(post_id)
+        if errors:
+            logger.error(f"Errors deleting media for {post_id}: {errors}")
+            # Do not proceed with DB delete if file deletion failed
+            raise HTTPException(
+                status_code=500,
+                detail={"message": "Failed to delete media files", "errors": errors},
+            )
+    else:
+        files_deleted, errors = 0, []
 
-        files_deleted = 0
-        errors = []
-
-        cur.execute(
-            "SELECT id, file_path, thumb_path FROM media WHERE post_id = %s",
-            (post_id,),
-        )
-        media_rows = cur.fetchall()
-
-        for media_id, file_path, thumb_path in media_rows:
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    files_deleted += 1
-                except Exception as e:
-                    errors.append(f"delete {file_path}: {e}")
-                    logger.error(f"Delete media error: {e}")
-
-            if thumb_path and os.path.exists(thumb_path):
-                try:
-                    os.remove(thumb_path)
-                except Exception as e:
-                    errors.append(f"delete thumb {thumb_path}: {e}")
-                    logger.error(f"Delete thumb error: {e}")
-
-        cur.execute("DELETE FROM comments WHERE post_id = %s", (post_id,))
-        cur.execute("DELETE FROM media WHERE post_id = %s", (post_id,))
+    with get_db_cursor() as cur:
         cur.execute("DELETE FROM posts WHERE id = %s", (post_id,))
+        p_deleted = cur.rowcount
+        cur.execute("DELETE FROM comments WHERE post_id = %s", (post_id,))
+        c_deleted = cur.rowcount
+        cur.execute("DELETE FROM media WHERE post_id = %s", (post_id,))
+        m_deleted = cur.rowcount
+        cur.execute("DELETE FROM posts_history WHERE post_id = %s", (post_id,))
+        ph_deleted = cur.rowcount
+        cur.execute("DELETE FROM comments_history WHERE post_id = %s", (post_id,))
+        ch_deleted = cur.rowcount
 
-        conn.commit()
-        return {
-            "status": "ok",
-            "post_id": post_id,
-            "files_deleted": files_deleted,
-            "errors": errors,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if cur:
-            cur.close()
-        if conn and connection_pool:
-            connection_pool.putconn(conn)
+    return {
+        "status": "ok",
+        "post_id": post_id,
+        "deleted_rows": {
+            "posts": p_deleted,
+            "comments": c_deleted,
+            "media": m_deleted,
+            "posts_history": ph_deleted,
+            "comments_history": ch_deleted,
+        },
+        "media_files_deleted": files_deleted,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+
+def _ts_headline(cur, query: str, field: str, text: str) -> str:
+    """Use Postgres ts_headline to highlight search matches."""
+    if not text:
+        return ""
+    cur.execute(
+        f"SELECT ts_headline('english', %s, to_tsquery('english', %s), 'StartSel=**, StopSel=**')",
+        (text, query),
+    )
+    return cur.fetchone()[0]
 
 
 @app.get("/api/search")
@@ -1481,221 +1475,205 @@ def search(
     q: str,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    excluded: Optional[bool] = Query(False),
+    sort_by: Optional[str] = Query("rank"),
+    sort_order: Optional[str] = Query("desc"),
 ):
+    """Full-text search for posts.
+
+    If the query starts with 'r/' or 'u/', it redirects to the subreddit/user page.
+    """
+    q = q.strip()
+    if not q:
+        return {"posts": [], "total": 0, "query": ""}
+
+    # Redirect for r/ and u/ searches
+    if q.lower().startswith("r/"):
+        return {"redirect": f"/r/{q[2:]}"}
+    elif q.lower().startswith("u/"):
+        return {"redirect": f"/u/{q[2:]}"}
+
+    allowed_sort_by = {"rank", "created_utc"}
+    allowed_sort_order = {"asc", "desc"}
+    if sort_by not in allowed_sort_by:
+        sort_by = "rank"
+    if sort_order not in allowed_sort_order:
+        sort_order = "desc"
+
     with get_db_cursor() as cur:
+        # Prepare search query for tsquery (replace spaces with '&')
+        # This gives AND semantics, which is more intuitive for search
+        search_query = "&".join(q.split())
+
+        # Count total matches
         cur.execute(
             """
-            SELECT id, title, subreddit, author, created_utc, url, media_url, raw
-            FROM posts
-            WHERE tsv @@ plainto_tsquery(%s)
-              AND excluded = %s
-            ORDER BY created_utc DESC
-            LIMIT %s OFFSET %s
-        """,
-            (q, excluded, limit, offset),
+            SELECT COUNT(*) FROM posts
+            WHERE to_tsvector('english', title || ' ' || selftext) @@ to_tsquery('english', %s)
+            AND excluded = FALSE
+            """,
+            (search_query,),
         )
+        total = cur.fetchone()[0] or 0
 
-        results = []
+        # Fetch results with ranking
+        cur.execute(
+            f"""
+            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.excluded,
+                   p.raw->>'selftext' as selftext,
+                   p.raw->>'created_utc' as raw_created_utc,
+                   ts_rank_cd(to_tsvector('english', p.title || ' ' || p.selftext), to_tsquery('english', %s)) as rank
+            FROM posts p
+            WHERE to_tsvector('english', p.title || ' ' || p.selftext) @@ to_tsquery('english', %s)
+            AND p.excluded = FALSE
+            ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
+            """,
+            (search_query, search_query, limit, offset),
+        )
         rows = cur.fetchall()
         if not rows:
-            return results
+            return {
+                "posts": [],
+                "total": 0,
+                "query": q,
+                "limit": limit,
+                "offset": offset,
+            }
 
-        # Batch-fetch media for all result posts
         post_ids = [row[0] for row in rows]
         media_by_post: dict[str, list[tuple]] = {pid: [] for pid in post_ids}
-        cur.execute(
-            "SELECT post_id, file_path, thumb_path FROM media WHERE post_id = ANY(%s)",
-            (post_ids,),
-        )
-        for m_pid, m_file_path, m_thumb_path in cur.fetchall():
-            if m_pid in media_by_post:
-                media_by_post[m_pid].append((m_file_path, m_thumb_path))
+        if post_ids:
+            cur.execute(
+                "SELECT post_id, id, file_path, thumb_path FROM media WHERE post_id = ANY(%s) AND status = 'done'",
+                (post_ids,),
+            )
+            for m_pid, m_id, m_file_path, m_thumb_path in cur.fetchall():
+                if m_pid in media_by_post:
+                    media_by_post[m_pid].append((m_id, m_file_path, m_thumb_path))
 
+        results = []
         for row in rows:
-            post_id, title, subreddit, author, created_utc, url, media_url, raw = row
-
-            is_video = _is_video_url(url)
-            if raw:
-                try:
-                    data = raw if isinstance(raw, dict) else json.loads(raw)
-                    if data.get("media") and data["media"].get("reddit_video"):
-                        is_video = True
-                except Exception:
-                    pass
+            (
+                post_id,
+                title,
+                url,
+                media_url,
+                raw,
+                subreddit,
+                author,
+                created_utc,
+                is_excluded,
+                selftext,
+                raw_created_ts,
+                rank,
+            ) = row
+            created_ts = raw_created_ts
 
             media_rows = media_by_post.get(post_id, [])
-
-            image_url = None
-            video_url = None
             thumb_url = None
+            if media_rows:
+                for _, _, m_thumb_path in media_rows:
+                    if m_thumb_path and os.path.exists(m_thumb_path):
+                        thumb_url = _build_thumb_url(m_thumb_path)
+                        break
 
-            for m_file_path, m_thumb_path in media_rows:
-                if m_file_path:
-                    local_url = _build_media_url(m_file_path)
-                    if local_url:
-                        if m_file_path.lower().endswith(
-                            (".mp4", ".webm", ".mkv", ".mov", ".avi")
-                        ):
-                            video_url = local_url
-                        else:
-                            image_url = local_url
-                if m_thumb_path and not thumb_url:
-                    thumb_url = _build_thumb_url(m_thumb_path)
-
-            if raw and not image_url and not video_url:
-                try:
-                    data = raw if isinstance(raw, dict) else json.loads(raw)
-                    if is_video:
-                        if not video_url:
-                            extracted = _extract_video_url(url, data)
-                            video_url = extracted if extracted else url
-                    else:
-                        if not image_url:
-                            remote_imgs = []
-                            if "media_metadata" in data:
-                                for img_id, img_data in data.get(
-                                    "media_metadata", {}
-                                ).items():
-                                    if "s" in img_data:
-                                        u = img_data["s"].get("u")
-                                        if u:
-                                            remote_imgs.append(u)
-                                    elif img_data.get("p"):
-                                        u = img_data["p"][-1].get("u")
-                                        if u:
-                                            remote_imgs.append(u)
-                            if not remote_imgs and "preview" in data:
-                                for img in data.get("preview", {}).get("images", []):
-                                    u = img.get("source", {}).get("url") or img.get(
-                                        "resolutions", [{}]
-                                    )[-1].get("url")
-                                    if u:
-                                        remote_imgs.append(u)
-                            if remote_imgs:
-                                image_url = remote_imgs[0]
-                except Exception:
-                    pass
+            # Generate headline fragments with matched terms highlighted
+            title_headline = _ts_headline(cur, search_query, "title", title)
+            selftext_headline = (
+                _ts_headline(cur, search_query, "selftext", selftext)
+                if selftext
+                else ""
+            )
 
             results.append(
                 {
                     "id": post_id,
                     "title": title,
+                    "title_headline": title_headline,
+                    "selftext_headline": selftext_headline,
                     "subreddit": subreddit,
                     "author": author,
-                    "created_utc": created_utc.isoformat() if created_utc else None,
-                    "image_url": image_url,
-                    "video_url": video_url,
+                    "created_utc": created_ts
+                    or (created_utc.isoformat() if created_utc else None),
                     "thumb_url": thumb_url,
-                    "is_video": is_video,
+                    "rank": rank,
+                    "excluded": is_excluded,
                 }
             )
 
-        return results
+        return {
+            "posts": results,
+            "total": total,
+            "query": q,
+            "limit": limit,
+            "offset": offset,
+        }
 
 
-@app.get("/api/subreddits")
-def list_subreddits(limit: int = Query(50, ge=1, le=200)):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT subreddit, COUNT(*) as cnt 
-            FROM posts 
-            GROUP BY subreddit 
-            ORDER BY cnt DESC 
-            LIMIT %s
-        """,
-            (limit,),
-        )
-        return [{"subreddit": r[0], "count": r[1]} for r in cur.fetchall()]
-
-
-@app.get("/api/authors")
-def list_authors(limit: int = Query(50, ge=1, le=200)):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT author, COUNT(*) as cnt 
-            FROM posts 
-            GROUP BY author 
-            ORDER BY cnt DESC 
-            LIMIT %s
-        """,
-            (limit,),
-        )
-        return [{"author": r[0], "count": r[1]} for r in cur.fetchall()]
+# ---------------------------------------------------------------------------
+# Admin endpoints
+# ---------------------------------------------------------------------------
 
 
 @app.get("/api/admin/stats")
 def admin_stats():
+    """Get high-level stats for the archive."""
     with get_db_cursor() as cur:
-        cur.execute("""
-            WITH sub_stats AS (
-                SELECT 
-                    LOWER(p.subreddit) as name,
-                    COUNT(p.id) as post_count,
-                    COUNT(p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d
-                FROM targets t
-                JOIN posts p ON LOWER(p.subreddit) = LOWER(t.name)
-                WHERE t.type = 'subreddit'
-                GROUP BY LOWER(p.subreddit)
-            ),
-            user_stats AS (
-                SELECT 
-                    LOWER(p.author) as name,
-                    COUNT(p.id) as post_count,
-                    COUNT(p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d
-                FROM targets t
-                JOIN posts p ON LOWER(p.author) = LOWER(t.name)
-                WHERE t.type = 'user'
-                GROUP BY LOWER(p.author)
-            ),
-            sub_media_stats AS (
-                SELECT 
-                    LOWER(p.subreddit) as name,
-                    COUNT(m.id) as total_media,
-                    COUNT(m.id) FILTER (WHERE m.status = 'done') AS downloaded_media,
-                    COUNT(m.id) FILTER (WHERE m.status = 'pending') AS pending_media
-                FROM targets t
-                JOIN posts p ON LOWER(p.subreddit) = LOWER(t.name)
-                JOIN media m ON m.post_id = p.id
-                WHERE t.type = 'subreddit'
-                GROUP BY LOWER(p.subreddit)
-            ),
-            user_media_stats AS (
-                SELECT 
-                    LOWER(p.author) as name,
-                    COUNT(m.id) as total_media,
-                    COUNT(m.id) FILTER (WHERE m.status = 'done') AS downloaded_media,
-                    COUNT(m.id) FILTER (WHERE m.status = 'pending') AS pending_media
-                FROM targets t
-                JOIN posts p ON LOWER(p.author) = LOWER(t.name)
-                JOIN media m ON m.post_id = p.id
-                WHERE t.type = 'user'
-                GROUP BY LOWER(p.author)
-            )
-            SELECT
-                t.type,
-                t.name,
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
+        total_posts = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = TRUE")
+        excluded_posts = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM comments")
+        total_comments = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM media WHERE status = 'done'")
+        dl_media = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM media WHERE status = 'pending'")
+        pend_media = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM media")
+        tot_media = cur.fetchone()[0] or 0
+        cur.execute("SELECT SUM(file_size) FROM media WHERE status = 'done'")
+        total_size = cur.fetchone()[0] or 0
+
+    return {
+        "total_posts": total_posts,
+        "excluded_posts": excluded_posts,
+        "total_comments": total_comments,
+        "downloaded_media": dl_media,
+        "pending_media": pend_media,
+        "total_media": tot_media,
+        "total_media_size_bytes": total_size,
+    }
+
+
+@app.get("/api/admin/targets")
+def admin_targets():
+    """Get detailed stats for all targets."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT 
+                t.type, 
+                t.name, 
                 t.enabled,
                 t.status,
                 t.icon_url,
                 t.last_created,
-                COALESCE(CASE WHEN t.type = 'subreddit' THEN ss.post_count ELSE us.post_count END, 0) AS post_count,
-                COALESCE(CASE WHEN t.type = 'subreddit' THEN ss.posts_7d ELSE us.posts_7d END, 0) AS posts_7d,
-                COALESCE(CASE WHEN t.type = 'subreddit' THEN sms.total_media ELSE ums.total_media END, 0) AS total_media,
-                COALESCE(CASE WHEN t.type = 'subreddit' THEN sms.downloaded_media ELSE ums.downloaded_media END, 0) AS downloaded_media,
-                COALESCE(CASE WHEN t.type = 'subreddit' THEN sms.pending_media ELSE ums.pending_media END, 0) AS pending_media
+                COUNT(DISTINCT p.id) AS post_count,
+                COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
+                COUNT(DISTINCT m.id) AS total_media,
+                COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
+                COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
             FROM targets t
-            LEFT JOIN sub_stats ss ON t.type = 'subreddit' AND LOWER(t.name) = ss.name
-            LEFT JOIN user_stats us ON t.type = 'user' AND LOWER(t.name) = us.name
-            LEFT JOIN sub_media_stats sms ON t.type = 'subreddit' AND LOWER(t.name) = sms.name
-            LEFT JOIN user_media_stats ums ON t.type = 'user' AND LOWER(t.name) = ums.name
+            LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name)) 
+                              OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
+            LEFT JOIN media m ON m.post_id = p.id
+            GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
             ORDER BY t.type, t.name
-        """)
-        targets = []
+        """
+        )
+        rows = cur.fetchall()
 
-        for row in cur.fetchall():
+        targets = []
+        for row in rows:
             (
                 ttype,
                 name,
@@ -1705,17 +1683,17 @@ def admin_stats():
                 last_created,
                 post_count,
                 posts_7d,
-                total_media,
-                downloaded_media,
-                pending_media,
+                tot_media,
+                dl_media,
+                pend_media,
             ) = row
             post_count = post_count or 0
             posts_7d = posts_7d or 0
-            total_media = total_media or 0
-            downloaded_media = downloaded_media or 0
-            pending_media = pending_media or 0
+            tot_media = tot_media or 0
+            dl_media = dl_media or 0
+            pend_media = pend_media or 0
 
-            # Rate = actual subreddit activity over last 7 days (posts/sec)
+            # Estimate post rate (posts/sec) and ETA to 1000 posts
             rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
             eta_seconds = None
             if rate > 0:
@@ -1732,9 +1710,9 @@ def admin_stats():
                     "icon_url": icon_url,
                     "last_created": last_created.isoformat() if last_created else None,
                     "post_count": post_count,
-                    "total_media": total_media,
-                    "downloaded_media": downloaded_media,
-                    "pending_media": pending_media,
+                    "total_media": tot_media,
+                    "downloaded_media": dl_media,
+                    "pending_media": pend_media,
                     "rate_per_second": round(rate, 4),
                     "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
                     "progress_percent": min(100, round(post_count / 10, 1))
@@ -1743,2151 +1721,234 @@ def admin_stats():
                 }
             )
 
-        cur.execute("""
-            SELECT
-                COUNT(*) FILTER (WHERE excluded = FALSE),
-                COUNT(*) FILTER (WHERE excluded = TRUE)
-            FROM posts
-        """)
-        total_posts, excluded_posts = cur.fetchone()
-
-        cur.execute("""
-            SELECT
-                COUNT(*),
-                COUNT(*) FILTER (WHERE status = 'done'),
-                COUNT(*) FILTER (WHERE status = 'pending')
-            FROM media
-        """)
-        total_media, downloaded_media, pending_media = cur.fetchone()
-
-        cur.execute("SELECT COUNT(*) FROM comments")
-        total_comments = cur.fetchone()[0]
-
-        cur.execute("""
-            SELECT DATE(created_utc) as day, COUNT(*)
-            FROM posts
-            WHERE created_utc > now() - INTERVAL '7 days'
-              AND excluded = FALSE
-            GROUP BY DATE(created_utc)
-            ORDER BY day
-        """)
-        posts_per_day = [{"date": str(r[0]), "count": r[1]} for r in cur.fetchall()]
-
-        return {
-            "targets": targets,
-            "total_posts": total_posts,
-            "excluded_posts": excluded_posts,
-            "total_comments": total_comments,
-            "downloaded_media": downloaded_media,
-            "total_media": total_media,
-            "pending_media": pending_media,
-            "posts_per_day": posts_per_day,
-        }
+    return targets
 
 
-@app.post("/api/admin/target/{target_type}/{name}/toggle")
-def toggle_target(target_type: str, name: str):
-    if target_type not in ("subreddit", "user"):
+class TargetRequest(BaseModel):
+    type: str
+    name: str
+
+
+@app.post("/api/admin/targets")
+def add_target(req: TargetRequest):
+    """Add a new subreddit or user target."""
+    if req.type not in ("subreddit", "user"):
         raise HTTPException(status_code=400, detail="Invalid target type")
+
+    # Verify target exists on Reddit before adding
+    exists = _verify_target_exists(req.type, req.name)
+    if exists is False:
+        _append_failed_target(req.type, req.name)
+        raise HTTPException(status_code=404, detail="Target not found on Reddit")
+    elif exists is None:
+        logger.warning(
+            f"Could not verify existence of {req.type}:{req.name}, adding anyway"
+        )
+
+    with get_db_cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO targets(type,name) VALUES(%s, %s) ON CONFLICT (name) DO UPDATE SET enabled = true",
+                (req.type, req.name.strip()),
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", "type": req.type, "name": req.name}
+
+
+@app.delete("/api/admin/targets/{target_type}/{name}")
+def delete_target(target_type: str, name: str):
+    """Delete a target (disables it, does not remove data)."""
     with get_db_cursor() as cur:
         cur.execute(
-            "UPDATE targets SET enabled = NOT enabled WHERE type = %s AND name = %s RETURNING enabled",
+            "UPDATE targets SET enabled = false WHERE type = %s AND name = %s",
             (target_type, name),
         )
-        result = cur.fetchone()
-        if result is None:
+        if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Target not found")
-        return {"enabled": result[0], "status": "ok"}
+    return {"status": "ok"}
 
 
-@app.post("/api/admin/target/{target_type}/{name}/status")
-def set_target_status(target_type: str, name: str, new_status: str = "active"):
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-    if new_status not in ("active", "taken_down", "deleted"):
-        raise HTTPException(status_code=400, detail="Invalid status")
-    with get_db_cursor() as cur:
-        cur.execute(
-            "UPDATE targets SET status = %s, enabled = false WHERE type = %s AND name = %s RETURNING status",
-            (new_status, target_type, name),
-        )
-        result = cur.fetchone()
-        if result is None:
-            raise HTTPException(status_code=404, detail="Target not found")
-        return {"status": result[0], "new_status": new_status}
-
-
-@app.post("/api/admin/target/{target_type}/{name}/rescan")
-def rescan_target(target_type: str, name: str):
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    with get_db_cursor() as cur:
-        if target_type == "user":
-            cur.execute(
-                "SELECT id, url, raw, subreddit, author, title FROM posts WHERE LOWER(author) = LOWER(%s)",
-                (name,),
-            )
-        else:
-            cur.execute(
-                "SELECT id, url, raw, subreddit, author, title FROM posts WHERE LOWER(subreddit) = LOWER(%s)",
-                (name,),
-            )
-        post_rows = cur.fetchall()
-
-    if not redis_client:
-        return {
-            "status": "partial",
-            "message": "Redis not available, posts listed but not queued",
-            "post_count": len(post_rows),
-        }
-
-    rd = get_redis()
-    requeued = 0
-    for post_id, url, raw, subreddit, author, title in post_rows:
-        try:
-            data = raw if isinstance(raw, dict) else json.loads(raw) if raw else {}
-            media_urls = (
-                _extract_media_urls_from_raw(data, url)
-                if data
-                else ([url] if url else [])
-            )
-        except Exception:
-            media_urls = [url] if url else []
-
-        for media_url in media_urls:
-            if media_url:
-                rd.lpush(
-                    "media_queue",
-                    json.dumps(
-                        {
-                            "post_id": post_id,
-                            "url": media_url,
-                            "subreddit": subreddit,
-                            "author": author,
-                            "title": title or "",
-                        }
-                    ),
-                )
-                requeued += 1
-
-    return {"status": "ok", "requeued": requeued, "posts": len(post_rows)}
-
-
-@app.post("/api/admin/target/{target_type}/{name}/rescrape")
-def rescrape_target(target_type: str, name: str):
-    """Retry failed or missing media downloads for a specific target."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-
-    with get_db_cursor() as cur:
-        if target_type == "subreddit":
-            cur.execute(
-                """
-                SELECT m.id, m.post_id, m.url, p.subreddit, p.author, p.title
-                FROM media m
-                JOIN posts p ON m.post_id = p.id
-                WHERE LOWER(p.subreddit) = LOWER(%s) AND (
-                   (m.status IS NULL OR m.status = '')
-                   OR m.status = 'error'
-                   OR m.status = 'pending'
-                   OR m.status = 'failed'
-                   OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
-                )
-            """,
-                (name,),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT m.id, m.post_id, m.url, p.subreddit, p.author, p.title
-                FROM media m
-                JOIN posts p ON m.post_id = p.id
-                WHERE LOWER(p.author) = LOWER(%s) AND (
-                   (m.status IS NULL OR m.status = '')
-                   OR m.status = 'error'
-                   OR m.status = 'pending'
-                   OR m.status = 'failed'
-                   OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
-                )
-            """,
-                (name,),
-            )
-        failed_media = cur.fetchall()
-
-    if not failed_media:
-        return {
-            "status": "ok",
-            "message": "No failed or missing media found for this target",
-            "requeued": 0,
-        }
-
-    requeued = 0
-    errors = []
-
-    for media_id, post_id, url, subreddit, author, title in failed_media:
-        if not url:
-            errors.append(f"media {media_id}: no URL")
-            continue
-
-        try:
-            rd.lpush(
-                "media_queue",
-                json.dumps(
-                    {
-                        "post_id": post_id,
-                        "url": url,
-                        "subreddit": subreddit,
-                        "author": author,
-                        "title": title or "",
-                    }
-                ),
-            )
-            requeued += 1
-        except Exception as e:
-            errors.append(f"media {media_id}: {e}")
-
-    with get_db_cursor() as cur:
-        if target_type == "subreddit":
-            cur.execute(
-                """
-                UPDATE media SET status = 'pending'
-                FROM posts p
-                WHERE media.post_id = p.id AND LOWER(p.subreddit) = LOWER(%s) AND (
-                   (media.status IS NULL OR media.status = '')
-                   OR media.status = 'error'
-                   OR media.status = 'pending'
-                   OR media.status = 'failed'
-                   OR (media.status IN ('done', 'partial') AND (media.file_path IS NULL OR media.file_path = ''))
-                )
-            """,
-                (name,),
-            )
-        else:
-            cur.execute(
-                """
-                UPDATE media SET status = 'pending'
-                FROM posts p
-                WHERE media.post_id = p.id AND LOWER(p.author) = LOWER(%s) AND (
-                   (media.status IS NULL OR media.status = '')
-                   OR media.status = 'error'
-                   OR media.status = 'pending'
-                   OR media.status = 'failed'
-                   OR (media.status IN ('done', 'partial') AND (media.file_path IS NULL OR media.file_path = ''))
-                )
-            """,
-                (name,),
-            )
-
+@app.get("/api/admin/queue")
+def admin_queue():
+    """Get the current media download queue from Redis."""
+    r = get_redis()
+    items = r.lrange("media_queue", 0, 100)
+    retry_items = r.lrange("media_queue_retry", 0, 100)
+    failed_items = r.lrange("media_dead_letter", 0, 100)
     return {
-        "status": "ok",
-        "requeued": requeued,
-        "total_found": len(failed_media),
-        "errors": errors[:10] if errors else [],
+        "queue": [json.loads(i) for i in items],
+        "queue_length": r.llen("media_queue"),
+        "retry_queue": [json.loads(i) for i in retry_items],
+        "retry_queue_length": r.llen("media_queue_retry"),
+        "dead_letter_queue": [json.loads(i) for i in failed_items],
+        "dead_letter_queue_length": r.llen("media_dead_letter"),
     }
 
 
-@app.get("/api/admin/target/{target_type}/{name}/audit")
-def audit_target(target_type: str, name: str):
-    """Return per-target media integrity stats."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    col = "author" if target_type == "user" else "subreddit"
-    with get_db_cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT
-                COUNT(DISTINCT p.id)                                            AS total_posts,
-                COUNT(m.id)                                                     AS total_media,
-                COUNT(m.id) FILTER (WHERE m.status='done' AND m.file_path IS NOT NULL AND m.file_path != '') AS media_ok,
-                COUNT(m.id) FILTER (WHERE m.status='error')                    AS media_error,
-                COUNT(m.id) FILTER (WHERE m.status='failed')                   AS media_failed,
-                COUNT(m.id) FILTER (WHERE m.status='pending' OR m.status IS NULL) AS media_pending,
-                COUNT(DISTINCT p.id) FILTER (
-                    WHERE NOT EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
-                )                                                               AS posts_no_media,
-                COUNT(DISTINCT p.id) FILTER (
-                    WHERE EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
-                    AND NOT EXISTS (
-                        SELECT 1 FROM media mm WHERE mm.post_id=p.id
-                        AND (mm.status!='done' OR mm.file_path IS NULL OR mm.file_path='')
-                    )
-                )                                                               AS posts_ok,
-                COUNT(DISTINCT p.id) FILTER (
-                    WHERE EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id
-                        AND (mm.status!='done' OR mm.file_path IS NULL OR mm.file_path=''))
-                    AND EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id
-                        AND mm.status='done' AND mm.file_path IS NOT NULL AND mm.file_path!='')
-                )                                                               AS posts_partial,
-                COUNT(DISTINCT p.id) FILTER (
-                    WHERE EXISTS (SELECT 1 FROM media mm WHERE mm.post_id=p.id)
-                    AND NOT EXISTS (
-                        SELECT 1 FROM media mm WHERE mm.post_id=p.id
-                        AND mm.status='done' AND mm.file_path IS NOT NULL AND mm.file_path!=''
-                    )
-                )                                                               AS posts_all_missing
-            FROM posts p
-            LEFT JOIN media m ON m.post_id = p.id
-            WHERE LOWER(p.{col}) = LOWER(%s)
-            """,
-            (name,),
-        )
-        row = cur.fetchone()
-
-    (
-        total_posts,
-        total_media,
-        media_ok,
-        media_error,
-        media_failed,
-        media_pending,
-        posts_no_media,
-        posts_ok,
-        posts_partial,
-        posts_all_missing,
-    ) = row
-    media_missing = (total_media or 0) - (media_ok or 0)
-    return {
-        "total_posts": total_posts or 0,
-        "total_media": total_media or 0,
-        "media_ok": media_ok or 0,
-        "media_error": media_error or 0,
-        "media_failed": media_failed or 0,
-        "media_pending": media_pending or 0,
-        "media_missing": media_missing,
-        "posts_no_media": posts_no_media or 0,
-        "posts_ok": posts_ok or 0,
-        "posts_partial": posts_partial or 0,
-        "posts_all_missing": posts_all_missing or 0,
-    }
+class ScrapeRequest(BaseModel):
+    target_type: Optional[str] = None
+    target_name: Optional[str] = None
 
 
-@app.get("/api/admin/target/{target_type}/{name}/stats")
-def target_stats(target_type: str, name: str):
-    """Return per-target live statistics."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    col = "author" if target_type == "user" else "subreddit"
-    with get_db_cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT
-                COUNT(*) FILTER (WHERE created_utc::date = CURRENT_DATE) AS posts_today,
-                COUNT(*) FILTER (WHERE created_utc::date >= CURRENT_DATE - INTERVAL '7 days') AS posts_this_week,
-                COUNT(DISTINCT p.id) FILTER (WHERE m.status = 'pending' OR m.status IS NULL) AS pending_media,
-                (SELECT COUNT(*) FROM media m2 JOIN posts p2 ON m2.post_id = p2.id WHERE LOWER(p2.{col}) = LOWER(%s) AND m2.status = 'pending') AS pending_media_count,
-                (SELECT COUNT(*) FROM media m2 JOIN posts p2 ON m2.post_id = p2.id WHERE LOWER(p2.{col}) = LOWER(%s) AND m2.status = 'failed') AS failed_media_count,
-                (SELECT COUNT(*) FROM media m2 JOIN posts p2 ON m2.post_id = p2.id WHERE LOWER(p2.{col}) = LOWER(%s) AND m2.status = 'error') AS error_media_count,
-                MAX(p.created_utc) AS last_posted_at
-            FROM posts p
-            LEFT JOIN media m ON m.post_id = p.id
-            WHERE LOWER(p.{col}) = LOWER(%s)
-            """,
-            (name, name, name, name),
-        )
-        row = cur.fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Target not found")
-
-    (
-        posts_today,
-        posts_this_week,
-        pending_media,
-        pending_media_count,
-        failed_media_count,
-        error_media_count,
-        last_posted_at,
-    ) = row
-
-    queue_length = 0
-    if redis_client:
-        try:
-            rd = get_redis()
-            queue_key = f"queue:{target_type}:{name}"
-            queue_length = rd.llen(queue_key)
-        except Exception:
-            pass
-
-    return {
-        "posts_today": posts_today or 0,
-        "posts_this_week": posts_this_week or 0,
-        "pending_media": pending_media_count or 0,
-        "failed_media": failed_media_count or 0,
-        "error_media": error_media_count or 0,
-        "last_posted_at": last_posted_at.isoformat() if last_posted_at else None,
-        "queue_length": queue_length,
-    }
-
-
-@app.get("/api/admin/target/{target_type}/{name}/failures")
-def target_failures(
-    target_type: str,
-    name: str,
-    limit: int = Query(50, ge=1, le=200),
-    status: Optional[str] = None,
-):
-    """Return failed/errored media items for a specific target, plus scrape failures."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    col = "author" if target_type == "user" else "subreddit"
-    with get_db_cursor() as cur:
-        where_clause = f"LOWER(p.{col}) = LOWER(%s) AND m.status IN ('failed', 'error')"
-        params = [name]
-
-        if status:
-            where_clause += " AND m.status = %s"
-            params.append(status)
-
-        cur.execute(
-            f"""
-            SELECT m.id, m.url, m.status, m.error_message, m.created_at,
-                   p.id AS post_id, p.title, p.subreddit, p.author
-            FROM media m
-            JOIN posts p ON p.id = m.post_id
-            WHERE {where_clause}
-            ORDER BY m.created_at DESC
-            LIMIT %s
-            """,
-            params + [limit],
-        )
-
-        failures = []
-        for row in cur.fetchall():
-            failures.append(
-                {
-                    "id": row[0],
-                    "url": row[1],
-                    "status": row[2],
-                    "error_message": row[3],
-                    "created_at": row[4].isoformat() if row[4] else None,
-                    "post_id": row[5],
-                    "post_title": row[6],
-                    "subreddit": row[7],
-                    "author": row[8],
-                }
-            )
-
-        scrape_failures = []
-        try:
-            cur.execute(
-                """
-                SELECT id, post_id, error_message, sort_method, created_at
-                FROM scrape_failures
-                WHERE target_type = %s AND LOWER(target_name) = LOWER(%s)
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (target_type, name, limit),
-            )
-            for row in cur.fetchall():
-                scrape_failures.append(
-                    {
-                        "id": row[0],
-                        "post_id": row[1],
-                        "error_message": row[2],
-                        "sort_method": row[3],
-                        "created_at": row[4].isoformat() if row[4] else None,
-                        "status": "scrape_error",
-                    }
-                )
-        except Exception as e:
-            logger.warning(f"scrape_failures table may not exist: {e}")
-
-    return {"failures": failures, "scrape_failures": scrape_failures}
-
-
-@app.get("/api/admin/target/{target_type}/{name}/scrape-failures")
-def target_scrape_failures(
-    target_type: str,
-    name: str,
-    limit: int = Query(50, ge=1, le=200),
-):
-    """Return scrape failures (failed post ingestions) for a specific target."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, post_id, error_message, sort_method, created_at
-            FROM scrape_failures
-            WHERE target_type = %s AND LOWER(target_name) = LOWER(%s)
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            (target_type, name, limit),
-        )
-
-        failures = []
-        for row in cur.fetchall():
-            failures.append(
-                {
-                    "id": row[0],
-                    "post_id": row[1],
-                    "error_message": row[2],
-                    "sort_method": row[3],
-                    "created_at": row[4].isoformat() if row[4] else None,
-                }
-            )
-
-    return {"scrape_failures": failures}
-
-
-@app.post("/api/admin/target/{target_type}/{name}/scrape")
-def trigger_target_scrape(target_type: str, name: str):
-    """Trigger an immediate scrape for a single target."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-    rd.lpush(
-        "scrape_trigger",
-        json.dumps(
-            {
-                "triggered_at": datetime.now(timezone.utc).isoformat(),
-                "target_type": target_type,
-                "target_name": name,
-            }
-        ),
-    )
-    return {"status": "ok", "message": f"Scrape triggered for {target_type}:{name}"}
-
-
-@app.post("/api/admin/target/{target_type}/{name}/backfill")
-def backfill_target(
-    target_type: str,
-    name: str,
-    passes: int = Query(2, ge=1, le=10),
-    workers: int = Query(3, ge=1, le=20),
-):
-    """Trigger a backfill for a single target."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-    rd.lpush(
-        "backfill_trigger",
-        json.dumps(
-            {
-                "triggered_at": datetime.now(timezone.utc).isoformat(),
-                "target_type": target_type,
-                "target_name": name,
-                "passes": passes,
-                "workers": workers,
-            }
-        ),
-    )
-    return {"status": "ok", "message": f"Backfill triggered for {target_type}:{name}"}
-
-
-@app.post("/api/admin/scrape")
-def trigger_scrape():
-    """Trigger immediate scrape of all enabled targets."""
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-    rd.lpush(
-        "scrape_trigger",
-        json.dumps({"triggered_at": datetime.now(timezone.utc).isoformat()}),
-    )
-
+@app.post("/api/admin/trigger-scrape")
+def trigger_scrape(req: ScrapeRequest):
+    """Manually trigger a scrape cycle for all targets, or a single target."""
+    r = get_redis()
+    payload = {}
+    if req.target_type and req.target_name:
+        payload = {"target_type": req.target_type, "target_name": req.target_name}
+    r.lpush("scrape_trigger", json.dumps(payload))
     return {"status": "ok", "message": "Scrape triggered"}
 
 
-@app.post("/api/admin/backfill")
-def trigger_backfill(
-    passes: int = Query(2, ge=1, le=10, description="Number of backfill passes"),
-    workers: int = Query(3, ge=1, le=20, description="Parallel workers"),
-):
-    """Trigger a backfill scrape to get historical posts."""
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-    rd.lpush(
-        "backfill_trigger",
-        json.dumps(
-            {
-                "triggered_at": datetime.now(timezone.utc).isoformat(),
-                "passes": passes,
-                "workers": workers,
-            }
-        ),
-    )
-
-    return {
-        "status": "ok",
-        "message": f"Backfill triggered with {passes} passes, {workers} workers",
-    }
+class BackfillRequest(BaseModel):
+    passes: Optional[int] = None
+    workers: Optional[int] = None
+    target_type: Optional[str] = None
+    target_name: Optional[str] = None
 
 
-@app.get("/api/admin/backfill/status")
+@app.post("/api/admin/trigger-backfill")
+def trigger_backfill(req: BackfillRequest):
+    """Manually trigger a backfill for all targets, or a single target."""
+    r = get_redis()
+    payload = {}
+    if req.passes:
+        payload["passes"] = req.passes
+    if req.workers:
+        payload["workers"] = req.workers
+    if req.target_type and req.target_name:
+        payload["target_type"] = req.target_type
+        payload["target_name"] = req.target_name
+    r.lpush("backfill_trigger", json.dumps(payload))
+    r.setex("backfill_status", 300, json.dumps({"status": "starting"}))
+    return {"status": "ok", "message": "Backfill triggered"}
+
+
+@app.get("/api/admin/backfill-status")
 def backfill_status():
-    """Poll the status of the last backfill run."""
-    rd = get_redis()
-    if not rd:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    status = rd.get("backfill_status")
-    if not status:
-        return {"status": "none", "message": "No backfill run yet"}
-
-    return json.loads(status)
-
-
-# ---------------------------------------------------------------------------
-# Audit endpoints
-# ---------------------------------------------------------------------------
-
-
-@app.get("/api/admin/audit/summary")
-def audit_summary():
-    """Get summary statistics for the audit dashboard.
-
-    Shows all posts since all scraped content is considered fully excluded.
-    """
-    with get_db_cursor() as cur:
-        # Total posts (all are considered excluded since they're fully scraped)
-        cur.execute("SELECT COUNT(*) FROM posts")
-        total_posts = cur.fetchone()[0] or 0
-
-        # Posts with media
-        cur.execute("""
-            SELECT COUNT(DISTINCT p.id) FROM posts p
-            JOIN media m ON m.post_id = p.id
-        """)
-        posts_with_media = cur.fetchone()[0] or 0
-
-        # Posts where all media is downloaded (file exists)
-        cur.execute("""
-            SELECT COUNT(DISTINCT p.id) FROM posts p
-            JOIN media m ON m.post_id = p.id
-            WHERE m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
-        """)
-        posts_all_downloaded = cur.fetchone()[0] or 0
-
-        # Posts with some missing media
-        cur.execute("""
-            SELECT COUNT(DISTINCT p.id) FROM posts p
-            JOIN media m ON m.post_id = p.id
-            WHERE m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
-        """)
-        posts_with_missing = cur.fetchone()[0] or 0
-
-        # Total media items
-        cur.execute("SELECT COUNT(*) FROM media m JOIN posts p ON m.post_id = p.id")
-        total_media = cur.fetchone()[0] or 0
-
-        # Media downloaded
-        cur.execute("""
-            SELECT COUNT(*) FROM media m
-            JOIN posts p ON m.post_id = p.id
-            WHERE m.status = 'done' AND m.file_path IS NOT NULL AND m.file_path != ''
-        """)
-        media_downloaded = cur.fetchone()[0] or 0
-
-        # Media missing/failed
-        cur.execute("""
-            SELECT COUNT(*) FROM media m
-            JOIN posts p ON m.post_id = p.id
-            WHERE m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
-        """)
-        media_missing = cur.fetchone()[0] or 0
-
-        return {
-            "total_posts": total_posts,
-            "total_hidden_posts": total_posts,  # Legacy name for backward compatibility
-            "total_excluded_posts": total_posts,
-            "posts_with_media": posts_with_media,
-            "posts_all_ok": posts_all_downloaded,
-            "posts_with_issues": posts_with_missing,
-            "total_media_items": total_media,
-            "media_ok": media_downloaded,
-            "media_missing": media_missing,
-        }
-
-
-@app.get("/api/admin/audit/posts")
-def audit_posts(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    status_filter: Optional[str] = None,  # "ok" | "missing" | "partial"
-    subreddit: Optional[str] = None,
-):
-    """Get detailed audit results for each post."""
-    with get_db_cursor() as cur:
-        # Build query based on filters - show all posts
-        base_query = """
-            SELECT p.id, p.title, p.subreddit, p.author, p.created_utc, p.url
-            FROM posts p
-        """
-        params: list[Any] = []
-
-        if subreddit:
-            base_query += " AND LOWER(p.subreddit) = LOWER(%s)"
-            params.append(subreddit)
-
-        if status_filter == "ok":
-            base_query += """
-                AND NOT EXISTS (
-                    SELECT 1 FROM media m WHERE m.post_id = p.id AND (
-                        m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
-                    )
-                )
-            """
-        elif status_filter == "missing":
-            base_query += """
-                AND EXISTS (
-                    SELECT 1 FROM media m WHERE m.post_id = p.id AND (
-                        m.status != 'done' OR m.file_path IS NULL OR m.file_path = ''
-                    )
-                )
-            """
-
-        # Get total count
-        count_query = base_query.replace(
-            "SELECT p.id, p.title, p.subreddit, p.author, p.created_utc, p.url",
-            "SELECT COUNT(*)",
-        )
-        cur.execute(count_query, params)
-        total = cur.fetchone()[0] or 0
-
-        # Get paginated results
-        base_query += " ORDER BY p.created_utc DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-        cur.execute(base_query, params)
-
-        results = []
-        for row in cur.fetchall():
-            post_id, title, subreddit, author, created_utc, url = row
-
-            # Get media for this post
-            cur.execute(
-                """
-                SELECT id, url, file_path, thumb_path, status
-                FROM media WHERE post_id = %s
-            """,
-                (post_id,),
-            )
-            media_rows = cur.fetchall()
-
-            media_items = []
-            ok_count = 0
-            missing_count = 0
-
-            for m_id, m_url, m_file_path, m_thumb_path, m_status in media_rows:
-                file_exists = (
-                    m_file_path and os.path.exists(m_file_path)
-                    if m_file_path
-                    else False
-                )
-                thumb_exists = (
-                    m_thumb_path and os.path.exists(m_thumb_path)
-                    if m_thumb_path
-                    else False
-                )
-
-                if m_status == "done" and file_exists:
-                    status = "ok"
-                    ok_count += 1
-                elif m_status == "done" and not file_exists:
-                    status = "missing_file"
-                    missing_count += 1
-                elif m_status == "pending":
-                    status = "pending"
-                    missing_count += 1
-                elif m_status == "failed":
-                    status = "failed"
-                    missing_count += 1
-                else:
-                    status = "unknown"
-                    missing_count += 1
-
-                media_items.append(
-                    {
-                        "id": m_id,
-                        "url": m_url,
-                        "file_path": m_file_path,
-                        "file_exists": file_exists,
-                        "thumb_exists": thumb_exists,
-                        "status": status,
-                    }
-                )
-
-            total_media = len(media_items)
-            if total_media == 0:
-                post_status = "no_media"
-            elif missing_count == 0:
-                post_status = "ok"
-            elif ok_count == 0:
-                post_status = "all_missing"
-            else:
-                post_status = "partial"
-
-            results.append(
-                {
-                    "id": post_id,
-                    "title": title,
-                    "subreddit": subreddit,
-                    "author": author,
-                    "created_utc": created_utc.isoformat() if created_utc else None,
-                    "url": url,
-                    "status": post_status,
-                    "media_count": total_media,
-                    "media_ok": ok_count,
-                    "media_missing": missing_count,
-                    "media": media_items,
-                }
-            )
-
-        return {
-            "posts": results,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
-
-
-@app.get("/api/admin/audit/post/{post_id}")
-def audit_post_detail(post_id: str):
-    """Get detailed audit information for a single post."""
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, title, subreddit, author, created_utc, url, raw
-            FROM posts WHERE id = %s AND excluded = TRUE
-        """,
-            (post_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Post not found")
-
-        post_id, title, subreddit, author, created_utc, url, raw = row
-
-        cur.execute(
-            """
-            SELECT id, url, file_path, thumb_path, status, downloaded_at, retries
-            FROM media WHERE post_id = %s
-        """,
-            (post_id,),
-        )
-
-        media_items = []
-        for m in cur.fetchall():
-            (
-                m_id,
-                m_url,
-                m_file_path,
-                m_thumb_path,
-                m_status,
-                m_downloaded_at,
-                m_retries,
-            ) = m
-
-            file_exists = (
-                m_file_path and os.path.exists(m_file_path) if m_file_path else False
-            )
-            thumb_exists = (
-                m_thumb_path and os.path.exists(m_thumb_path) if m_thumb_path else False
-            )
-
-            if m_status == "done" and file_exists:
-                status = "ok"
-            elif m_status == "done" and not file_exists:
-                status = "missing_file"
-            elif m_status == "pending":
-                status = "pending"
-            elif m_status == "failed":
-                status = "failed"
-            else:
-                status = "unknown"
-
-            media_items.append(
-                {
-                    "id": m_id,
-                    "url": m_url,
-                    "file_path": m_file_path,
-                    "file_exists": file_exists,
-                    "thumb_path": m_thumb_path,
-                    "thumb_exists": thumb_exists,
-                    "status": m_status,
-                    "resolved_status": status,
-                    "downloaded_at": m_downloaded_at.isoformat()
-                    if m_downloaded_at
-                    else None,
-                    "retries": m_retries,
-                }
-            )
-
-        # Determine overall status
-        if not media_items:
-            overall = "no_media"
-        elif all(m["resolved_status"] == "ok" for m in media_items):
-            overall = "ok"
-        elif all(m["resolved_status"] != "ok" for m in media_items):
-            overall = "all_missing"
-        else:
-            overall = "partial"
-
-        return {
-            "id": post_id,
-            "title": title,
-            "subreddit": subreddit,
-            "author": author,
-            "created_utc": created_utc.isoformat() if created_utc else None,
-            "url": url,
-            "overall_status": overall,
-            "media": media_items,
-        }
-
-
-@app.post("/api/admin/target/{target_type}")
-def add_target(
-    target_type: str,
-    name: str,
-    validate: bool = Query(
-        True, description="Verify target exists on Reddit before adding"
-    ),
-):
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    if validate:
-        exists = _verify_target_exists(target_type, name)
-        if exists is False:
-            _append_failed_target(target_type, name)
-            raise HTTPException(
-                status_code=404,
-                detail=f"{target_type} '{name}' does not exist on Reddit",
-            )
-        elif exists is None:
-            logger.warning(f"Could not verify {target_type}:{name}, proceeding anyway")
-
-    with get_db_cursor() as cur:
-        # Check case-insensitively first to prevent pseudo-duplicates
-        cur.execute(
-            "SELECT id FROM targets WHERE type = %s AND LOWER(name) = LOWER(%s)",
-            (target_type, name),
-        )
-        if cur.fetchone():
-            raise HTTPException(status_code=409, detail="Target already exists")
-
-        cur.execute(
-            "INSERT INTO targets(type, name, enabled) VALUES(%s, %s, true) ON CONFLICT (name) DO NOTHING RETURNING id",
-            (target_type, name),
-        )
-        result = cur.fetchone()
-        if result is None:
-            raise HTTPException(status_code=409, detail="Target already exists")
-        return {"status": "ok", "name": name, "type": target_type}
-
-
-@app.delete("/api/admin/target/{target_type}/{name}")
-def delete_target(
-    target_type: str,
-    name: str,
-    prune: bool = Query(False, description="Also delete associated posts and media"),
-    delete_files: bool = Query(False, description="Also delete media files from disk"),
-):
-    conn = None
-    cur = None
-    try:
-        conn = connection_pool.getconn()
-        cur = conn.cursor()
-
-        cur.execute(
-            "DELETE FROM targets WHERE type = %s AND name = %s RETURNING id",
-            (target_type, name),
-        )
-        result = cur.fetchone()
-        if result is None:
-            raise HTTPException(status_code=404, detail="Target not found")
-
-        deleted_posts = 0
-        deleted_media = 0
-        deleted_files = 0
-
-        if prune:
-            # First, fetch post IDs safely
-            if target_type == "subreddit":
-                cur.execute(
-                    "SELECT id FROM posts WHERE LOWER(subreddit) = LOWER(%s)",
-                    (name,),
-                )
-            else:
-                cur.execute(
-                    "SELECT id FROM posts WHERE LOWER(author) = LOWER(%s)",
-                    (name,),
-                )
-            post_ids = [row[0] for row in cur.fetchall()]
-
-            if post_ids:
-                if delete_files:
-                    cur.execute(
-                        "SELECT file_path, thumb_path FROM media WHERE post_id = ANY(%s)",
-                        (post_ids,),
-                    )
-                    for file_path, thumb_path in cur.fetchall():
-                        for p in [file_path, thumb_path]:
-                            if p and os.path.exists(p):
-                                try:
-                                    os.remove(p)
-                                    if p == file_path:
-                                        deleted_files += 1
-                                except Exception:
-                                    pass
-
-                cur.execute("DELETE FROM media WHERE post_id = ANY(%s)", (post_ids,))
-                deleted_media = cur.rowcount
-                cur.execute("DELETE FROM comments WHERE post_id = ANY(%s)", (post_ids,))
-                cur.execute("DELETE FROM posts WHERE id = ANY(%s)", (post_ids,))
-                deleted_posts = cur.rowcount
-
-        conn.commit()
-        return {
-            "status": "ok",
-            "deleted": name,
-            "pruned": prune,
-            "deleted_posts": deleted_posts,
-            "deleted_media": deleted_media,
-            "deleted_files": deleted_files,
-        }
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if cur:
-            cur.close()
-        if conn and connection_pool:
-            connection_pool.putconn(conn)
+    """Get the status of the last backfill job."""
+    r = get_redis()
+    status = r.get("backfill_status")
+    return json.loads(status) if status else {"status": "unknown"}
 
 
 @app.get("/api/admin/activity")
 def admin_activity(
-    limit: int = Query(50, ge=1, le=200), include_failures: bool = Query(False)
+    limit: int = Query(50, ge=1, le=500), include_failures: bool = Query(True)
 ):
-    """Activity stream endpoint - returns recent posts and optionally failures sorted by time."""
-    events = []
+    """Get recent activity (new posts, media, failures)."""
+    results = []
     with get_db_cursor() as cur:
-        # Get recent posts
+        # Recent posts
         cur.execute(
             """
-            SELECT p.id, p.subreddit, p.author, p.created_utc, p.title, p.ingested_at
-            FROM posts p
-            ORDER BY COALESCE(p.ingested_at, p.created_utc) DESC
-            LIMIT %s
-        """,
+        SELECT id, title, subreddit, author, created_utc, ingested_at 
+        FROM posts WHERE excluded = FALSE
+        ORDER BY ingested_at DESC NULLS LAST LIMIT %s
+      """,
             (limit,),
         )
         for r in cur.fetchall():
-            events.append(
+            results.append(
                 {
-                    "type": "post",
+                    "type": "new_post",
                     "id": r[0],
-                    "subreddit": r[1],
-                    "author": r[2],
-                    "created_utc": r[3].isoformat() if r[3] else None,
-                    "title": r[4],
-                    "ingested_at": r[5].isoformat() if r[5] else None,
+                    "title": r[1],
+                    "subreddit": r[2],
+                    "author": r[3],
+                    "created_utc": r[4].isoformat() if r[4] else None,
+                    "timestamp": r[5].isoformat() if r[5] else None,
                 }
             )
 
-        # Get recent failures if requested
+        # Recent media
+        cur.execute(
+            """
+        SELECT m.id, m.url, m.status, m.downloaded_at, m.file_path, m.thumb_path,
+               p.title, p.subreddit, p.author
+        FROM media m
+        JOIN posts p ON m.post_id = p.id
+        WHERE m.status = 'done'
+        ORDER BY m.downloaded_at DESC LIMIT %s
+      """,
+            (limit,),
+        )
+        for r in cur.fetchall():
+            results.append(
+                {
+                    "type": "new_media",
+                    "id": r[0],
+                    "url": r[1],
+                    "status": r[2],
+                    "timestamp": r[3].isoformat() if r[3] else None,
+                    "file_path": r[4],
+                    "thumb_path": r[5],
+                    "post_title": r[6],
+                    "subreddit": r[7],
+                    "author": r[8],
+                }
+            )
+
         if include_failures:
-    cur.execute(
-        """
-      SELECT m.id, m.url, m.status, m.error_message, m.downloaded_at, m.file_path, m.thumb_path,
-             p.title, p.subreddit, p.author
-      FROM media m
-      JOIN posts p ON m.post_id = p.id
-      WHERE m.status IN ('failed', 'corrupted')
-      ORDER BY m.downloaded_at DESC NULLS LAST
-      LIMIT %s
-    """,
-        (limit,),
-    )
+            # Failed media downloads
+            cur.execute(
+                f"""
+              SELECT m.id, m.url, m.status, m.error_message, m.created_at, m.file_path, m.thumb_path,
+                     p.title, p.subreddit, p.author
+              FROM media m
+              JOIN posts p ON m.post_id = p.id
+              WHERE m.status IN ('failed', 'corrupted')
+              ORDER BY m.created_at DESC NULLS LAST
+              LIMIT %s
+            """,
+                (limit,),
+            )
             for r in cur.fetchall():
-                events.append(
+                results.append(
                     {
-                        "type": "failure",
+                        "type": "failed_media",
                         "id": r[0],
                         "url": r[1],
                         "status": r[2],
-                        "error_message": r[3],
-                        "created_at": r[4].isoformat() if r[4] else None,
-                        "post_id": r[5],
-                        "post_title": r[6],
-                        "subreddit": r[7],
-                        "author": r[8],
+                        "error": r[3],
+                        "timestamp": r[4].isoformat() if r[4] else None,
+                        "file_path": r[5],
+                        "thumb_path": r[6],
+                        "post_title": r[7],
+                        "subreddit": r[8],
+                        "author": r[9],
                     }
                 )
 
-    # Sort by time, interleaving posts and failures
-    def sort_key(e):
-        if e["type"] == "post":
-            return e.get("ingested_at") or e.get("created_utc") or ""
-        return e.get("created_at") or ""
-
-    events.sort(key=sort_key, reverse=True)
-    return events[:limit]
-
-
-@app.get("/api/admin/logs")
-def admin_logs(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    subreddit: Optional[str] = None,
-    author: Optional[str] = None,
-):
-    with get_db_cursor() as cur:
-        query = """
-            SELECT p.id, p.subreddit, p.author, p.created_utc, p.title
-            FROM posts p
-            WHERE 1=1
-        """
-        params: list[Any] = []
-
-        if subreddit:
-            query += " AND LOWER(p.subreddit) = LOWER(%s)"
-            params.append(subreddit)
-        if author:
-            query += " AND LOWER(p.author) = LOWER(%s)"
-            params.append(author)
-
-        query += " ORDER BY p.created_utc DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-
-        cur.execute(query, params)
-        return [
-            {
-                "id": r[0],
-                "subreddit": r[1],
-                "author": r[2],
-                "created_utc": r[3].isoformat() if r[3] else None,
-                "title": r[4],
-            }
-            for r in cur.fetchall()
-        ]
-
-
-@app.get("/api/admin/queue")
-def get_queue_status():
-    if not redis_client:
-        return {"status": "unavailable", "message": "Redis not connected"}
-
-    rd = get_redis()
-    queue_len = rd.llen("media_queue")
-
-    pending_items = []
-    items = rd.lrange("media_queue", 0, 9)
-    for item in items:
-        try:
-            pending_items.append(json.loads(item))
-        except Exception:
-            pass
-
-    return {"queue_length": queue_len, "recent_items": pending_items}
-
-
-@app.get("/api/admin/failed-media")
-def get_failed_media(limit: int = Query(50, ge=1, le=500)):
-    """Get list of failed media downloads from database."""
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT m.id, m.post_id, m.url, m.status, m.retries, m.downloaded_at
-            FROM media m
-            WHERE m.status = 'failed'
-            ORDER BY m.downloaded_at DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        rows = cur.fetchall()
-
-    return {
-        "failed_count": len(rows),
-        "failed_media": [
-            {
-                "id": r[0],
-                "post_id": r[1],
-                "url": r[2],
-                "status": r[3],
-                "retries": r[4],
-                "failed_at": r[5].isoformat() if r[5] else None,
-            }
-            for r in rows
-        ],
-    }
-
-
-@app.get("/api/admin/failed-downloads")
-def get_failed_downloads_redis(limit: int = Query(50, ge=1, le=500)):
-    """Get failed downloads logged to Redis for debugging."""
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-    video_failures = rd.lrange("failed_video_downloads", 0, limit - 1)
-    general_failures = rd.lrange("failed_media_downloads", 0, limit - 1)
-
-    return {
-        "video_failures": [json.loads(x) for x in video_failures],
-        "general_failures": [json.loads(x) for x in general_failures],
-    }
-
-
-@app.delete("/api/admin/queue")
-def clear_queue():
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-    rd.delete("media_queue")
-    return {"status": "ok", "message": "Queue cleared"}
-
-
-# ---------------------------------------------------------------------------
-# Thumbnail utilities
-# ---------------------------------------------------------------------------
-
-# In-memory job registry: job_id -> {status, total, done, errors, started_at}
-_thumb_jobs: Dict[str, Any] = {}
-_thumb_jobs_lock = threading.Lock()
-
-
-def _make_thumb(src_path: str) -> str:
-    """Generate a .thumb.jpg for *src_path* inside THUMB_PATH, mirroring the
-    directory structure relative to ARCHIVE_PATH.  Returns the thumb path."""
-    # Handle excluded files (in EXCLUDED_MEDIA_PATH) -> put thumbs in EXCLUDED_THUMB_PATH
-    if src_path.startswith(EXCLUDED_MEDIA_PATH):
-        try:
-            rel = os.path.relpath(src_path, EXCLUDED_MEDIA_PATH)
-        except ValueError:
-            rel = Path(src_path).name
-        thumb_subdir = Path(EXCLUDED_THUMB_PATH) / Path(rel).parent
-    else:
-        try:
-            rel = os.path.relpath(src_path, ARCHIVE_PATH)
-        except ValueError:
-            rel = Path(src_path).name
-        thumb_subdir = Path(THUMB_PATH) / Path(rel).parent
-
-    thumb_subdir.mkdir(parents=True, exist_ok=True)
-    thumb = str(thumb_subdir / (Path(src_path).stem + ".thumb.jpg"))
-
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            src_path,
-            "-vf",
-            "scale=320:-1",
-            "-frames:v",
-            "1",
-            thumb,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.decode(errors="replace")[:300])
-    return thumb
-
-
-def _run_thumb_job(job_id: str, rows: list, force: bool):
-    """Background worker: generate thumbnails for *rows* and update DB."""
-    with _thumb_jobs_lock:
-        _thumb_jobs[job_id]["status"] = "running"
-
-    done = 0
-    errors = []
-
-    for media_id, file_path, existing_thumb in rows:
-        # Skip if thumb already exists on disk and we're not forcing
-        if not force and existing_thumb and os.path.exists(existing_thumb):
-            with _thumb_jobs_lock:
-                _thumb_jobs[job_id]["done"] += 1
-            done += 1
-            continue
-
-        if not file_path or not os.path.exists(file_path):
-            err_msg = f"source file not found: {file_path}"
-            errors.append(err_msg)
-            logger.warning(f"Thumb job {job_id}: {err_msg}")
-            with _thumb_jobs_lock:
-                _thumb_jobs[job_id]["done"] += 1
-                _thumb_jobs[job_id]["skipped"] = (
-                    _thumb_jobs[job_id].get("skipped", 0) + 1
-                )
-            done += 1
-            continue
-
-        try:
-            thumb = _make_thumb(file_path)
-            conn = None
-            cur = None
-            try:
-                conn = connection_pool.getconn()
-                cur = conn.cursor()
-                cur.execute(
-                    "UPDATE media SET thumb_path = %s WHERE id = %s",
-                    (thumb, media_id),
-                )
-                conn.commit()
-            finally:
-                if cur:
-                    cur.close()
-                if conn and connection_pool:
-                    connection_pool.putconn(conn)
-        except Exception as e:
-            errors.append(f"id={media_id}: {e}")
-            logger.error(f"Thumb job {job_id}: failed for media id={media_id}: {e}")
-
-        done += 1
-        with _thumb_jobs_lock:
-            _thumb_jobs[job_id]["done"] = done
-            _thumb_jobs[job_id]["errors"] = errors[-20:]  # keep last 20
-
-    with _thumb_jobs_lock:
-        _thumb_jobs[job_id]["status"] = "done"
-        _thumb_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
-        # Evict completed jobs older than 1 hour to prevent unbounded memory growth
-        cutoff = datetime.now(timezone.utc).timestamp() - 3600
-        to_evict = [
-            jid
-            for jid, jdata in _thumb_jobs.items()
-            if jdata.get("status") == "done"
-            and jdata.get("finished_at")
-            and datetime.fromisoformat(jdata["finished_at"]).timestamp() < cutoff
-            and jid != job_id
-        ]
-        for jid in to_evict:
-            del _thumb_jobs[jid]
-
-    logger.info(f"Thumb job {job_id} finished: {done} processed, {len(errors)} errors")
-
-
-@app.get("/api/admin/thumbnails/stats")
-def thumb_stats():
-    """Return thumbnail coverage statistics."""
-    with get_db_cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM media WHERE file_path IS NOT NULL")
-        total_with_file = cur.fetchone()[0]
-
-        cur.execute(
-            "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL"
-        )
-        rows = cur.fetchall()
-
-    missing_no_path = 0
-    missing_file_gone = 0
-    good_count = 0
-
-    for media_id, file_path, thumb_path in rows:
-        if not thumb_path:
-            missing_no_path += 1
-        elif not os.path.exists(thumb_path):
-            missing_file_gone += 1
-        else:
-            good_count += 1
-
-    total_missing = missing_no_path + missing_file_gone
-
-    # Count .thumb.jpg files across both thumb directories
-    thumb_files_on_disk = 0
-    thumb_bytes = 0
-    for thumb_root in [THUMB_PATH, EXCLUDED_THUMB_PATH]:
-        try:
-            for dirpath, _, filenames in os.walk(thumb_root):
-                for fn in filenames:
-                    if fn.endswith(".thumb.jpg"):
-                        thumb_files_on_disk += 1
-                        try:
-                            thumb_bytes += os.path.getsize(os.path.join(dirpath, fn))
-                        except OSError:
-                            pass
-        except Exception:
-            pass
-
-    return {
-        "total_media_with_file": total_with_file,
-        "with_thumb_in_db": good_count,
-        "missing_thumb_in_db": total_missing,
-        "missing_no_db_path": missing_no_path,
-        "missing_file_gone": missing_file_gone,
-        "thumb_files_on_disk": thumb_files_on_disk,
-        "thumb_disk_mb": round(thumb_bytes / 1024 / 1024, 2),
-    }
-
-
-@app.post("/api/admin/thumbnails/backfill")
-def thumb_backfill():
-    """Generate thumbnails for all media rows that are missing one."""
-    with get_db_cursor() as cur:
-        cur.execute(
-            "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL ORDER BY id"
-        )
-        all_rows = cur.fetchall()
-
-    rows = []
-    files_missing = 0
-    thums_missing = 0
-    for row in all_rows:
-        media_id, file_path, thumb_path = row
-        if not file_path or not os.path.exists(file_path):
-            files_missing += 1
-            continue
-        if not thumb_path or not os.path.exists(thumb_path):
-            thums_missing += 1
-            rows.append(row)
-
-    logger.info(
-        f"Backfill: {len(all_rows)} total, {files_missing} files missing, {thums_missing} need thumbs"
-    )
-
-    if not rows:
-        return {"job_id": None, "total": 0, "message": "No items need thumbnails"}
-
-    job_id = str(uuid.uuid4())
-    with _thumb_jobs_lock:
-        _thumb_jobs[job_id] = {
-            "type": "backfill",
-            "status": "pending",
-            "total": len(rows),
-            "done": 0,
-            "skipped": 0,
-            "errors": [],
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-        }
-
-    t = threading.Thread(target=_run_thumb_job, args=(job_id, rows, False), daemon=True)
-    t.start()
-
-    return {"job_id": job_id, "total": len(rows)}
-
-
-@app.post("/api/admin/thumbnails/rebuild-all")
-def thumb_rebuild_all():
-    """Force-regenerate thumbnails for every media row that has a local file."""
-    with get_db_cursor() as cur:
-        cur.execute(
-            "SELECT id, file_path, thumb_path FROM media WHERE file_path IS NOT NULL ORDER BY id"
-        )
-        rows = cur.fetchall()
-
-    job_id = str(uuid.uuid4())
-    with _thumb_jobs_lock:
-        _thumb_jobs[job_id] = {
-            "type": "rebuild-all",
-            "status": "pending",
-            "total": len(rows),
-            "done": 0,
-            "skipped": 0,
-            "errors": [],
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-        }
-
-    t = threading.Thread(target=_run_thumb_job, args=(job_id, rows, True), daemon=True)
-    t.start()
-
-    return {"job_id": job_id, "total": len(rows)}
-
-
-@app.post("/api/admin/thumbnails/purge-orphans")
-def thumb_purge_orphans():
-    """Delete .thumb.jpg files on disk that have no corresponding DB row."""
-    with get_db_cursor() as cur:
-        cur.execute("SELECT thumb_path FROM media WHERE thumb_path IS NOT NULL")
-        db_paths = {row[0] for row in cur.fetchall()}
-
-    deleted = 0
-    freed_bytes = 0
-    errors = []
-
-    for thumb_root in [THUMB_PATH, EXCLUDED_THUMB_PATH]:
-        try:
-            for dirpath, _, filenames in os.walk(thumb_root):
-                for fn in filenames:
-                    if not fn.endswith(".thumb.jpg"):
-                        continue
-                    full = os.path.join(dirpath, fn)
-                    if full not in db_paths:
-                        try:
-                            freed_bytes += os.path.getsize(full)
-                            os.remove(full)
-                            deleted += 1
-                        except Exception as e:
-                            errors.append(str(e))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    return {
-        "deleted": deleted,
-        "freed_mb": round(freed_bytes / 1024 / 1024, 2),
-        "errors": errors[:20],
-    }
-
-
-@app.get("/api/admin/thumbnails/job/{job_id}")
-def thumb_job_status(job_id: str):
-    """Poll the status of a background thumbnail job."""
-    with _thumb_jobs_lock:
-        job = _thumb_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-
-# ---------------------------------------------------------------------------
-# Bulk archive utilities
-# ---------------------------------------------------------------------------
-
-# In-memory job registry for bulk archive jobs
-_archive_jobs: Dict[str, Any] = {}
-_archive_jobs_lock = threading.Lock()
-
-
-def _run_bulk_archive_job(job_id: str, post_ids: list, archive: bool):
-    """Background worker: archive (or unarchive) a list of post IDs."""
-    with _archive_jobs_lock:
-        _archive_jobs[job_id]["status"] = "running"
-
-    done = 0
-    skipped = 0
-    files_moved = 0
-    errors = []
-
-    for post_id in post_ids:
-        try:
-            moved, errs = _move_post_media(post_id, archive=archive)
-            files_moved += moved
-            if errs:
-                errors.extend(errs[:3])
-
-            conn = None
-            cur = None
-            try:
-                conn = connection_pool.getconn()
-                cur = conn.cursor()
-                if archive:
-                    cur.execute(
-                        "UPDATE posts SET excluded = TRUE, excluded_at = now() WHERE id = %s",
-                        (post_id,),
-                    )
-                else:
-                    cur.execute(
-                        "UPDATE posts SET excluded = FALSE, excluded_at = NULL WHERE id = %s",
-                        (post_id,),
-                    )
-                conn.commit()
-            finally:
-                if cur:
-                    cur.close()
-                if conn and connection_pool:
-                    connection_pool.putconn(conn)
-
-        except Exception as e:
-            errors.append(f"post {post_id}: {e}")
-            skipped += 1
-            logger.error(f"Bulk archive job {job_id}: failed for post {post_id}: {e}")
-
-        done += 1
-        with _archive_jobs_lock:
-            _archive_jobs[job_id]["done"] = done
-            _archive_jobs[job_id]["skipped"] = skipped
-            _archive_jobs[job_id]["files_moved"] = files_moved
-            _archive_jobs[job_id]["errors"] = errors[-20:]
-
-    with _archive_jobs_lock:
-        _archive_jobs[job_id]["status"] = "done"
-        _archive_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
-        # Evict old completed jobs
-        cutoff = datetime.now(timezone.utc).timestamp() - 3600
-        to_evict = [
-            jid
-            for jid, jdata in _archive_jobs.items()
-            if jdata.get("status") == "done"
-            and jdata.get("finished_at")
-            and datetime.fromisoformat(jdata["finished_at"]).timestamp() < cutoff
-            and jid != job_id
-        ]
-        for jid in to_evict:
-            del _archive_jobs[jid]
-
-    logger.info(
-        f"Bulk archive job {job_id} finished: {done} processed, {skipped} skipped, "
-        f"{files_moved} files moved, {len(errors)} errors"
-    )
-
-
-@app.get("/api/admin/archive/stats")
-def archive_stats():
-    """Return excluded and archived post counts broken down by target and date buckets."""
-    with get_db_cursor() as cur:
-        # Total excluded / archived
-        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
-        total_unexcluded = cur.fetchone()[0]
-
-        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = TRUE")
-        total_excluded = cur.fetchone()[0]
-
-        # Archived posts (archived for long-term preservation)
-        cur.execute("SELECT COUNT(*) FROM posts WHERE archived = TRUE")
-        total_archived = cur.fetchone()[0]
-
-        # Per subreddit target breakdown (unexcluded -> excluded)
-        cur.execute("""
-            SELECT p.subreddit, COUNT(*) as cnt
-            FROM posts p
-            WHERE p.excluded = FALSE
-            GROUP BY p.subreddit
-            ORDER BY cnt DESC
-            LIMIT 50
-        """)
-        by_subreddit = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
-
-        # Per user target breakdown (unexcluded -> excluded)
-        cur.execute("""
-            SELECT p.author, COUNT(*) as cnt
-            FROM posts p
-            JOIN targets t ON t.type = 'user' AND LOWER(t.name) = LOWER(p.author)
-            WHERE p.excluded = FALSE
-            GROUP BY p.author
-            ORDER BY cnt DESC
-            LIMIT 50
-        """)
-        by_user = [{"name": r[0], "count": r[1]} for r in cur.fetchall()]
-
-        # By age bucket
-        cur.execute("""
-            SELECT
-                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '365 days') as older_than_1y,
-                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '180 days'
-                                   AND created_utc >= now() - INTERVAL '365 days') as age_6m_1y,
-                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '90 days'
-                                   AND created_utc >= now() - INTERVAL '180 days') as age_3m_6m,
-                COUNT(*) FILTER (WHERE created_utc < now() - INTERVAL '30 days'
-                                   AND created_utc >= now() - INTERVAL '90 days') as age_1m_3m,
-                COUNT(*) FILTER (WHERE created_utc >= now() - INTERVAL '30 days') as newer_than_1m
-            FROM posts
-            WHERE excluded = FALSE
-        """)
-        row = cur.fetchone()
-        by_age = {
-            "older_1y": row[0] or 0,
-            "age_6m_1y": row[1] or 0,
-            "age_3m_6m": row[2] or 0,
-            "age_1m_3m": row[3] or 0,
-            "newer_1m": row[4] or 0,
-        }
-
-        # Active archive jobs
-        with _archive_jobs_lock:
-            active_jobs = [
-                {**v, "id": k}
-                for k, v in _archive_jobs.items()
-                if v.get("status") in ("pending", "running")
-            ]
-
-    return {
-        "total_excluded": total_excluded,
-        "total_archived": total_archived,
-        "total_posts": total_excluded + total_archived,
-        "archive_pct": round(
-            total_archived / max(1, total_excluded + total_archived) * 100, 1
-        ),
-        "by_subreddit": by_subreddit,
-        "by_user": by_user,
-        "by_age": by_age,
-        "active_jobs": active_jobs,
-    }
-
-
-@app.post("/api/admin/archive/bulk")
-def bulk_archive(
-    target_type: Optional[str] = None,
-    target_name: Optional[str] = None,
-    before_days: Optional[int] = None,
-    media_status: Optional[str] = None,
-    dry_run: bool = False,
-):
-    """
-    Bulk archive posts matching specified criteria.
-
-    Filters (all optional, combined with AND):
-    - target_type + target_name: limit to a specific subreddit or user
-    - before_days: only posts older than N days
-    - media_status: 'done' | 'pending' | 'none' (posts with no media)
-    """
-    conditions = ["excluded = FALSE"]
-    params = []
-
-    if target_type and target_name:
-        if target_type == "subreddit":
-            conditions.append("LOWER(subreddit) = LOWER(%s)")
-        else:
-            conditions.append("LOWER(author) = LOWER(%s)")
-        params.append(target_name)
-
-    if before_days is not None and before_days > 0:
-        conditions.append("created_utc < now() - INTERVAL '%s days'")
-        params.append(before_days)
-
-    where = " AND ".join(conditions)
-
-    with get_db_cursor() as cur:
-        if media_status == "done":
-            query = f"""
-                SELECT DISTINCT p.id FROM posts p
-                JOIN media m ON m.post_id = p.id AND m.status = 'done'
-                WHERE {where}
-            """
-        elif media_status == "none":
-            query = f"""
-                SELECT p.id FROM posts p
-                WHERE {where}
-                  AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id)
-            """
-        else:
-            query = f"SELECT id FROM posts WHERE {where}"
-
-        cur.execute(query, params)
-        post_ids = [r[0] for r in cur.fetchall()]
-
-    if dry_run:
-        return {"dry_run": True, "post_count": len(post_ids)}
-
-    if not post_ids:
-        return {
-            "job_id": None,
-            "total": 0,
-            "message": "No posts match the given filters",
-        }
-
-    job_id = str(uuid.uuid4())
-    with _archive_jobs_lock:
-        _archive_jobs[job_id] = {
-            "type": "bulk_archive",
-            "status": "pending",
-            "total": len(post_ids),
-            "done": 0,
-            "skipped": 0,
-            "files_moved": 0,
-            "errors": [],
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-            "filter_summary": {
-                "target_type": target_type,
-                "target_name": target_name,
-                "before_days": before_days,
-                "media_status": media_status,
-            },
-        }
-
-    t = threading.Thread(
-        target=_run_bulk_archive_job, args=(job_id, post_ids, True), daemon=True
-    )
-    t.start()
-
-    return {"job_id": job_id, "total": len(post_ids)}
-
-
-@app.post("/api/admin/archive/all")
-def archive_all_posts():
-    """Archive every unexcluded -> excluded post. Starts a background job."""
-    with get_db_cursor() as cur:
-        cur.execute(
-            "SELECT id FROM posts WHERE excluded = FALSE ORDER BY created_utc ASC"
-        )
-        post_ids = [r[0] for r in cur.fetchall()]
-
-    if not post_ids:
-        return {"job_id": None, "total": 0, "message": "All posts are already excluded"}
-
-    job_id = str(uuid.uuid4())
-    with _archive_jobs_lock:
-        _archive_jobs[job_id] = {
-            "type": "archive_all",
-            "status": "pending",
-            "total": len(post_ids),
-            "done": 0,
-            "skipped": 0,
-            "files_moved": 0,
-            "errors": [],
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-        }
-
-    t = threading.Thread(
-        target=_run_bulk_archive_job, args=(job_id, post_ids, True), daemon=True
-    )
-    t.start()
-
-    return {"job_id": job_id, "total": len(post_ids)}
-
-
-@app.post("/api/admin/target/{target_type}/{name}/archive-all")
-def archive_all_target(target_type: str, name: str):
-    """Archive all unexcluded -> excluded posts belonging to a specific target."""
-    if target_type not in ("subreddit", "user"):
-        raise HTTPException(status_code=400, detail="Invalid target type")
-
-    with get_db_cursor() as cur:
-        if target_type == "subreddit":
-            cur.execute(
-                "SELECT id FROM posts WHERE excluded = FALSE AND LOWER(subreddit) = LOWER(%s) ORDER BY created_utc ASC",
-                (name,),
-            )
-        else:
-            cur.execute(
-                "SELECT id FROM posts WHERE excluded = FALSE AND LOWER(author) = LOWER(%s) ORDER BY created_utc ASC",
-                (name,),
-            )
-        post_ids = [r[0] for r in cur.fetchall()]
-
-    if not post_ids:
-        return {
-            "job_id": None,
-            "total": 0,
-            "message": f"No unexcluded -> excluded posts for {target_type}:{name}",
-        }
-
-    job_id = str(uuid.uuid4())
-    with _archive_jobs_lock:
-        _archive_jobs[job_id] = {
-            "type": "archive_target",
-            "status": "pending",
-            "total": len(post_ids),
-            "done": 0,
-            "skipped": 0,
-            "files_moved": 0,
-            "errors": [],
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-            "filter_summary": {"target_type": target_type, "target_name": name},
-        }
-
-    t = threading.Thread(
-        target=_run_bulk_archive_job, args=(job_id, post_ids, True), daemon=True
-    )
-    t.start()
-
-    return {"job_id": job_id, "total": len(post_ids)}
-
-
-@app.get("/api/admin/archive/job/{job_id}")
-def archive_job_status(job_id: str):
-    """Poll the status of a background bulk archive job."""
-    with _archive_jobs_lock:
-        job = _archive_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
-
-
-# ---------------------------------------------------------------------------
-# Media re-scan utilities
-# ---------------------------------------------------------------------------
-
-
-def _extract_media_urls_from_raw(raw: dict, post_url: str) -> list:
-    """Extract ALL media URLs from a post's raw JSON data (mirrors ingester logic)."""
-    urls = []
-
-    has_media_metadata = bool(raw.get("media_metadata"))
-    if has_media_metadata:
-        for img_id, img_data in raw["media_metadata"].items():
-            if "s" in img_data:
-                u = img_data["s"].get("u")
-                if u:
-                    urls.append(u)
-            elif img_data.get("p"):
-                u = img_data["p"][-1].get("u")
-                if u:
-                    urls.append(u)
-    else:
-        if post_url and (
-            "i.redd.it" in post_url
-            or "i.imgur.com" in post_url
-            or post_url.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
-        ):
-            urls.append(post_url)
-
-        if not urls and "preview" in raw:
-            imgs = raw["preview"].get("images", [])
-            for img in imgs:
-                u = img.get("source", {}).get("url")
-                if u:
-                    urls.append(u)
-                for var_type, var_imgs in img.get("variants", {}).items():
-                    if isinstance(var_imgs, dict):
-                        vu = var_imgs.get("url")
-                        if vu:
-                            urls.append(vu)
-                    elif isinstance(var_imgs, list):
-                        for vi in var_imgs:
-                            vu = vi.get("url")
-                            if vu:
-                                urls.append(vu)
-
-    if "crosspost_parent_list" in raw:
-        for cp in raw.get("crosspost_parent_list", []):
-            for img_id, img_data in cp.get("media_metadata", {}).items():
-                if "s" in img_data:
-                    u = img_data["s"].get("u")
-                    if u:
-                        urls.append(u)
-
-    # Deduplicate
-    seen = set()
-    unique_urls = []
-    for u in urls:
-        if u:
-            # Strip query params from reddit previews for consistency
-            if "preview.redd.it" in u or "external-preview.redd.it" in u:
-                u = u.split("?")[0]
-            if u not in seen:
-                seen.add(u)
-                unique_urls.append(u)
-
-    return unique_urls
-
-
-@app.post("/api/admin/media/rescan")
-def media_rescan():
-    """Re-scan existing posts for additional media that wasn't queued."""
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-
-    with get_db_cursor() as cur:
-        cur.execute(
-            "SELECT id, url, raw, subreddit, author, title FROM posts WHERE raw IS NOT NULL"
-        )
-        post_rows = cur.fetchall()
-
-        cur.execute("SELECT url FROM media")
-        existing_urls = {row[0] for row in cur.fetchall() if row[0]}
-
-        queued_urls = set()
-        try:
-            queue_items = rd.lrange("media_queue", 0, -1)
-            for item in queue_items:
-                try:
-                    data = json.loads(item)
-                    u = data.get("url")
-                    if u:
-                        queued_urls.add(u)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        all_existing = existing_urls | queued_urls
-
-    new_queue_count = 0
-    posts_scanned = 0
-    urls_found = 0
-    errors = []
-
-    try:
-        for post_id, url, raw, subreddit, author, title in post_rows:
-            if not raw:
-                continue
-
-            try:
-                data = raw if isinstance(raw, dict) else json.loads(raw)
-            except Exception as e:
-                errors.append(f"post {post_id}: parse error")
-                continue
-
-            try:
-                extracted = _extract_media_urls_from_raw(data, url)
-            except Exception as e:
-                errors.append(f"post {post_id}: extract error - {e}")
-                continue
-
-            for media_url in extracted:
-                if media_url not in all_existing:
-                    try:
-                        rd.lpush(
-                            "media_queue",
-                            json.dumps(
-                                {
-                                    "post_id": post_id,
-                                    "url": media_url,
-                                    "subreddit": subreddit,
-                                    "author": author,
-                                    "title": title or "",
-                                }
-                            ),
-                        )
-                        new_queue_count += 1
-                        all_existing.add(media_url)
-                    except Exception as e:
-                        errors.append(f"queue error for {media_url}: {e}")
-
-            if extracted:
-                posts_scanned += 1
-                urls_found += len(extracted)
-    except Exception as e:
-        logger.error(f"Media rescan error: {e}")
-        return {
-            "error": str(e),
-            "posts_scanned": posts_scanned,
-            "urls_found": urls_found,
-            "newly_queued": new_queue_count,
-        }
-
-    if errors:
-        logger.warning(f"Media rescan had {len(errors)} errors: {errors[:10]}")
-
-    logger.info(
-        f"Media rescan: found {urls_found} URLs across {posts_scanned} posts, queued {new_queue_count} new"
-    )
-
-    return {
-        "posts_scanned": posts_scanned,
-        "urls_found": urls_found,
-        "newly_queued": new_queue_count,
-    }
-
-
-@app.post("/api/admin/media/rescrape")
-def media_rescrape():
-    """Retry all failed or missing media downloads.
-    Finds all media with status='error' or status='pending' or missing file_path
-    and requeues them for download.
-    """
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-
-    rd = get_redis()
-
-    with get_db_cursor() as cur:
-        cur.execute("""
-            SELECT m.id, m.post_id, m.url, p.subreddit, p.author, p.title
-            FROM media m
-            JOIN posts p ON m.post_id = p.id
-            WHERE (m.status IS NULL OR m.status = '')
-               OR m.status = 'error'
-               OR m.status = 'pending'
-               OR m.status = 'failed'
-               OR (m.status IN ('done', 'partial') AND (m.file_path IS NULL OR m.file_path = ''))
-            ORDER BY m.id
-        """)
-        failed_media = cur.fetchall()
-
-    if not failed_media:
-        return {
-            "status": "ok",
-            "message": "No failed or missing media found",
-            "requeued": 0,
-        }
-
-    requeued = 0
-    errors = []
-
-    for media_id, post_id, url, subreddit, author, title in failed_media:
-        if not url:
-            errors.append(f"media {media_id}: no URL")
-            continue
-
-        try:
-            rd.lpush(
-                "media_queue",
-                json.dumps(
-                    {
-                        "post_id": post_id,
-                        "url": url,
-                        "subreddit": subreddit,
-                        "author": author,
-                        "title": title or "",
-                    }
-                ),
-            )
-            requeued += 1
-        except Exception as e:
-            errors.append(f"media {media_id}: {e}")
-
-    with get_db_cursor() as cur:
-        cur.execute("""
-            UPDATE media
-            SET status = 'pending'
-            WHERE (status IS NULL OR status = '')
-               OR status = 'error'
-               OR status = 'pending'
-               OR (status IN ('done', 'partial') AND (file_path IS NULL OR file_path = ''))
-        """)
-
-    logger.info(f"Media rescrape: requeued {requeued} failed/missing items")
-
-    return {
-        "status": "ok",
-        "requeued": requeued,
-        "total_found": len(failed_media),
-        "errors": errors[:10] if errors else [],
-    }
-
-
-LOG_DIR = "/mnt/user/scripts/reddarr/logs"
-
-
-@app.get("/logs/{filename}")
-def get_log_file(filename: str):
-    """Serve log files from the logs directory."""
-    import re
-
-    if not re.match(r"^[a-zA-Z0-9_-]+\.log$", filename):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    log_path = os.path.join(LOG_DIR, filename)
-    if not os.path.exists(log_path):
-        raise HTTPException(status_code=404, detail="Log file not found")
-    return FileResponse(log_path)
+    results.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return results[:limit]
 
 
 @app.get("/api/admin/health")
-def health_check():
+def admin_health():
+    """Check health of DB, Redis, and essential file paths."""
     issues = []
-
+    # DB check
     try:
         with get_db_cursor() as cur:
             cur.execute("SELECT 1")
     except Exception as e:
         issues.append(f"Database: {str(e)}")
 
+    # Redis check
     try:
-        if redis_client:
-            redis_client.ping()
-        else:
-            issues.append("Redis: not connected")
+        r = get_redis()
+        r.ping()
     except Exception as e:
         issues.append(f"Redis: {str(e)}")
 
+    # Path checks
     for label, path in [
         ("Archive path", ARCHIVE_PATH),
-        ("Thumb path", THUMB_PATH),
-        ("Archive media path", EXCLUDED_MEDIA_PATH),
+        ("Thumbnail path", THUMB_PATH),
+        ("Excluded media path", EXCLUDED_MEDIA_PATH),
     ]:
         try:
             if not os.path.exists(path):
@@ -3899,22 +1960,8 @@ def health_check():
 
 
 @app.get("/api/events")
-async def event_stream(request: Request):
+async def event_stream():
     """Server-Sent Events endpoint for real-time UI updates."""
-    # Temporarily remove auth for SSE to ensure real-time updates are not blocked
-    # In a real-world scenario, a more secure method like short-lived tokens via query params
-    # would be preferable to disabling auth entirely on this endpoint.
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        pass  # Allow anonymous access for now
-    else:
-        token = auth_header.split(" ")[1]
-        _get_tokens()
-        is_admin = _ADMIN_TOKEN and token == _ADMIN_TOKEN
-        is_guest = _GUEST_TOKEN and token == _GUEST_TOKEN
-        if not is_admin and not is_guest:
-            # Fallback for invalid tokens, but primary path is to allow unauthenticated access
-            pass
 
     async def db_stats():
         def _query() -> Dict[str, Any]:
@@ -3970,9 +2017,9 @@ async def event_stream(request: Request):
                 conn = connection_pool.getconn()
                 cur = conn.cursor()
                 cur.execute("""
-                    SELECT
-                        t.type,
-                        t.name,
+                    SELECT 
+                        t.type, 
+                        t.name, 
                         t.enabled,
                         t.status,
                         t.last_created,
@@ -3982,7 +2029,7 @@ async def event_stream(request: Request):
                         COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
                         COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
                     FROM targets t
-                    LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name))
+                    LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name)) 
                                       OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
                     LEFT JOIN media m ON m.post_id = p.id
                     GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
@@ -4247,1224 +2294,23 @@ def metrics():
             cur.execute("SELECT COUNT(*) FROM media WHERE status = 'done'")
             media_downloaded_in_db.set(cur.fetchone()[0] or 0)
 
-            cur.execute("SELECT subreddit, COUNT(*) FROM posts GROUP BY subreddit")
-            for row in cur.fetchall():
-                posts_total.labels(subreddit=row[0]).set(row[1] or 0)
-
-            cur.execute("""
-                SELECT p.subreddit, COUNT(c.id)
-                FROM comments c
-                JOIN posts p ON c.post_id = p.id
-                GROUP BY p.subreddit
-            """)
-            for row in cur.fetchall():
-                comments_total.labels(subreddit=row[0]).set(row[1] or 0)
-
             cur.execute(
-                "SELECT type, name, EXTRACT(EPOCH FROM last_created) FROM targets WHERE last_created IS NOT NULL"
+                "SELECT type, name, EXTRACT(EPOCH FROM last_created) FROM targets"
             )
-            for row in cur.fetchall():
-                target_last_fetch.labels(target_type=row[0], target_name=row[1]).set(
-                    row[2] or 0
-                )
+            for ttype, name, ts in cur.fetchall():
+                if ts:
+                    target_last_fetch.labels(target_type=ttype, target_name=name).set(
+                        ts
+                    )
     except Exception as e:
-        logger.error(f"Metrics error: {e}")
+        logger.error(f"Metrics DB error: {e}")
 
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.get("/api/comments")
-def get_comments(
-    post_id: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)
-):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, author, body, created_utc 
-            FROM comments 
-            WHERE post_id = %s
-            ORDER BY created_utc
-            LIMIT %s OFFSET %s
-        """,
-            (post_id, limit, offset),
-        )
-
-        return [
-            {
-                "id": r[0],
-                "author": r[1],
-                "body": r[2],
-                "created_utc": r[3].isoformat() if r[3] else None,
-            }
-            for r in cur.fetchall()
-        ]
-
-
-@app.get("/api/comments/search")
-def search_comments(q: str, limit: int = Query(50, ge=1, le=200)):
-    with get_db_cursor() as cur:
-        cur.execute(
-            """
-            SELECT c.id, c.post_id, c.author, c.body, c.created_utc, p.title
-            FROM comments c
-            JOIN posts p ON c.post_id = p.id
-            WHERE c.tsv @@ plainto_tsquery(%s)
-            LIMIT %s
-        """,
-            (q, limit),
-        )
-
-        return [
-            {
-                "id": r[0],
-                "post_id": r[1],
-                "author": r[2],
-                "body": r[3],
-                "created_utc": r[4].isoformat() if r[4] else None,
-                "post_title": r[5],
-            }
-            for r in cur.fetchall()
-        ]
-
-
-@app.get("/api/media")
-def get_media(
-    post_id: Optional[str] = None,
-    status: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-):
-    with get_db_cursor() as cur:
-        query = "SELECT id, post_id, url, file_path, status, downloaded_at FROM media WHERE 1=1"
-        params = []
-
-        if post_id:
-            query += " AND post_id = %s"
-            params.append(post_id)
-        if status:
-            query += " AND status = %s"
-            params.append(status)
-
-        query += " ORDER BY downloaded_at DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-
-        cur.execute(query, params)
-
-        return [
-            {
-                "id": r[0],
-                "post_id": r[1],
-                "url": r[2],
-                "file_path": r[3],
-                "status": r[4],
-                "downloaded_at": r[5].isoformat() if r[5] else None,
-            }
-            for r in cur.fetchall()
-        ]
-
-
-@app.delete("/api/admin/reset")
-def reset_all(confirm: str = Query(...)):
-    """Wipe all excluded data: files on disk, every DB table, and the Redis queue."""
-    if confirm != "RESET":
-        raise HTTPException(status_code=400, detail="Pass confirm=RESET to proceed")
-
-    deleted_files = 0
-    deleted_bytes = 0
-    errors = []
-
-    # 1. Collect tracked file paths before truncating tables
-    try:
-        with get_db_cursor() as cur:
-            cur.execute(
-                "SELECT file_path, thumb_path FROM media WHERE file_path IS NOT NULL"
-            )
-            tracked = cur.fetchall()
-    except Exception as e:
-        tracked = []
-        errors.append(f"Could not read media table: {e}")
-
-    # 2. Delete tracked files from disk (both active and excluded)
-    for file_path, thumb_path in tracked:
-        for p in [file_path, thumb_path]:
-            if p and os.path.exists(p):
-                try:
-                    deleted_bytes += os.path.getsize(p)
-                    os.remove(p)
-                    deleted_files += 1
-                except Exception as e:
-                    errors.append(f"Delete failed {p}: {e}")
-
-    # 3. Remove organised subdirectories left empty after file deletion
-    for base_dir in [
-        ARCHIVE_PATH,
-        THUMB_PATH,
-        EXCLUDED_MEDIA_PATH,
-        EXCLUDED_THUMB_PATH,
-    ]:
-        for subdir in ["r", "u"]:
-            top = os.path.join(base_dir, subdir)
-            if os.path.isdir(top):
-                for entry in os.scandir(top):
-                    if entry.is_dir():
-                        try:
-                            os.rmdir(entry.path)
-                        except OSError:
-                            pass
-                try:
-                    os.rmdir(top)
-                except OSError:
-                    pass
-
-    # 4. Truncate all tables (CASCADE handles FK constraints)
-    try:
-        with get_db_cursor() as cur:
-            cur.execute("TRUNCATE media, comments, posts RESTART IDENTITY CASCADE")
-    except Exception as e:
-        errors.append(f"DB truncate failed: {e}")
-
-    # 5. Clear Redis queue
-    if redis_client:
-        try:
-            redis_client.delete("media_queue")
-        except Exception as e:
-            errors.append(f"Redis flush failed: {e}")
-
-    return {
-        "status": "ok",
-        "deleted_files": deleted_files,
-        "deleted_mb": round(deleted_bytes / 1024 / 1024, 2),
-        "errors": errors,
-    }
-
-
-BACKUP_DIR = os.getenv("BACKUP_PATH", "/data/backups")
-BACKUP_META_DIR = os.path.join(BACKUP_DIR, ".meta")
-
-
-def _ensure_backup_dirs():
-    """Ensure backup directories exist."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    os.makedirs(BACKUP_META_DIR, exist_ok=True)
-
-
-def _get_backup_meta(name: str) -> dict:
-    """Read metadata for a backup."""
-    meta_file = os.path.join(BACKUP_META_DIR, f"{name}.json")
-    if os.path.exists(meta_file):
-        with open(meta_file, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def _save_backup_meta(name: str, meta: dict):
-    """Save metadata for a backup."""
-    _ensure_backup_dirs()
-    meta_file = os.path.join(BACKUP_META_DIR, f"{name}.json")
-    with open(meta_file, "w") as f:
-        json.dump(meta, f)
-
-
-def _delete_backup_meta(name: str):
-    """Delete metadata for a backup."""
-    meta_file = os.path.join(BACKUP_META_DIR, f"{name}.json")
-    if os.path.exists(meta_file):
-        os.remove(meta_file)
-
-
-@app.get("/api/admin/db/stats")
-def db_stats():
-    """Get database statistics for backup/restore decisions."""
-    with get_db_cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM posts")
-        posts_count = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM media")
-        media_count = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM comments")
-        comments_count = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM targets")
-        targets_count = cur.fetchone()[0]
-        return {
-            "posts": posts_count,
-            "media": media_count,
-            "comments": comments_count,
-            "targets": targets_count,
-        }
-
-
-@app.post("/api/admin/db/backup")
-def create_backup(label: Optional[str] = Query(None)):
-    """Create a database backup dump."""
-    try:
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Could not create backup directory: {e}"
-        )
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = label or f"backup_{timestamp}"
-    backup_file = os.path.join(BACKUP_DIR, f"{backup_name}.sql")
-
-    try:
-        from shared.config import get_secret
-
-        pg_user = os.environ.get("POSTGRES_USER", "reddit")
-        pg_host = os.environ.get("POSTGRES_HOST", "db")
-        pg_port = os.environ.get("POSTGRES_PORT", "5432")
-        pg_db = os.environ.get("POSTGRES_DB", "reddit")
-
-        result = subprocess.run(
-            [
-                "pg_dump",
-                "-h",
-                pg_host,
-                "-p",
-                pg_port,
-                "-U",
-                pg_user,
-                "-d",
-                pg_db,
-                "-f",
-                backup_file,
-                "-F",
-                "p",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            raise HTTPException(
-                status_code=500, detail=f"pg_dump failed: {result.stderr}"
-            )
-
-        file_size = os.path.getsize(backup_file)
-        return {
-            "status": "ok",
-            "backup_file": backup_file,
-            "file_size": file_size,
-            "label": backup_name,
-        }
-    except subprocess.TimeoutExpired:
-        if os.path.exists(backup_file):
-            os.remove(backup_file)
-        raise HTTPException(status_code=500, detail="Backup timed out")
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=500, detail="pg_dump not available in container"
-        )
-    except Exception as e:
-        if os.path.exists(backup_file):
-            os.remove(backup_file)
-        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
-
-
-@app.post("/api/admin/db/backup/partial")
-def create_partial_backup(
-    label: str = Query(...),
-    subreddits: Optional[str] = Query(None),
-    targets: Optional[str] = Query(None),
-    before_date: Optional[str] = Query(None),
-    after_date: Optional[str] = Query(None),
-    tables: Optional[str] = Query("posts,comments,media"),
-):
-    """Create a partial backup filtered by subreddits, users, or date range.
-
-    Only backs up matching records - useful for selective backups.
-    """
-    _ensure_backup_dirs()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"{label}_{timestamp}" if label else f"partial_{timestamp}"
-    backup_file = os.path.join(BACKUP_DIR, f"{backup_name}.sql")
-
-    target_subs = set()
-    if subreddits:
-        for s in subreddits.split(","):
-            target_subs.add(s.strip().lower())
-    if targets:
-        for t in targets.split(","):
-            target_subs.add(t.strip().lower())
-
-    table_list = [t.strip() for t in tables.split(",")]
-    filters = {
-        "subreddits": list(target_subs) if target_subs else [],
-        "before_date": before_date,
-        "after_date": after_date,
-        "tables": table_list,
-    }
-
-    try:
-        conn = connection_pool.getconn()
-        cur = conn.cursor()
-
-        with open(backup_file, "w") as f:
-            for table in table_list:
-                if table == "posts":
-                    query = "SELECT * FROM posts WHERE 1=1"
-                    params = []
-                    if target_subs:
-                        placeholders = ",".join(["%s"] * len(target_subs))
-                        query += f" AND LOWER(subreddit) IN ({placeholders})"
-                        params.extend(list(target_subs))
-                    if before_date:
-                        query += " AND created_utc <= %s"
-                        params.append(before_date)
-                    if after_date:
-                        query += " AND created_utc >= %s"
-                        params.append(after_date)
-                    cur.execute(query, params)
-
-                elif table == "comments":
-                    query = """SELECT c.* FROM comments c WHERE EXISTS 
-                        (SELECT 1 FROM posts p WHERE p.id = c.post_id"""
-                    params = []
-                    if target_subs:
-                        query += (
-                            " AND LOWER(p.subreddit) IN ("
-                            + ",".join(["%s"] * len(target_subs))
-                            + ")"
-                        )
-                        params.extend(list(target_subs))
-                    if before_date:
-                        query += " AND p.created_utc <= %s"
-                        params.append(before_date)
-                    if after_date:
-                        query += " AND p.created_utc >= %s"
-                        params.append(after_date)
-                    query += ")"
-                    cur.execute(query, params)
-
-                elif table == "media":
-                    query = """SELECT m.* FROM media m WHERE EXISTS 
-                        (SELECT 1 FROM posts p WHERE p.id = m.post_id"""
-                    params = []
-                    if target_subs:
-                        query += (
-                            " AND LOWER(p.subreddit) IN ("
-                            + ",".join(["%s"] * len(target_subs))
-                            + ")"
-                        )
-                        params.extend(list(target_subs))
-                    if before_date:
-                        query += " AND p.created_utc <= %s"
-                        params.append(before_date)
-                    if after_date:
-                        query += " AND p.created_utc >= %s"
-                        params.append(after_date)
-                    query += ")"
-                    cur.execute(query, params)
-
-                else:
-                    continue
-
-                rows = cur.fetchall()
-
-                f.write(f"-- Table: {table} ({len(rows)} rows)\n")
-                f.write(f"COPY {table} FROM stdin;\n")
-                for row in rows:
-                    f.write(
-                        "\t".join(str(v) if v is not None else "\\N" for v in row)
-                        + "\n"
-                    )
-                f.write("\\.\n\n")
-
-        cur.close()
-        connection_pool.putconn(conn)
-
-        file_size = os.path.getsize(backup_file)
-
-        _save_backup_meta(
-            f"{backup_name}.sql",
-            {
-                "type": "partial",
-                "filters": filters,
-                "created_at": datetime.now().isoformat(),
-                "file_size": file_size,
-            },
-        )
-
-        return {
-            "status": "ok",
-            "backup_file": backup_name + ".sql",
-            "file_size": file_size,
-            "filters": filters,
-        }
-
-    except Exception as e:
-        if os.path.exists(backup_file):
-            os.remove(backup_file)
-        raise HTTPException(status_code=500, detail=f"Partial backup failed: {e}")
-
-
-@app.delete("/api/admin/db/backup/{name}")
-def delete_backup(name: str):
-    """Delete a backup file and its metadata."""
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-    if not os.path.realpath(backup_path).startswith(os.path.realpath(BACKUP_DIR)):
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    os.remove(backup_path)
-    _delete_backup_meta(name)
-
-    return {"status": "ok", "deleted": name}
-
-
-@app.get("/api/admin/db/backup/{name}/info")
-def backup_info(name: str):
-    """Get detailed info about a backup including metadata."""
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    stat = os.stat(backup_path)
-    meta = _get_backup_meta(name)
-
-    post_count = 0
-    comment_count = 0
-    media_count = 0
-
-    current_table = None
-    in_copy = False
-    try:
-        with open(backup_path, "r") as f:
-            for line in f:
-                if line.startswith("COPY "):
-                    in_copy = True
-                    if "posts" in line:
-                        current_table = "posts"
-                    elif "comments" in line:
-                        current_table = "comments"
-                    elif "media" in line:
-                        current_table = "media"
-                    continue
-                elif line == "\\.":
-                    in_copy = False
-                    current_table = None
-                    continue
-                if in_copy and line.strip() and not line.startswith("--"):
-                    if current_table == "posts":
-                        post_count += 1
-                    elif current_table == "comments":
-                        comment_count += 1
-                    elif current_table == "media":
-                        media_count += 1
-    except Exception:
-        pass
-
-    return {
-        "name": name,
-        "size": stat.st_size,
-        "created": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        "type": meta.get("type", "full"),
-        "filters": meta.get("filters", {}),
-        "counts": {
-            "posts": post_count,
-            "comments": comment_count,
-            "media": media_count,
-        },
-    }
-
-
-@app.post("/api/admin/db/backup/merge")
-def merge_backups(
-    sources: str = Query(...),
-    output: str = Query(...),
-    confirm: Optional[str] = Query(None),
-):
-    """Merge multiple partial backups into one.
-
-    sources: comma-separated list of backup filenames
-    output: name for the merged backup
-    """
-    source_names = [s.strip() for s in sources.split(",")]
-
-    merged_records = {
-        "posts": set(),
-        "comments": set(),
-        "media": set(),
-    }
-
-    for source_name in source_names:
-        source_path = os.path.join(BACKUP_DIR, source_name)
-        if not os.path.exists(source_path):
-            raise HTTPException(
-                status_code=404, detail=f"Backup not found: {source_name}"
-            )
-
-        try:
-            with open(source_path, "r") as f:
-                current_table = None
-                in_copy = False
-                for line in f:
-                    if line.startswith("COPY "):
-                        in_copy = True
-                        if "posts" in line:
-                            current_table = "posts"
-                        elif "comments" in line:
-                            current_table = "comments"
-                        elif "media" in line:
-                            current_table = "media"
-                        continue
-                    elif line == "\\.":
-                        in_copy = False
-                        current_table = None
-                        continue
-
-                    if in_copy and current_table and line.strip():
-                        parts = line.split("\t")
-                        id_val = parts[0] if parts else None
-                        if id_val and id_val != "\\N":
-                            if current_table == "posts":
-                                merged_records["posts"].add(line.strip())
-                            elif current_table == "comments":
-                                merged_records["comments"].add(line.strip())
-                            elif current_table == "media":
-                                merged_records["media"].add(line.strip())
-        except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"Error reading {source_name}: {e}"
-            )
-
-    if confirm != "MERGE":
-        return {
-            "status": "preview",
-            "would_merge": {
-                "posts": len(merged_records["posts"]),
-                "comments": len(merged_records["comments"]),
-                "media": len(merged_records["media"]),
-            },
-            "sources": source_names,
-            "output": output,
-            "message": "Pass confirm=MERGE to merge",
-        }
-
-    _ensure_backup_dirs()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    merged_name = f"{output}_{timestamp}.sql"
-    merged_path = os.path.join(BACKUP_DIR, merged_name)
-
-    try:
-        with open(merged_path, "w") as f:
-            for table, records in [
-                ("posts", merged_records["posts"]),
-                ("comments", merged_records["comments"]),
-                ("media", merged_records["media"]),
-            ]:
-                if not records:
-                    continue
-                f.write(f"-- Table: {table} ({len(records)} rows)\n")
-                f.write(f"COPY {table} FROM stdin;\n")
-                for record in records:
-                    f.write(record + "\n")
-                f.write("\\.\n\n")
-
-        _save_backup_meta(
-            merged_name,
-            {
-                "type": "merged",
-                "sources": source_names,
-                "created_at": datetime.now().isoformat(),
-                "file_size": os.path.getsize(merged_path),
-            },
-        )
-
-        return {
-            "status": "ok",
-            "merged": merged_name,
-            "counts": {
-                "posts": len(merged_records["posts"]),
-                "comments": len(merged_records["comments"]),
-                "media": len(merged_records["media"]),
-            },
-        }
-
-    except Exception as e:
-        if os.path.exists(merged_path):
-            os.remove(merged_path)
-        raise HTTPException(status_code=500, detail=f"Merge failed: {e}")
-
-
-@app.get("/api/admin/db/backups")
-def list_backups():
-    """List available backup files."""
-    try:
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-        files = []
-        for f in os.listdir(BACKUP_DIR):
-            if f.endswith(".sql"):
-                fpath = os.path.join(BACKUP_DIR, f)
-                stat = os.stat(fpath)
-                files.append(
-                    {
-                        "name": f,
-                        "size": stat.st_size,
-                        "created": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    }
-                )
-        files.sort(key=lambda x: x["created"], reverse=True)
-        return files
-    except Exception as e:
-        return []
-
-
-@app.get("/api/admin/db/backup/{name}")
-def download_backup(name: str):
-    """Download a backup file."""
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-    if not os.path.realpath(backup_path).startswith(os.path.realpath(BACKUP_DIR)):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    return FileResponse(backup_path, media_type="application/sql", filename=name)
-
-
-@app.post("/api/admin/db/restore")
-def restore_backup(name: str = Query(...), confirm: str = Query(...)):
-    """Restore database from a backup file."""
-    if confirm != "RESTORE":
-        raise HTTPException(status_code=400, detail="Pass confirm=RESTORE to proceed")
-
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    try:
-        from shared.config import get_secret
-
-        pg_user = os.environ.get("POSTGRES_USER", "reddit")
-        pg_host = os.environ.get("POSTGRES_HOST", "db")
-        pg_port = os.environ.get("POSTGRES_PORT", "5432")
-        pg_db = os.environ.get("POSTGRES_DB", "reddit")
-
-        result = subprocess.run(
-            [
-                "psql",
-                "-h",
-                pg_host,
-                "-p",
-                pg_port,
-                "-U",
-                pg_user,
-                "-d",
-                pg_db,
-                "-f",
-                backup_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if result.returncode != 0:
-            raise HTTPException(
-                status_code=500, detail=f"Restore failed: {result.stderr}"
-            )
-
-        return {
-            "status": "ok",
-            "restored_from": name,
-            "output": result.stdout[:500] if result.stdout else "",
-        }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="Restore timed out")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="psql not available in container")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
-
-
-@app.post("/api/admin/db/partial-restore")
-def partial_restore(
-    name: str = Query(...),
-    subreddits: Optional[str] = Query(None),
-    targets: Optional[str] = Query(None),
-    before_date: Optional[str] = Query(None),
-    after_date: Optional[str] = Query(None),
-    confirm: Optional[str] = Query(None),
-):
-    """Perform a partial database restore from backup based on filters.
-
-    Parses SQL backup and inserts matching rows (posts/comments/media) into existing DB.
-    Use dry_run=true first to preview what would be restored.
-    """
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    target_subs = set()
-    if subreddits:
-        for s in subreddits.split(","):
-            target_subs.add(s.strip().lower())
-    if targets:
-        for t in targets.split(","):
-            target_subs.add(t.strip().lower())
-
-    target_list = list(target_subs)
-
-    matches = {
-        "posts": [],
-        "comments": [],
-        "media": [],
-    }
-
-    current_table = None
-    current_insert = []
-    in_copy = False
-
-    try:
-        with open(backup_path, "r") as f:
-            for line in f:
-                line = line.rstrip()
-
-                if line.startswith("COPY "):
-                    in_copy = True
-                    if "posts" in line:
-                        current_table = "posts"
-                    elif "comments" in line:
-                        current_table = "comments"
-                    elif "media" in line:
-                        current_table = "media"
-                    else:
-                        current_table = None
-                    continue
-                elif line == "\\.":
-                    in_copy = False
-                    current_table = None
-                    continue
-
-                if not in_copy or not current_table:
-                    continue
-
-                if current_table == "posts":
-                    parts = line.split("\t")
-                    if len(parts) >= 3:
-                        subreddit = parts[2].lower() if parts[2] else ""
-                        post_id = parts[0]
-
-                        match = True
-                        if target_list and subreddit not in target_list:
-                            match = False
-                        if match and before_date or after_date:
-                            try:
-                                created = parts[3] if len(parts) > 3 else None
-                                if created:
-                                    if before_date and created > before_date:
-                                        match = False
-                                    if after_date and created < after_date:
-                                        match = False
-                            except:
-                                pass
-
-                        if match:
-                            matches["posts"].append(
-                                {
-                                    "id": post_id,
-                                    "subreddit": subreddit,
-                                }
-                            )
-
-                elif current_table == "comments":
-                    parts = line.split("\t")
-                    if len(parts) >= 4:
-                        comment_id = parts[0]
-                        post_id = parts[1]
-                        matches["comments"].append(
-                            {
-                                "id": comment_id,
-                                "post_id": post_id,
-                            }
-                        )
-
-                elif current_table == "media":
-                    parts = line.split("\t")
-                    if len(parts) >= 2:
-                        media_id = parts[0]
-                        post_id = parts[1]
-                        matches["media"].append(
-                            {
-                                "id": media_id,
-                                "post_id": post_id,
-                            }
-                        )
-
-        post_count = len(matches["posts"])
-        comment_count = len(matches["comments"])
-        media_count = len(matches["media"])
-
-        if confirm != "RESTORE":
-            return {
-                "status": "preview",
-                "would_restore": {
-                    "posts": post_count,
-                    "comments": comment_count,
-                    "media": media_count,
-                },
-                "filters": {
-                    "subreddits": subreddits,
-                    "targets": targets,
-                    "before_date": before_date,
-                    "after_date": after_date,
-                },
-                "sample": matches["posts"][:5],
-            }
-
-        if post_count == 0:
-            return {
-                "status": "ok",
-                "restored": {"posts": 0, "comments": 0, "media": 0},
-                "message": "No matching records found",
-            }
-
-        imported_posts = 0
-        imported_comments = 0
-
-        conn = connection_pool.getconn()
-        cur = conn.cursor()
-        try:
-            for post_match in matches["posts"]:
-                try:
-                    cur.execute(
-                        "SELECT id FROM posts WHERE id = %s", (post_match["id"],)
-                    )
-                    if not cur.fetchone():
-                        cur.execute(
-                            """
-                            INSERT INTO posts (id, subreddit, author, title, created_utc, url, selftext, raw, media_url, excluded, excluded_at, ingested_at)
-                            SELECT id, subreddit, author, title, created_utc, url, selftext, raw, media_url, excluded, excluded_at, ingested_at
-                            FROM posts WHERE id = %s
-                        """,
-                            (post_match["id"],),
-                        )
-                        imported_posts += 1
-                except Exception:
-                    pass
-
-            for comment_match in matches["comments"]:
-                try:
-                    cur.execute(
-                        "SELECT id FROM comments WHERE id = %s", (comment_match["id"],)
-                    )
-                    if not cur.fetchone():
-                        cur.execute(
-                            """
-                            INSERT INTO comments (id, post_id, author, body, created_utc, raw)
-                            SELECT id, post_id, author, body, created_utc, raw
-                            FROM comments WHERE id = %s
-                        """,
-                            (comment_match["id"],),
-                        )
-                        imported_comments += 1
-                except Exception:
-                    pass
-
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=500, detail=f"Import failed: {e}")
-        finally:
-            cur.close()
-            connection_pool.putconn(conn)
-
-        return {
-            "status": "ok",
-            "restored": {
-                "posts": imported_posts,
-                "comments": imported_comments,
-                "media": media_count,
-            },
-            "message": f"Restored {imported_posts} posts, {imported_comments} comments",
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Partial restore failed: {e}")
-
-
-@app.get("/api/posts/by-date")
-def posts_by_date(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    excluded: Optional[bool] = Query(False),
-):
-    with get_db_cursor() as cur:
-        query = "SELECT id, title, subreddit, author, created_utc FROM posts WHERE excluded = %s"
-        params: list[Any] = [excluded]
-
-        if start_date:
-            query += " AND created_utc >= %s"
-            params.append(start_date)
-        if end_date:
-            query += " AND created_utc <= %s"
-            params.append(end_date)
-
-        query += " ORDER BY created_utc DESC LIMIT %s OFFSET %s"
-        params.extend([limit, offset])
-
-        cur.execute(query, params)
-
-        return [
-            {
-                "id": r[0],
-                "title": r[1],
-                "subreddit": r[2],
-                "author": r[3],
-                "created_utc": r[4].isoformat() if r[4] else None,
-            }
-            for r in cur.fetchall()
-        ]
-
-
-# ─── NEW BACKUP TAB API ENDPOINTS ───
-
-
-@app.get("/api/admin/backup/stats")
-def backup_stats():
-    """Get database and backup statistics."""
-    with get_db_cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM posts")
-        posts = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM media")
-        media = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM posts_history")
-        audit_entries = cur.fetchone()[0]
-        cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
-        db_size = cur.fetchone()[0]
-
-        return {
-            "posts": posts,
-            "media": media,
-            "audit_entries": audit_entries,
-            "database_size": db_size,
-        }
-
-
-@app.get("/api/admin/backup/list")
-def backup_list():
-    """List all available backups."""
-    _ensure_backup_dirs()
-    backups = []
-
-    if os.path.exists(BACKUP_DIR):
-        for f in os.listdir(BACKUP_DIR):
-            fpath = os.path.join(BACKUP_DIR, f)
-            if os.path.isfile(fpath):
-                stat = os.stat(fpath)
-                meta = _get_backup_meta(f)
-                backups.append(
-                    {
-                        "name": f,
-                        "size": f"{stat.st_size / (1024 * 1024):.2f} MB",
-                        "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        "label": meta.get("label", ""),
-                    }
-                )
-
-    return sorted(backups, key=lambda x: x["created_at"], reverse=True)
-
-
-@app.post("/api/admin/backup/create")
-def backup_create(
-    name: Optional[str] = Query(None),
-    subreddits: Optional[str] = Query(None),
-    targets: Optional[str] = Query(None),
-    before_date: Optional[str] = Query(None),
-    after_date: Optional[str] = Query(None),
-    include_media: bool = Query(True),
-):
-    """Create a new backup."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = name or f"backup_{timestamp}"
-
-    try:
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not create backup dir: {e}")
-
-    backup_file = os.path.join(BACKUP_DIR, f"{backup_name}.sql")
-
-    try:
-        pg_user = os.environ.get("POSTGRES_USER", "reddit")
-        pg_host = os.environ.get("POSTGRES_HOST", "db")
-        pg_port = os.environ.get("POSTGRES_PORT", "5432")
-        pg_db = os.environ.get("POSTGRES_DB", "reddit")
-
-        cmd = [
-            "pg_dump",
-            "-h",
-            pg_host,
-            "-p",
-            str(pg_port),
-            "-U",
-            pg_user,
-            "-d",
-            pg_db,
-            "-f",
-            backup_file,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-
-        if result.returncode != 0:
-            raise Exception(f"pg_dump failed: {result.stderr}")
-
-        stat = os.stat(backup_file)
-        _save_backup_meta(
-            f"{backup_name}.sql",
-            {
-                "label": name or "",
-                "subreddits": subreddits,
-                "targets": targets,
-                "before_date": before_date,
-                "after_date": after_date,
-                "include_media": include_media,
-                "size_bytes": stat.st_size,
-                "created_at": datetime.now().isoformat(),
-            },
-        )
-
-        return {
-            "name": backup_name,
-            "size": f"{stat.st_size / (1024 * 1024):.2f} MB",
-            "status": "ok",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
-
-
-@app.post("/api/admin/backup/restore")
-def backup_restore(
-    name: str = Query(...),
-    confirm: Optional[str] = Query(None),
-):
-    """Restore from a backup."""
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    if not confirm:
-        with open(backup_path, "r") as f:
-            lines = f.readlines()[:50]
-        post_count = sum(1 for l in lines if l.startswith("\t") and "posts" not in l)
-        return {
-            "status": "preview",
-            "would_restore": post_count,
-            "message": "Add confirm=RESTORE to restore",
-        }
-
-    try:
-        pg_user = os.environ.get("POSTGRES_USER", "reddit")
-        pg_host = os.environ.get("POSTGRES_HOST", "db")
-        pg_port = os.environ.get("POSTGRES_PORT", "5432")
-        pg_db = os.environ.get("POSTGRES_DB", "reddit")
-
-        cmd = [
-            "psql",
-            "-h",
-            pg_host,
-            "-p",
-            str(pg_port),
-            "-U",
-            pg_user,
-            "-d",
-            pg_db,
-            "-f",
-            backup_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-
-        return {
-            "status": "ok",
-            "restored": "done",
-            "message": "Restore completed",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
-
-
-@app.delete("/api/admin/backup/{name}")
-def backup_delete(name: str):
-    """Delete a backup."""
-    backup_path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail="Backup not found")
-
-    os.remove(backup_path)
-    _delete_backup_meta(name)
-    return {"status": "ok", "deleted": name}
-
-
-@app.post("/api/admin/backup/integrity")
-def backup_integrity():
-    """Run integrity check on media files."""
-    import threading
-    import time
-
-    # Run in background to avoid blocking
-    def run_check():
-        time.sleep(2)  # Small delay to let response return
-        try:
-            from shared.backup import verify_media_integrity
-
-            report = verify_media_integrity()
-            # Store result in a global for polling
-            global _last_integrity_report
-            _last_integrity_report = report
-        except Exception as e:
-            global _last_integrity_error
-            _last_integrity_error = str(e)
-
-    thread = threading.Thread(target=run_check, daemon=True)
-    thread.start()
-
-    return {"status": "started", "message": "Integrity check started in background"}
-
-
-_last_integrity_report = None
-_last_integrity_error = None
-
-
-@app.get("/api/admin/backup/integrity-result")
-def backup_integrity_result():
-    """Get integrity check result."""
-    global _last_integrity_report, _last_integrity_error
-
-    if _last_integrity_error:
-        return {"error": _last_integrity_error}
-    if _last_integrity_report:
-        return _last_integrity_report
-    return {"status": "pending"}
-
-
-@app.get("/api/admin/backup/audit-stats")
-def backup_audit_stats():
-    """Get audit trail statistics."""
-    from shared.backup import get_audit_stats
-
-    try:
-        stats = get_audit_stats()
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Audit stats failed: {e}")
-
-
-# SPA catch-all: serve index.html for all client-side routes
-# MUST be the last route so it doesn't shadow /api/* handlers
+# Catch-all for single-page app routing
 @app.get("/{full_path:path}")
-def spa_catchall(full_path: str):
-    if full_path.startswith(
-        (
-            "api/",
-            "media/",
-            "excluded-media/",
-            "thumb/",
-            "excluded-thumb/",
-            "static/",
-            "icon.png",
-        )
-    ):
-        raise HTTPException(status_code=404, detail="Not Found")
+def spa(full_path: str):
     idx = DIST_DIR / "index.html"
     if idx.exists():
         return FileResponse(str(idx))
