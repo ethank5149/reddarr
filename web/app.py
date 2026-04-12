@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os, json, time, redis, shutil, subprocess, threading, uuid, hashlib, secrets
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,49 @@ from prometheus_client import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Simple in-memory rate limiter
+class RateLimiter:
+    def __init__(self, requests_per_minute: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.requests = defaultdict(list)
+        self.cleanup_interval = 60
+        self._lock = threading.Lock()
+        # Start cleanup thread
+        threading.Thread(target=self._cleanup_loop, daemon=True).start()
+
+    def _cleanup_loop(self):
+        while True:
+            time.sleep(self.cleanup_interval)
+            self._cleanup()
+
+    def _cleanup(self):
+        now = time.time()
+        with self._lock:
+            for key in list(self.requests.keys()):
+                self.requests[key] = [t for t in self.requests[key] if now - t < 60]
+                if not self.requests[key]:
+                    del self.requests[key]
+
+    def check(self, key: str) -> bool:
+        now = time.time()
+        with self._lock:
+            # Clean old entries for this key
+            self.requests[key] = [t for t in self.requests[key] if now - t < 60]
+            if len(self.requests[key]) >= self.requests_per_minute:
+                return False
+            self.requests[key].append(now)
+            return True
+
+    def get_remaining(self, key: str) -> int:
+        now = time.time()
+        with self._lock:
+            self.requests[key] = [t for t in self.requests[key] if now - t < 60]
+            return max(0, self.requests_per_minute - len(self.requests[key]))
+
+
+rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("RATE_LIMIT_RPM", "60")))
 
 posts_total = Gauge("reddit_posts_total", "Total posts ingested", ["subreddit"])
 comments_total = Gauge(
@@ -76,6 +120,22 @@ app.add_middleware(
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
     path = request.url.path
+
+    # Rate limiting for API endpoints
+    if path.startswith("/api/"):
+        client_ip = request.client.host if request.client else "unknown"
+        rate_key = f"api:{client_ip}"
+        if not rate_limiter.check(rate_key):
+            remaining = rate_limiter.get_remaining(rate_key)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Rate limit exceeded",
+                    "retry_after": 60,
+                },
+                headers={"Retry-After": "60", "X-RateLimit-Remaining": str(remaining)},
+            )
+
     if path.startswith("/api/") and path != "/api/login":
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
@@ -344,13 +404,16 @@ def startup():
     try:
         from shared.config import get_secret
 
-        run_migrations = get_secret("RUN_MIGRATIONS", "true").lower() == "true"
+        # Migrations are now handled by Alembic - only run legacy migration check if needed
+        run_migrations = get_secret("RUN_MIGRATIONS", "false").lower() == "true"
         if run_migrations:
             try:
                 _run_migrations(connection_pool)
-                logger.info("Schema migrations complete")
+                logger.info(
+                    "Legacy schema migrations complete (deprecated - use Alembic)"
+                )
             except Exception as e:
-                logger.error(f"Migration error (non-fatal): {e}")
+                logger.warning(f"Legacy migration error (non-fatal): {e}")
 
         # Validate critical tables exist
         critical_tables = ["posts", "media", "targets", "comments", "scrape_failures"]

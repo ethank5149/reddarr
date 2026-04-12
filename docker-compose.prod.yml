@@ -1,0 +1,130 @@
+# Production Docker Compose Override
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+# This file provides production-ready configuration with security hardening
+
+services:
+  db:
+    restart: always
+    # Production: restrict to internal network only
+    networks:
+      - internal
+    # Add resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  redis:
+    restart: always
+    networks:
+      - internal
+    # Enable AOF persistence for durability
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  ingester:
+    restart: always
+    # Use depends_on with condition for production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Restrict to internal network
+    networks:
+      - internal
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  downloader:
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+  api:
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Expose API on localhost only - use reverse proxy for external access
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # Disable public ports for monitoring - use reverse proxy
+  prometheus:
+    restart: always
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - internal
+
+  grafana:
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - internal
+    # Environment hardening for production
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-changeme}
+      GF_SECURITY_ADMIN_USER: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Disable anonymous access
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Session config
+      GF_AUTH_TOKEN_ROTATION_INTERVAL_MINUTES: "10"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_COOKIE_SAMESITE: "strict"
+
+  postgres-exporter:
+    restart: always
+    networks:
+      - internal
+
+  redis-exporter:
+    restart: always
+    networks:
+      - internal
+
+  node-exporter:
+    restart: always
+    networks:
+      - internal
+
+  backup:
+    restart: always
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge

@@ -3,6 +3,7 @@ import praw, psycopg2, redis
 import requests
 from datetime import datetime, timezone
 import logging
+import signal
 from prometheus_client import (
     Counter,
     Gauge,
@@ -22,6 +23,25 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Graceful shutdown handling
+_shutdown_requested = False
+
+
+def _signal_handler(signum, frame):
+    global _shutdown_requested
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    _shutdown_requested = True
+
+
+signal.signal(signal.SIGTERM, _signal_handler)
+signal.signal(signal.SIGINT, _signal_handler)
+
+required_env_vars = ["DB_URL", "REDIS_HOST"]
+missing = [v for v in required_env_vars if not os.getenv(v)]
+if missing:
+    logger.error(f"Missing required environment variables: {', '.join(missing)}")
+    sys.exit(1)
 
 posts_ingested = Counter(
     "reddit_posts_ingested_total", "Total posts ingested", ["subreddit"]
@@ -44,6 +64,34 @@ posts_skipped_total = Counter(
 # Start Prometheus metrics HTTP server on port 8001
 start_http_server(8001)
 logger.info("Prometheus metrics server started on port 8001")
+
+# Health check endpoint on port 8001
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "healthy"}')
+        elif self.path == "/metrics":
+            self.send_response(404)  # Prometheus handles metrics
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # Suppress health check logs
+
+
+health_server = HTTPServer(("0.0.0.0", 8003), HealthHandler)
+import threading
+
+threading.Thread(target=health_server.serve_forever, daemon=True).start()
+logger.info("Health check server started on port 8003")
 
 logger.info("Starting ingester...")
 
@@ -1093,10 +1141,18 @@ def run():
         logger.info(f"Sleeping for {POLL_INTERVAL} seconds")
         # Sleep in small increments so we can respond to scrape_trigger promptly
         if not scrape_triggered and not backfill_triggered:
+            # Check for shutdown during sleep
+            if _shutdown_requested:
+                logger.info("Shutdown requested, exiting gracefully...")
+                break
             elapsed = 0
             while elapsed < POLL_INTERVAL:
                 time.sleep(min(5, POLL_INTERVAL - elapsed))
                 elapsed += 5
+                # Check for shutdown signal
+                if _shutdown_requested:
+                    logger.info("Shutdown requested, exiting gracefully...")
+                    break
                 # Check for triggers during sleep
                 try:
                     msg = rd.lpop("scrape_trigger")
@@ -1111,6 +1167,8 @@ def run():
                         break
                 except Exception:
                     pass
+
+    logger.info("Ingester shutdown complete")
 
 
 run()

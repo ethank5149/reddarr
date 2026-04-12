@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from pathlib import Path
 import logging
+import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
@@ -19,10 +20,29 @@ from prometheus_client import (
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
+# Graceful shutdown handling
+_shutdown_requested = False
+
+
+def _signal_handler(signum, frame):
+    global _shutdown_requested
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    _shutdown_requested = True
+
+
+signal.signal(signal.SIGTERM, _signal_handler)
+signal.signal(signal.SIGINT, _signal_handler)
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+required_env_vars = ["DB_URL", "REDIS_HOST", "ARCHIVE_PATH"]
+missing = [v for v in required_env_vars if not os.getenv(v)]
+if missing:
+    logger.error(f"Missing required environment variables: {', '.join(missing)}")
+    sys.exit(1)
 
 media_downloaded = Counter(
     "reddit_media_downloaded_total", "Total media downloaded", ["status"]
@@ -47,6 +67,34 @@ rate_limit_backoff = Counter(
 
 start_http_server(8002)
 logger.info("Prometheus metrics server started on port 8002")
+
+# Health check endpoint on port 8003
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "healthy"}')
+        elif self.path == "/metrics":
+            self.send_response(404)  # Prometheus handles metrics
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # Suppress health check logs
+
+
+health_server = HTTPServer(("0.0.0.0", 8003), HealthHandler)
+import threading
+
+threading.Thread(target=health_server.serve_forever, daemon=True).start()
+logger.info("Health check server started on port 8003")
 
 logger.info("Starting downloader...")
 
@@ -799,6 +847,11 @@ def worker(worker_id):
         {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     )
     while True:
+        # Check for shutdown
+        if _shutdown_requested:
+            logger.info(f"Worker {worker_id} shutting down...")
+            return
+
         # Clean up any stuck item from previous crash
         stuck = rd.lrange(processing_queue, 0, -1)
         for item_data in stuck:
@@ -847,11 +900,22 @@ def main():
     logger.info(f"Starting {CONCURRENCY} concurrent workers...")
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
         futures = [executor.submit(worker, i) for i in range(CONCURRENCY)]
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                logger.error(f"Worker failed: {e}")
+        try:
+            while not _shutdown_requested:
+                # Wait for all futures or check for shutdown
+                for future in as_completed(futures, timeout=5):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Worker failed: {e}")
+                        if _shutdown_requested:
+                            break
+        except KeyboardInterrupt:
+            logger.info("Received interrupt, shutting down...")
+        finally:
+            logger.info("Shutting down downloader...")
+            executor.shutdown(wait=True)
+            logger.info("Downloader shutdown complete")
 
 
 if __name__ == "__main__":

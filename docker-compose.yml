@@ -77,6 +77,12 @@ services:
     volumes:
       - ./targets.txt:/app/targets.txt:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   downloader:
     container_name: reddit_archive_downloader
@@ -104,6 +110,12 @@ services:
       - ${THUMB_PATH}:${THUMB_PATH}
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   api:
     container_name: reddit_archive_api
