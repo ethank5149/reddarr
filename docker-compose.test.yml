@@ -1,4 +1,46 @@
 services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: reddit
+      POSTGRES_USER: reddit
+      POSTGRES_PASSWORD: changeme
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reddit"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  api:
+    build: ./web
+    environment:
+      DB_URL: postgresql://reddit:changeme@db:5432/reddit
+      REDIS_HOST: redis
+      ADMIN_PASSWORD: admin
+      GUEST_PASSWORD: guest
+    secrets:
+      - admin_password
+      - guest_password
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
   tests:
     build:
       context: .
@@ -6,8 +48,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
     environment:
       DB_URL: postgresql://reddit:changeme@db:5432/reddit
+      API_URL: http://api:8080
+      ADMIN_USER: admin
+      ADMIN_PASS: admin
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     command: ["pytest", "-vv", "tests/"]
     networks:
       - internal
@@ -15,3 +66,9 @@ services:
 networks:
   internal:
     driver: bridge
+
+secrets:
+  admin_password:
+    file: ./secrets/admin_password
+  guest_password:
+    file: ./secrets/guest_password
