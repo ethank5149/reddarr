@@ -211,9 +211,15 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/overview.json
+      # File permissions enforcement
+      GF_SECURITY_FILE_PERMISSIONS_MODE: "640"
+      GF_SECURITY_FILE_OWNER: "472"
+      GF_SECURITY_FILE_GROUP: "472"
     volumes:
       - ./grafana/data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
+    # Run as specific user to avoid permission issues
+    user: "472:472"
     ports:
       - "0.0.0.0:${REDDIT_ARCHIVE_GRAFANA_PORT:-3000}:3000"
     depends_on:

@@ -1,2 +1,12 @@
-# Minimal postgres_exporter config
-{}
+# Postgres exporter configuration
+# Data Source Name - uses environment variables
+# Format: postgresql://user:password@host:port/database
+
+# Disable default queries (not needed for basic metrics)
+extend.query_path: ""
+
+# PostgreSQL connection settings
+# The exporter will auto-discover databases and use default queries
+
+# Alternative: Use environment variable for DSN
+# POSTGRES_DSN="postgresql://postgres:password@db:5432/postgres"

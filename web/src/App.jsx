@@ -15,6 +15,65 @@ const isTouchDevice = () => 'ontouchstart' in window || navigator.maxTouchPoints
 // Prevent default touch behaviors for gallery
 const preventDefault = (e) => { if (e.touches.length > 1) e.preventDefault() }
 
+// Seeded random number generator for consistent pastel colors per name
+const seededRandom = (seed) => {
+  let state = 0
+  for (let i = 0; i < seed.length; i++) {
+    state = ((state << 5) - state + seed.charCodeAt(i)) | 0
+  }
+  return () => {
+    state = (state + 0x6D2B79F5) | 0
+    let t = Math.imul(state ^ (state >>> 15), 1 | state)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 ^ t)) | 0
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+// Generate pastel gradient background for placeholder icons
+// Returns a consistent soft pastel gradient based on the name
+const getPastelGradient = (name) => {
+  if (!name) return "linear-gradient(135deg, #ffecd2, #fcb69f)"
+  
+  const rand = seededRandom(name.toLowerCase())()
+  
+  // Soft pastel palette - all colors have high lightness (70-85%) and low-medium saturation (40-65%)
+  const pastels = [
+    ["#ff9a9e", "#fecfef"],  // soft pink
+    ["#a18cd1", "#fbc2eb"], // lavender
+    ["#ffecd2", "#fcb69f"], // peach
+    ["#84fab0", "#8fd3f4"], // mint
+    ["#a6c0fe", "#feb48b"], // coral
+    ["#e0c3fc", "#8ec5fc"], // periwinkle
+    ["#f6d365", "#fda085"], // gold
+    ["#96fbc4", "#f9f586"], // lime mint
+    ["#f5f7fa", "#c3cfe2"], // silver
+    ["#667eea", "#764ba2"], // deep purple
+    ["#89f7fe", "#66a6ff"], // sky blue
+    ["#ffecd2", "#fcb69f"], // warm cream
+    ["#f093fb", "#f5576c"], // magenta
+    ["#4facfe", "#00f2fe"], // ocean
+    ["#43e97b", "#38f9d7"], // green tea
+    ["#fa709a", "#fee140"], // sunset
+    ["#fddb92", "#d1fdff"], // beach
+    ["#a8e6cf", "#dcedc1"], // sage
+    ["#ffb347", "#ffcc33"], // orange cream
+    ["#cfd9df", "#e2ebf0"], // mist
+  ]
+  
+  const idx = Math.floor(rand * pastels.length)
+  const [c1, c2] = pastels[idx]
+  return `linear-gradient(135deg, ${c1}, ${c2})`
+}
+
+// Get contrasting text color based on background brightness
+const getTextColor = (gradient) => {
+  // Extract colors from gradient - simplified for the main pastels
+  const darkText = "#1c2a3f"
+  const lightText = "#ffffff"
+  // Most pastels are light, use dark text
+  return darkText
+}
+
 export default function App(){
   const [token, setToken] = useState(() => localStorage.getItem("token"))
   const [role, setRole] = useState(() => localStorage.getItem("role"))
@@ -1542,17 +1601,19 @@ export default function App(){
     const mediaPct = t.total_media > 0 ? Math.round((t.downloaded_media / t.total_media) * 100) : 0
     const prefix = t.type==="subreddit"?"r/":"u/"
     const detailPath = t.type==="subreddit"?`/subreddits/${encodeURIComponent(t.name)}`:`/users/${encodeURIComponent(t.name)}`
+    const pastelBg = t.icon_url ? "linear-gradient(135deg,#0b1728,#131b2e)" : getPastelGradient(t.name)
+    const textColor = t.icon_url ? "#1c2a3f" : getTextColor(pastelBg)
     return (
       <div
         onClick={()=>navigate(detailPath)}
         style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff0044":"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",opacity:t.enabled?1:0.6,transition:"all 0.2s",display:"flex",flexDirection:"column"}}
       >
         {/* Poster area */}
-        <div style={{aspectRatio:"2/3",background:"linear-gradient(135deg,#0b1728,#131b2e)",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
+        <div style={{aspectRatio:"2/3",background:pastelBg,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
           {t.icon_url ? (
             <img src={t.icon_url} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.style.display="none";e.target.nextSibling.style.display="flex"}}/>
           ) : null}
-          <div style={{fontSize:"48px",fontWeight:"900",color:"#1c2a3f",letterSpacing:"-2px",display:t.icon_url?"none":"flex",alignItems:"center",justifyContent:"center",position:"absolute",inset:0}}>{prefix}{t.name.slice(0,2).toUpperCase()}</div>
+          <div style={{fontSize:"48px",fontWeight:"900",color:textColor,letterSpacing:"-2px",display:t.icon_url?"none":"flex",alignItems:"center",justifyContent:"center",position:"absolute",inset:0}}>{prefix}{t.name.slice(0,2).toUpperCase()}</div>
           {/* Status badge */}
           {t.status !== "active" && (
             <div style={{position:"absolute",top:"8px",right:"8px",padding:"2px 8px",borderRadius:"3px",fontSize:"9px",fontWeight:"700",background:t.status==="taken_down"?"#440000":"#444400",color:t.status==="taken_down"?"#ff4444":"#ffff44"}}>
