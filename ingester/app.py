@@ -15,6 +15,7 @@ from prometheus_client import (
 import sys
 
 from targets import load_targets
+from shared.media_utils import extract_media_urls, fetch_youtube_video_url
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -316,253 +317,57 @@ def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
     return urls
 
 
-def _fetch_youtube_video_url(post_url: str) -> str | None:
-    """Fetch best quality YouTube video URL using oembed API."""
-    try:
-        match = re.search(
-            r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})", post_url
-        )
-        if match:
-            video_id = match.group(1)
-            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-            resp = requests.get(oembed_url, timeout=10)
-            if resp.status_code == 200:
-                return f"https://www.youtube.com/watch?v={video_id}"
-    except Exception as e:
-        logger.warning(f"Failed to get YouTube info for {post_url}: {e}")
-    return None
-
-
-def _is_direct_media_url(url: str) -> bool:
-    lower = url.lower().split("?")[0]
-    if any(lower.endswith(ext) for ext in _DIRECT_IMAGE_EXTS):
-        return True
-    return any(host in url for host in _DIRECT_MEDIA_HOSTS)
+from shared.media_utils import (
+    extract_media_urls as _extract_media_urls,
+    fetch_youtube_video_url as _fetch_youtube_video_url,
+    extract_redgifs_video_id,
+    fetch_redgifs_video_urls,
+    is_direct_media_url as _is_direct_media_url,
+    _DIRECT_IMAGE_EXTS,
+    _DIRECT_MEDIA_HOSTS,
+)
 
 
 def extract_media_urls(post):
     """Extract all media URLs from a Reddit post.
 
-    Covers:
-    - media_metadata (gallery posts, uploaded images)
-    - gallery_data (gallery post metadata)
-    - Direct URL (i.redd.it, v.redd.it, external images)
-    - preview images (fallback)
-    - crosspost media_metadata and preview
-    - rich_video_json (embedded video in selftext)
-    - poll images
+    Uses the canonical implementation from shared.media_utils,
+    then handles YouTube/RedGifs which require additional API calls.
     """
-    urls = []
+    urls = _extract_media_urls(post)
+
     data = post.__dict__
-
-    # 1. media_metadata - Reddit's primary storage for uploaded images/galleries
-    media_metadata = data.get("media_metadata")
-    if media_metadata and isinstance(media_metadata, dict):
-        for img_id, img_data in media_metadata.items():
-            if not img_data or not isinstance(img_data, dict):
-                continue
-            if "s" in img_data:
-                s = img_data["s"]
-                if s and isinstance(s, dict):
-                    u = s.get("gif") or s.get("mp4") or s.get("u")
-                else:
-                    u = None
-            elif (
-                img_data.get("p") and isinstance(img_data["p"], list) and img_data["p"]
-            ):
-                u = (
-                    img_data["p"][-1].get("u")
-                    if isinstance(img_data["p"][-1], dict)
-                    else None
-                )
-            else:
-                u = None
-            if u:
-                urls.append(u)
-
-    # 2. gallery_data - Gallery posts reference media_metadata by ID
-    gallery_data = data.get("gallery_data")
-    if gallery_data and isinstance(gallery_data, dict):
-        for item in gallery_data.get("items", []):
-            if not item or not isinstance(item, dict):
-                continue
-            media_id = item.get("media_id")
-            if media_id and media_metadata:
-                img_data = media_metadata.get(media_id)
-                if img_data and isinstance(img_data, dict):
-                    if "s" in img_data:
-                        s = img_data["s"]
-                        if s and isinstance(s, dict):
-                            u = s.get("gif") or s.get("mp4") or s.get("u")
-                        else:
-                            u = None
-                    elif (
-                        img_data.get("p")
-                        and isinstance(img_data["p"], list)
-                        and img_data["p"]
-                    ):
-                        u = (
-                            img_data["p"][-1].get("u")
-                            if isinstance(img_data["p"][-1], dict)
-                            else None
-                        )
-                    else:
-                        u = None
-                    if u:
-                        urls.append(u)
-
-    # 3. Direct post URL (i.redd.it images, v.redd.it videos, external links)
     post_url = getattr(post, "url", None)
-    if post_url:
-        # YouTube: if post URL is directly a YouTube link, queue it for best quality
-        if _is_direct_media_url(post_url):
-            urls.append(post_url)
-        elif "youtube.com" in post_url.lower() or "youtu.be" in post_url.lower():
-            yt_url = _fetch_youtube_video_url(post_url)
-            if yt_url:
-                urls.append(yt_url)
 
-    # 4. Preview images (fallback when no media_metadata)
-    preview = data.get("preview")
-    if preview and isinstance(preview, dict):
-        imgs = preview.get("images", [])
-        for img in imgs:
-            # Source resolution
-            u = img.get("source", {}).get("url")
-            if u:
-                urls.append(u)
-            # Also get variants (nsfw, gif, encrypt, etc)
-            for var_type, var_imgs in img.get("variants", {}).items():
-                if isinstance(var_imgs, dict):
-                    vu = var_imgs.get("source", {}).get("url")
-                    if vu:
-                        urls.append(vu)
-                elif isinstance(var_imgs, list):
-                    for vi in var_imgs:
-                        vu = vi.get("source", {}).get("url")
-                        if vu:
-                            urls.append(vu)
+    if post_url and (
+        "youtube.com" in post_url.lower() or "youtu.be" in post_url.lower()
+    ):
+        yt_url = _fetch_youtube_video_url(post_url)
+        if yt_url and yt_url not in urls:
+            urls.append(yt_url)
 
-        # 5. rich_video_json - Embedded video in selftext/posts
-        rich_video = preview.get("rich_video_json")
-        if rich_video:
-            # Reddit embeds often have fallback URLs
-            fallback = rich_video.get("fallback_url")
-            if fallback:
-                urls.append(fallback)
-            # Check for dash playlist for videos
-            dash_url = rich_video.get("dash_url")
-            if dash_url:
-                urls.append(dash_url)
-
-    # 6. Poll images (poll attachments)
-    poll_data = data.get("poll_data")
-    if poll_data and isinstance(poll_data, dict):
-        for option in poll_data.get("options", []):
-            img = option.get("image")
-            if img and isinstance(img, dict):
-                u = img.get("url")
-                if u:
-                    urls.append(u)
-
-    # 7. Crosspost media (both media_metadata and preview)
-    if data.get("crosspost_parent_list"):
-        for cp in data.get("crosspost_parent_list", []):
-            # crosspost media_metadata
-            for img_id, img_data in cp.get("media_metadata", {}).items():
-                if "s" in img_data:
-                    s = img_data["s"]
-                    u = s.get("gif") or s.get("mp4") or s.get("u")
-                    if u:
-                        urls.append(u)
-                elif img_data.get("p"):
-                    u = img_data["p"][-1].get("u")
-                    if u:
-                        urls.append(u)
-            # crosspost preview images
-            if cp.get("preview"):
-                for img in cp["preview"].get("images", []):
-                    u = img.get("source", {}).get("url")
-                    if u:
-                        urls.append(u)
-                    for var_type, var_imgs in img.get("variants", {}).items():
-                        if isinstance(var_imgs, dict):
-                            vu = var_imgs.get("source", {}).get("url")
-                            if vu:
-                                urls.append(vu)
-                        elif isinstance(var_imgs, list):
-                            for vi in var_imgs:
-                                vu = vi.get("source", {}).get("url")
-                                if vu:
-                                    urls.append(vu)
-
-    # 8. Secure media URL (Reddit's secure_media field)
     secure = data.get("secure_media")
     if secure and isinstance(secure, dict):
         secure_type = secure.get("type", "")
-        # Reddit video embed
-        if "reddit_video" in secure:
-            rv = secure["reddit_video"]
-            fallback = rv.get("fallback_url")
-            if fallback:
-                urls.append(fallback)
-        # External video embed (RedGifs, YouTube, etc.)
-        elif "oembed" in secure:
+        if "oembed" in secure:
             oembed = secure["oembed"]
-            # RedGifs: fetch actual video URLs from API
             if "redgifs" in secure_type.lower() or "redgifs" in str(oembed).lower():
                 html = oembed.get("html", "")
-                video_id = _extract_redgifs_video_id(html)
+                video_id = extract_redgifs_video_id(html)
                 if video_id:
                     video_urls = _fetch_redgifs_video_urls(video_id)
-                    urls.extend(video_urls)
-                else:
-                    thumbnail = oembed.get("thumbnail_url")
-                    if thumbnail:
-                        urls.append(thumbnail)
-            # YouTube: get the watch URL for best quality
+                    for vu in video_urls:
+                        if vu not in urls:
+                            urls.append(vu)
             elif (
                 "youtube" in secure_type.lower()
                 or "youtube" in str(oembed.get("provider_name", "")).lower()
             ):
-                yt_url = _fetch_youtube_video_url(
-                    post.url if hasattr(post, "url") else data.get("url", "")
-                )
-                if yt_url:
+                yt_url = _fetch_youtube_video_url(post_url or "")
+                if yt_url and yt_url not in urls:
                     urls.append(yt_url)
-                else:
-                    thumbnail = oembed.get("thumbnail_url")
-                    if thumbnail:
-                        urls.append(thumbnail)
-            else:
-                # Generic external embed - just get thumbnail
-                thumbnail = oembed.get("thumbnail_url")
-                if thumbnail:
-                    urls.append(thumbnail)
 
-    # 9. Media object (legacy field)
-    media = data.get("media")
-    if media and isinstance(media, dict):
-        if "reddit_video" in media:
-            rv = media["reddit_video"]
-            fallback = rv.get("fallback_url")
-            if fallback:
-                urls.append(fallback)
-
-    # Deduplicate
-    seen: set = set()
-    unique_urls = []
-    for u in urls:
-        if u:
-            u = u.replace("&amp;", "&")
-            # Reddit sometimes adds ?width=... to preview URLs, strip them for consistency
-            if "preview.redd.it" in u or "external-preview.redd.it" in u:
-                u = u.split("?")[0]
-            if u not in seen:
-                seen.add(u)
-                unique_urls.append(u)
-
-    return unique_urls
+    return urls
 
 
 def ingest_post(db, p):
@@ -833,7 +638,6 @@ def fetch_target_posts(ttype, name, sort_method="new"):
             )
 
             try:
-                db = get_db()
                 is_new = ingest_post(db, p)
                 if is_new:
                     new_posts_found += 1
@@ -921,8 +725,13 @@ def fetch_target_posts(ttype, name, sort_method="new"):
 
 
 def run_backfill_parallel(targets, passes=None, workers=None):
-    """Run backfill on targets in parallel using multiple workers."""
+    """Run backfill on targets in parallel using multiple workers.
+
+    Uses target sharding to ensure each target is processed by only one worker,
+    preventing duplicate work and reducing rate limiting issues.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    import hashlib
 
     passes = passes if passes else BACKFILL_PASSES
     workers = workers if workers else BACKFILL_WORKERS
@@ -933,40 +742,71 @@ def run_backfill_parallel(targets, passes=None, workers=None):
     backfill_stats = {"total": 0, "new": 0, "skipped": 0}
     rate_limited_count = 0
 
+    def _shard_target(ttype, name, worker_id):
+        key = f"{ttype}:{name}"
+        shard = int(hashlib.md5(key.encode()).hexdigest(), 16) % workers
+        return shard == worker_id
+
+    targets_by_pass = {}
+    for ttype, name, last in targets:
+        for pass_num in range(passes):
+            sort_method = "top_all" if pass_num == 0 else "new"
+            targets_by_pass.setdefault(pass_num, []).append((ttype, name, sort_method))
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {}
-        for ttype, name, last in targets:
-            for pass_num in range(passes):
-                sort_method = "top_all" if pass_num == 0 else "new"
-                future = executor.submit(fetch_target_posts, ttype, name, sort_method)
-                futures[future] = (ttype, name, sort_method, 0)
+        worker_queues = {i: [] for i in range(workers)}
+
+        for pass_num, pass_targets in targets_by_pass.items():
+            for ttype, name, sort_method in pass_targets:
+                worker_id = (
+                    int(hashlib.md5(f"{ttype}:{name}".encode()).hexdigest(), 16)
+                    % workers
+                )
+                worker_queues[worker_id].append((ttype, name, sort_method))
+
+        def _run_backfill_worker_batch(targets_batch):
+            """Run backfill for a batch of targets assigned to a worker."""
+            total_found = 0
+            total_processed = 0
+            rate_limited = False
+            completed = set()
+            for ttype, name, sort_method in targets_batch:
+                try:
+                    new_found, processed, was_limited = fetch_target_posts(
+                        ttype, name, sort_method
+                    )
+                    total_found += new_found
+                    total_processed += processed
+                    rate_limited = rate_limited or was_limited
+                    completed.add((ttype, name))
+                except Exception as e:
+                    logger.error(f"Worker batch error for {ttype}:{name}: {e}")
+            return total_found, total_processed, rate_limited, completed
+
+        for worker_id, worker_targets in worker_queues.items():
+            if worker_targets:
+                future = executor.submit(_run_backfill_worker_batch, worker_targets)
+                futures[future] = (f"worker_{worker_id}", worker_targets)
 
         completed_targets: set = set()
         for future in as_completed(futures):
-            ttype, name, sort_method, retries = futures[future]
+            worker_targets = futures[future][1]
             try:
-                new_found, processed, was_limited = future.result()
-                completed_targets.add((ttype, name))
+                new_found, processed, was_limited, completed = future.result()
+                completed_targets.update(completed)
                 backfill_stats["total"] += processed
                 backfill_stats["new"] += new_found
                 backfill_stats["skipped"] += processed - new_found
 
                 if was_limited:
                     rate_limited_count += 1
-                    if retries < 2:
-                        logger.info(
-                            f"Retrying {ttype}:{name} after rate limit (retry {retries + 1})"
-                        )
-                        new_future = executor.submit(
-                            fetch_target_posts, ttype, name, sort_method
-                        )
-                        futures[new_future] = (ttype, name, sort_method, retries + 1)
             except Exception as e:
                 err_str = str(e).lower()
                 if "rate" in err_str or "429" in err_str:
                     rate_limited_count += 1
-                err_msg = f"{ttype}:{name} ({sort_method}): {e}"
-                logger.error(f"Backfill failed for {err_msg}")
+                err_msg = f"Worker batch: {e}"
+                logger.error(f"Backfill failed for worker: {err_msg}")
                 backfill_errors.append(err_msg)
                 ingester_errors_total.labels(error_type="backfill").inc()
 

@@ -358,6 +358,32 @@ def check_existing_media(url):
         return None
 
 
+def check_existing_media_batch(urls: list):
+    """Batch check multiple URLs for existing downloads.
+
+    Returns a dict mapping url -> (file_path, thumb_path, sha256) for URLs that already exist.
+    """
+    if not urls:
+        return {}
+
+    existing_map = {}
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT url, file_path, thumb_path, sha256 
+                   FROM media 
+                   WHERE url = ANY(%s) AND status = 'done'""",
+                (urls,),
+            )
+            for row in cur.fetchall():
+                existing_map[row[0]] = (row[1], row[2], row[3])
+    except Exception as e:
+        logger.error(f"Error batch checking existing media: {e}")
+
+    return existing_map
+
+
 def process_item(item, session=None):
     post_id = item.get("post_id")
     url = item.get("url")
@@ -822,8 +848,28 @@ def process_item(item, session=None):
         if retries < MAX_RETRIES:
             item["_retries"] = retries + 1
             rd.lpush("media_queue_retry", json.dumps(item))
+            rd.expire("media_queue_retry", 86400)
             logger.info(f"Re-queued {post_id} for retry (attempt {retries + 1})")
         else:
+            try:
+                rd.lpush(
+                    "media_dead_letter",
+                    json.dumps(
+                        {
+                            "post_id": post_id,
+                            "url": url,
+                            "error": str(e)[:500],
+                            "failed_at": datetime.now(timezone.utc).isoformat(),
+                            "attempts": retries + 1,
+                        }
+                    ),
+                )
+                rd.expire("media_dead_letter", 604800)
+                logger.warning(
+                    f"Moved {post_id} to dead-letter queue after {retries + 1} failed attempts"
+                )
+            except Exception:
+                pass
             try:
                 conn = get_db()
                 conn.rollback()
