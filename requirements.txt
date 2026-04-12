@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+psycopg2-binary
+redis
+prometheus-client
+alembic
+sqlalchemy
+requests
+praw
+yt-dlp
+Pillow
+pytest
+python-dotenv

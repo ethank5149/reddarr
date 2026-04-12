@@ -16,6 +16,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - internal
 
   redis:
     container_name: reddit_archive_redis
@@ -27,6 +29,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - internal
 
   backup:
     image: ainullcode/borg-ui:latest
@@ -46,8 +50,6 @@ services:
       - ${ARCHIVE_PATH:-/mnt/user/scripts/reddarr/archive}:/local:ro   # your data to back up (read-only is safest)
     networks:
       - internal
-
-
 
   ingester:
     container_name: reddit_archive_ingester
@@ -83,6 +85,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - internal
 
   downloader:
     container_name: reddit_archive_downloader
@@ -116,6 +120,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - internal
 
   api:
     container_name: reddit_archive_api
@@ -144,6 +150,8 @@ services:
     ports:
       - "${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
     restart: unless-stopped
+    networks:
+      - internal
 
   postgres-exporter:
     container_name: reddit_archive_postgres_exporter
@@ -154,6 +162,8 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - internal
 
   redis-exporter:
     container_name: reddit_archive_redis_exporter
@@ -164,6 +174,8 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - internal
 
   node-exporter:
     container_name: reddit_archive_node_exporter
@@ -175,6 +187,8 @@ services:
       - /:/host:ro
     pid: host
     restart: unless-stopped
+    networks:
+      - internal
 
   prometheus:
     container_name: reddit_archive_prometheus
@@ -192,6 +206,8 @@ services:
       - redis-exporter
       - node-exporter
     restart: unless-stopped
+    networks:
+      - internal
 
   grafana:
     container_name: reddit_archive_grafana
@@ -209,6 +225,8 @@ services:
     depends_on:
       - prometheus
     restart: unless-stopped
+    networks:
+      - internal
 
 secrets:
   postgres_password:

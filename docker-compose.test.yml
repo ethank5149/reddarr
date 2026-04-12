@@ -1,0 +1,17 @@
+services:
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.tests
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: postgresql://reddit:changeme@db:5432/reddit
+    command: ["pytest", "-vv", "tests/"]
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
