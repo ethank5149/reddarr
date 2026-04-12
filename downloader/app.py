@@ -442,11 +442,18 @@ def process_item(item, session=None):
                         datetime.now(timezone.utc),
                     ),
                 )
+                # This was the missing piece: update the post's ingested_at timestamp
+                cur.execute(
+                    "UPDATE posts SET ingested_at = %s WHERE id = %s",
+                    (datetime.now(timezone.utc), post_id),
+                )
                 conn.commit()
             media_downloaded.labels(status="done").inc()
             return
         except Exception as e:
             logger.error(f"Error creating duplicate media entry for {post_id}: {e}")
+            if conn:
+                conn.rollback()
             # If we fail here, it's better to proceed with a re-download than to lose the media.
 
     acquired, domain = rate_limiter.acquire(url)
