@@ -15,7 +15,10 @@ from prometheus_client import (
 import sys
 
 from targets import load_targets
-from shared.media_utils import extract_media_urls, fetch_youtube_video_url
+from shared.media_utils import (
+    extract_media_urls,
+    fetch_youtube_video_url as _fetch_youtube_video_url,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
