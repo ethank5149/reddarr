@@ -403,11 +403,9 @@ def ingest_post(db, p):
 
     media_urls = extract_media_urls(p)
 
-    # If post has media, we set ingested_at to NULL so downloader can set it when done
-    # If no media, we set it to now()
-    ingested_at = (
-        None if media_urls else datetime.now(timezone.utc).replace(tzinfo=None)
-    )
+    # Set ingested_at to now() for all new posts.
+    # The downloader may update this timestamp upon media download completion.
+    ingested_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     try:
         cur.execute(
