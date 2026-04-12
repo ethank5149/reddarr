@@ -1901,6 +1901,7 @@ async def event_stream():
                         t.name, 
                         t.enabled,
                         t.status,
+                        t.icon_url,
                         t.last_created,
                         COUNT(DISTINCT p.id) AS post_count,
                         COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,

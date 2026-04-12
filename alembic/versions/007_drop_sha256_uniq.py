@@ -8,7 +8,7 @@ Create Date: 2026-04-12
 
 from alembic import op
 
-revision = "007_drop_sha256_uniq"
+revision = "007_drop_sha256"
 down_revision = "006_add_created_at"
 branch_labels = None
 depends_on = None
