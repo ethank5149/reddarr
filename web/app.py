@@ -2810,7 +2810,7 @@ def admin_activity(
         # Get recent failures if requested
         if include_failures:
     cur.execute(
-        f"""
+        """
       SELECT m.id, m.url, m.status, m.error_message, m.downloaded_at, m.file_path, m.thumb_path,
              p.title, p.subreddit, p.author
       FROM media m
