@@ -203,6 +203,9 @@ export default function App(){
   const [archiveFilterBarOpen, setArchiveFilterBarOpen] = useState(false)
   const [installPrompt, setInstallPrompt] = useState(null)
   const [showInstallBanner, setShowInstallBanner] = useState(false)
+  const [loginApiKey, setLoginApiKey] = useState("")
+  const [loginError, setLoginError] = useState(null)
+  const [loginLoading, setLoginLoading] = useState(false)
 
   // Backup tab state
   const [backupLoading, setBackupLoading] = useState(false)
@@ -233,6 +236,28 @@ export default function App(){
   const [targetFailuresOpen, setTargetFailuresOpen] = useState(false)
 
   const targetIndexSearchTimeout = useRef()
+
+  function handleLogin(e){
+    e.preventDefault()
+    if(!loginApiKey) return
+    setLoginLoading(true)
+    setLoginError(null)
+    axios.get("/api/admin/stats", {headers: {"X-Api-Key": loginApiKey}})
+      .then(r => {
+        if(r.status === 200){
+          localStorage.setItem("apiKey", loginApiKey)
+          setApiKey(loginApiKey)
+          setLoginLoading(false)
+        } else {
+          setLoginError("Invalid API key")
+          setLoginLoading(false)
+        }
+      })
+      .catch(err => {
+        setLoginError(err.response?.status === 401 ? "Invalid API key" : "API request failed")
+        setLoginLoading(false)
+      })
+  }
 
   function hasActiveTargetIndexFilters(){
     return targetIndexSearch || targetIndexFilterStatus !== "all"
@@ -1693,6 +1718,21 @@ export default function App(){
     }
   }
 
+  if(!apiKey && !isReadOnly){
+    return (
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#0d1117"}}>
+        <form onSubmit={handleLogin} style={{display:"flex",flexDirection:"column",gap:"16px",padding:"24px",background:"#161d2f",borderRadius:"6px",border:"1px solid #2a2a2a",minWidth:"300px"}}>
+          <h2 style={{margin:0,textAlign:"center",color:"#f0f6fc"}}>Enter API Key</h2>
+          <input type="password" value={loginApiKey} onChange={e=>setLoginApiKey(e.target.value)} placeholder="API Key" style={{padding:"10px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0d1117",color:"#f0f6fc"}}/>
+          {loginError && <div style={{color:"#f85149",fontSize:"14px",textAlign:"center"}}>{loginError}</div>}
+          <button type="submit" disabled={loginLoading} style={{padding:"10px",borderRadius:"3px",border:"none",background:"#35c5f4",color:"#0d1117",fontWeight:"bold",cursor:"pointer"}}>
+            {loginLoading ? "Verifying..." : "Login"}
+          </button>
+        </form>
+      </div>
+    )
+  }
+
   return (
     <div style={{display:"flex",minHeight:"100vh",background:"#1a2234",color:"#dfe6ed",fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif"}}>
       {/* ── SIDEBAR (Sonarr-style) ── */}
@@ -2032,49 +2072,6 @@ export default function App(){
                 if(targetDetailSortBy === "title_desc") return (b.title||"").localeCompare(a.title||"")
                 if(targetDetailSortBy === "last_added") return new Date(b.ingested_at||0) - new Date(a.ingested_at||0)
                 return 0
-              })
-  const [loginApiKey, setLoginApiKey] = useState("")
-  const [loginError, setLoginError] = useState(null)
-  const [loginLoading, setLoginLoading] = useState(false)
-
-  function handleLogin(e){
-    e.preventDefault()
-    if(!loginApiKey) return
-    setLoginLoading(true)
-    setLoginError(null)
-    axios.get("/api/admin/stats", {headers: {"X-Api-Key": loginApiKey}})
-      .then(r => {
-        if(r.status === 200){
-          localStorage.setItem("apiKey", loginApiKey)
-          setApiKey(loginApiKey)
-          setLoginLoading(false)
-        } else {
-          setLoginError("Invalid API key")
-          setLoginLoading(false)
-        }
-      })
-      .catch(err => {
-        setLoginError(err.response?.status === 401 ? "Invalid API key" : "API request failed")
-        setLoginLoading(false)
-      })
-  }
-
-  if(!apiKey && !isReadOnly){
-    return (
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#0d1117"}}>
-        <form onSubmit={handleLogin} style={{display:"flex",flexDirection:"column",gap:"16px",padding:"24px",background:"#161d2f",borderRadius:"6px",border:"1px solid #2a2a2a",minWidth:"300px"}}>
-          <h2 style={{margin:0,textAlign:"center",color:"#f0f6fc"}}>Enter API Key</h2>
-          <input type="password" value={loginApiKey} onChange={e=>setLoginApiKey(e.target.value)} placeholder="API Key" style={{padding:"10px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0d1117",color:"#f0f6fc"}}/>
-          {loginError && <div style={{color:"#f85149",fontSize:"14px",textAlign:"center"}}>{loginError}</div>}
-          <button type="submit" disabled={loginLoading} style={{padding:"10px",borderRadius:"3px",border:"none",background:"#35c5f4",color:"#0d1117",fontWeight:"bold",cursor:"pointer"}}>
-            {loginLoading ? "Verifying..." : "Login"}
-          </button>
-        </form>
-      </div>
-    )
-  }
-
-  return (
               <>
                 {filteredPosts.length > 0 && (
                   <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"16px",padding:"0 4px"}}>
@@ -2565,134 +2562,7 @@ export default function App(){
         </div>
       )}
 
-      {/* ── LOGS TAB ── */}
-      {activeTab === "logs" && !isReadOnly && (() => {
-        const [logFiles, setLogFiles] = useState([])
-        const [selectedLog, setSelectedLog] = useState("api")
-        const [logs, setLogs] = useState([])
-        const [autoRefresh, setAutoRefresh] = useState(false)
-        const logsInterval = useRef(null)
-
-        const logNames = ["api", "db", "redis", "ingester", "downloader", "grafana", "prometheus"]
-
-        const loadLogs = useCallback(() => {
-          fetch(`/logs/${selectedLog}.log`).then(r => r.text()).then(t => {
-            setLogs(t.split("\n").filter(Boolean).slice(-200))
-          }).catch(() => setLogs([]))
-        }, [selectedLog])
-
-        useEffect(() => {
-          setLogFiles(logNames)
-        }, [])
-
-        useEffect(() => {
-          loadLogs()
-        }, [loadLogs])
-
-        useEffect(() => {
-          if (autoRefresh) {
-            logsInterval.current = setInterval(loadLogs, 3000)
-          } else if (logsInterval.current) {
-            clearInterval(logsInterval.current)
-          }
-          return () => { if (logsInterval.current) clearInterval(logsInterval.current) }
-        }, [autoRefresh, loadLogs])
-
-        const containerColors = {
-          api: "#35c5f4", db: "#ff6666", redis: "#a855f7",
-          ingester: "#46d160", downloader: "#f9c300", grafana: "#e74c3c", prometheus: "#e67e22"
-        }
-
-        return (
-          <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px",flexWrap:"wrap",gap:"12px"}}>
-              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
-                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#a855f7,#9333ea)",borderRadius:"2px"}}/>
-                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Container Logs</h2>
-                <div style={{width:"6px",height:"6px",borderRadius:"50%",background:autoRefresh?"#46d160":"#3a5068",boxShadow:autoRefresh?"0 0 6px #46d160":"none"}}/>
-              </div>
-            </div>
-
-            <div style={{display:"flex",gap:"12px",marginBottom:"20px",flexWrap:"wrap",alignItems:"center"}}>
-              <select value={selectedLog} onChange={e => setSelectedLog(e.target.value)}
-                style={{padding:"8px 12px",background:"#161d2f",border:"1px solid #333",borderRadius:"3px",color:"#c8d6e0",fontSize:"13px",minWidth:"160px"}}>
-                {logFiles.map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-              <button onClick={loadLogs} style={{padding:"8px 16px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"13px"}}>↻ Refresh</button>
-              <button onClick={() => setAutoRefresh(!autoRefresh)} style={{padding:"8px 16px",background:autoRefresh?"#46d160":"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:autoRefresh?"#000":"#8aa4bd",cursor:"pointer",fontSize:"13px"}}>
-                {autoRefresh ? "⏸ Live" : "▶ Live"}
-              </button>
-            </div>
-
-            <div style={{background:"#0d0d0d",borderRadius:"3px",border:"1px solid #2a2a2a",overflow:"hidden",maxHeight:"calc(100vh - 250px)",overflowY:"auto"}}>
-              <div style={{padding:"12px",fontFamily:"'SF Mono',Monaco,'Courier New',monospace",fontSize:"11px",lineHeight:"1.6"}}>
-                {logs.length === 0 ? (
-                  <div style={{color:"#5a7b9a",padding:"20px",textAlign:"center"}}>No logs available</div>
-                ) : (
-                  logs.map((line, idx) => {
-                    const color = containerColors[selectedLog] || "#8aa4bd"
-                    const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*)\s*(.*)/)
-                    const ts = tsMatch ? tsMatch[1] : null
-                    const msg = tsMatch ? tsMatch[2] : line
-  const [loginApiKey, setLoginApiKey] = useState("")
-  const [loginError, setLoginError] = useState(null)
-  const [loginLoading, setLoginLoading] = useState(false)
-
-  function handleLogin(e){
-    e.preventDefault()
-    if(!loginApiKey) return
-    setLoginLoading(true)
-    setLoginError(null)
-    axios.get("/api/admin/stats", {headers: {"X-Api-Key": loginApiKey}})
-      .then(r => {
-        if(r.status === 200){
-          localStorage.setItem("apiKey", loginApiKey)
-          setApiKey(loginApiKey)
-          setLoginLoading(false)
-        } else {
-          setLoginError("Invalid API key")
-          setLoginLoading(false)
-        }
-      })
-      .catch(err => {
-        setLoginError(err.response?.status === 401 ? "Invalid API key" : "API request failed")
-        setLoginLoading(false)
-      })
-  }
-
-  if(!apiKey && !isReadOnly){
-    return (
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#0d1117"}}>
-        <form onSubmit={handleLogin} style={{display:"flex",flexDirection:"column",gap:"16px",padding:"24px",background:"#161d2f",borderRadius:"6px",border:"1px solid #2a2a2a",minWidth:"300px"}}>
-          <h2 style={{margin:0,textAlign:"center",color:"#f0f6fc"}}>Enter API Key</h2>
-          <input type="password" value={loginApiKey} onChange={e=>setLoginApiKey(e.target.value)} placeholder="API Key" style={{padding:"10px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0d1117",color:"#f0f6fc"}}/>
-          {loginError && <div style={{color:"#f85149",fontSize:"14px",textAlign:"center"}}>{loginError}</div>}
-          <button type="submit" disabled={loginLoading} style={{padding:"10px",borderRadius:"3px",border:"none",background:"#35c5f4",color:"#0d1117",fontWeight:"bold",cursor:"pointer"}}>
-            {loginLoading ? "Verifying..." : "Login"}
-          </button>
-        </form>
-      </div>
-    )
-  }
-
-  return (
-                      <div key={idx} style={{display:"flex",gap:"12px",padding:"2px 0",borderBottom:"1px solid #1a1a1a"}}>
-                        <span style={{color:"#3a5068",minWidth:"160px",fontVariantNumeric:"tabular-nums",flexShrink:0}}>{ts || "-"}</span>
-                        <span style={{color,minWidth:"80px",fontWeight:"500",flexShrink:0}}>{selectedLog}</span>
-                        <span style={{color:"#c8d6e0",wordBreak:"break-all"}}>{msg}</span>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })()}
-
-      {/* ── BACKUP TAB (Admin Only) ── */}
+       {/* ── BACKUP TAB (Admin Only) ── */}
       {activeTab === "backup" && !isReadOnly && (
         <div style={{padding:"24px",maxWidth:"1400px",margin:"0 auto"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"24px",flexWrap:"wrap",gap:"12px"}}>
