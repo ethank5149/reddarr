@@ -352,6 +352,38 @@ def startup():
                 logger.error(f"CRITICAL TABLE MISSING: {tbl} - run migrations!")
         cur.close()
         connection_pool.putconn(conn)
+
+        # Load targets from targets.txt if no targets exist
+        targets_file = os.getenv("TARGETS_FILE") or "/app/targets.txt"
+        if os.path.exists(targets_file):
+            conn = connection_pool.getconn()
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM targets WHERE enabled = true")
+            target_count = cur.fetchone()[0]
+            if target_count == 0:
+                logger.info("No targets found - loading from targets.txt")
+                try:
+                    with open(targets_file, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            if ":" not in line:
+                                continue
+                            ttype, name = line.split(":", 1)
+                            ttype = ttype.lower().strip()
+                            name = name.strip()
+                            if ttype in ("subreddit", "user") and name:
+                                cur.execute(
+                                    "INSERT INTO targets(type,name) VALUES(%s,%s) ON CONFLICT (name) DO NOTHING",
+                                    (ttype, name),
+                                )
+                    conn.commit()
+                    logger.info("Targets loaded from targets.txt")
+                except Exception as e:
+                    logger.warning(f"Failed to load targets from targets.txt: {e}")
+            cur.close()
+            connection_pool.putconn(conn)
     finally:
         pass
 

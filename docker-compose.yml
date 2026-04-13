@@ -123,6 +123,7 @@ services:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
+      TARGETS_FILE: /app/targets.txt
     secrets:
       - api_key
       - admin_password
@@ -138,6 +139,7 @@ services:
       - ${THUMB_PATH}:${THUMB_PATH}
       - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
       - ./logs:/mnt/user/scripts/reddarr/logs:ro
+      - ./targets.txt:/app/targets.txt:ro
     ports:
       - "0.0.0.0:${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
     restart: unless-stopped
