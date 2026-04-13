@@ -664,7 +664,8 @@ def _build_thumb_url(thumb_path: str) -> Optional[str]:
 @app.get("/api/posts")
 def posts(
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    cursor: Optional[str] = None,  # ISO timestamp for cursor-based pagination
+    offset: int = Query(0, ge=0),  # Deprecated but still accepted for backward compat
     subreddit: Optional[str] = None,
     author: Optional[str] = None,
     sort_by: Optional[str] = Query("created_utc"),
@@ -752,21 +753,51 @@ def posts(
 
         where_sql = (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
+        # Cursor-based pagination: use created_utc as cursor
+        # cursor is ISO timestamp, offset is deprecated fallback
+        if cursor:
+            try:
+                cursor_dt = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
+                if sort_order.lower() == "desc":
+                    where_clauses.append("p.created_utc < %s")
+                else:
+                    where_clauses.append("p.created_utc > %s")
+                params.append(cursor_dt)
+                where_sql = (
+                    (" AND " + " AND ".join(where_clauses)) if where_clauses else ""
+                )
+            except ValueError:
+                pass  # Invalid cursor, ignore
+
         # Count query (uses same WHERE, no ORDER/LIMIT)
         cur.execute(f"SELECT COUNT(*) FROM posts p WHERE 1=1{where_sql}", params)
         total = cur.fetchone()[0] or 0
 
-        # Main query
-        query = f"""
-            SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.excluded,
-                   p.raw->>'selftext' as selftext,
-                   p.raw->>'created_utc' as raw_created_utc,
-                   p.ingested_at
-            FROM posts p
-            WHERE 1=1{where_sql}
-            ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
-        """
-        cur.execute(query, params + [limit, offset])
+        # Main query - use cursor-based when available, otherwise offset
+        if cursor:
+            # Cursor-based pagination - no offset needed
+            query = f"""
+                SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.excluded,
+                       p.raw->>'selftext' as selftext,
+                       p.raw->>'created_utc' as raw_created_utc,
+                       p.ingested_at
+                FROM posts p
+                WHERE 1=1{where_sql}
+                ORDER BY {sort_by} {sort_order.upper()} LIMIT %s
+            """
+            cur.execute(query, params + [limit])
+        else:
+            # Legacy offset-based pagination
+            query = f"""
+                SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.excluded,
+                       p.raw->>'selftext' as selftext,
+                       p.raw->>'created_utc' as raw_created_utc,
+                       p.ingested_at
+                FROM posts p
+                WHERE 1=1{where_sql}
+                ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
+            """
+            cur.execute(query, params + [limit, offset])
         post_rows = cur.fetchall()
 
         if not post_rows:
@@ -919,7 +950,25 @@ def posts(
                 }
             )
 
-        return {"posts": results, "total": total, "limit": limit, "offset": offset}
+        # Build next_cursor for cursor-based pagination
+        next_cursor = None
+        if cursor is None and post_rows and len(results) == limit:
+            # Only provide cursor for offset-based requests that returned full results
+            last_post = post_rows[-1]
+            last_created = last_post[7]  # created_utc is at index 7
+            if last_created:
+                next_cursor = last_created.isoformat()
+
+        response = {"posts": results, "total": total, "limit": limit}
+
+        # Include offset only for backward compatibility when cursor not used
+        if cursor is None:
+            response["offset"] = offset
+
+        if next_cursor:
+            response["next_cursor"] = next_cursor
+
+        return response
 
 
 @app.get("/api/post/{post_id}")
@@ -1425,26 +1474,26 @@ def search(
         # This gives AND semantics, which is more intuitive for search
         search_query = "&".join(q.split())
 
-        # Count total matches
+        # Count total matches using pre-computed tsv column
         cur.execute(
             """
             SELECT COUNT(*) FROM posts
-            WHERE to_tsvector('english', title || ' ' || selftext) @@ to_tsquery('english', %s)
+            WHERE tsv @@ to_tsquery('english', %s)
             AND excluded = FALSE
             """,
             (search_query,),
         )
         total = cur.fetchone()[0] or 0
 
-        # Fetch results with ranking
+        # Fetch results with ranking using pre-computed tsv column
         cur.execute(
             f"""
             SELECT p.id, p.title, p.url, p.media_url, p.raw, p.subreddit, p.author, p.created_utc, p.excluded,
                    p.raw->>'selftext' as selftext,
                    p.raw->>'created_utc' as raw_created_utc,
-                   ts_rank_cd(to_tsvector('english', p.title || ' ' || p.selftext), to_tsquery('english', %s)) as rank
+                   ts_rank_cd(p.tsv, to_tsquery('english', %s)) as rank
             FROM posts p
-            WHERE to_tsvector('english', p.title || ' ' || p.selftext) @@ to_tsquery('english', %s)
+            WHERE p.tsv @@ to_tsquery('english', %s)
             AND p.excluded = FALSE
             ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
             """,
@@ -1535,7 +1584,7 @@ def search(
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/admin/stats")
+@app.get("/api/admin/stats", dependencies=[Depends(require_api_key)])
 def admin_stats():
     """Get high-level stats for the archive."""
     with get_db_cursor() as cur:
@@ -1565,7 +1614,7 @@ def admin_stats():
     }
 
 
-@app.get("/api/admin/targets")
+@app.get("/api/admin/targets", dependencies=[Depends(require_api_key)])
 def admin_targets():
     """Get detailed stats for all targets."""
     with get_db_cursor() as cur:
@@ -1692,7 +1741,7 @@ def delete_target(target_type: str, name: str):
     return {"status": "ok"}
 
 
-@app.get("/api/admin/queue")
+@app.get("/api/admin/queue", dependencies=[Depends(require_api_key)])
 def admin_queue():
     """Get the current media download queue from Redis."""
     r = get_redis()
@@ -1749,7 +1798,7 @@ def trigger_backfill(req: BackfillRequest):
     return {"status": "ok", "message": "Backfill triggered"}
 
 
-@app.get("/api/admin/backfill-status")
+@app.get("/api/admin/backfill-status", dependencies=[Depends(require_api_key)])
 def backfill_status():
     """Get the status of the last backfill job."""
     r = get_redis()
@@ -1757,7 +1806,7 @@ def backfill_status():
     return json.loads(status) if status else {"status": "unknown"}
 
 
-@app.get("/api/admin/activity")
+@app.get("/api/admin/activity", dependencies=[Depends(require_api_key)])
 def admin_activity(
     limit: int = Query(50, ge=1, le=500), include_failures: bool = Query(True)
 ):
@@ -1849,7 +1898,7 @@ def admin_activity(
     return results[:limit]
 
 
-@app.get("/api/admin/health")
+@app.get("/api/admin/health", dependencies=[Depends(require_api_key)])
 def admin_health():
     """Check health of DB, Redis, and essential file paths."""
     issues = []
@@ -1882,270 +1931,115 @@ def admin_health():
     return {"status": "healthy" if not issues else "degraded", "issues": issues}
 
 
-@app.get("/api/events")
-async def event_stream():
-    """Server-Sent Events endpoint for real-time UI updates."""
+_sse_cache: Dict[str, Any] = {}
+_sse_cache_lock = threading.Lock()
+_sse_last_post_ts: Optional[datetime] = None
+_sse_last_media_ts: Optional[datetime] = None
+_sse_background_running = False
 
-    async def db_stats():
-        def _query() -> Dict[str, Any]:
-            conn = None
-            cur = None
-            try:
-                if not connection_pool:
-                    return {
-                        "total_posts": 0,
-                        "excluded_posts": 0,
-                        "total_comments": 0,
-                        "downloaded_media": 0,
-                        "pending_media": 0,
-                        "total_media": 0,
+
+def _run_sse_polling_loop():
+    """Background task that polls DB once every 5 seconds and caches results."""
+    global _sse_cache, _sse_last_post_ts, _sse_last_media_ts, _sse_background_running
+
+    if not connection_pool:
+        logger.warning("SSE polling: no connection pool available")
+        return
+
+    while _sse_background_running:
+        try:
+            conn = connection_pool.getconn()
+            cur = conn.cursor()
+
+            cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
+            total_posts = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = TRUE")
+            excluded_posts = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM comments")
+            total_comments = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM media WHERE status='done'")
+            dl_media = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM media WHERE status='pending'")
+            pend_media = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM media")
+            tot_media = cur.fetchone()[0] or 0
+
+            cur.execute("""
+                SELECT 
+                    t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created,
+                    COUNT(DISTINCT p.id) AS post_count,
+                    COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
+                    COUNT(DISTINCT m.id) AS total_media,
+                    COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
+                    COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
+                FROM targets t
+                LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name)) 
+                                  OR (t.type = 'user' AND LOWER(p.author) = LOWER(t.name))
+                LEFT JOIN media m ON m.post_id = p.id
+                GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
+                ORDER BY t.type, t.name
+            """)
+            target_rows = cur.fetchall()
+            targets = []
+            for row in target_rows:
+                (
+                    ttype,
+                    name,
+                    enabled,
+                    status,
+                    icon_url,
+                    last_created,
+                    post_count,
+                    posts_7d,
+                    tot_media,
+                    dl_media,
+                    pend_media,
+                ) = row
+                post_count = post_count or 0
+                posts_7d = posts_7d or 0
+                rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
+                eta_seconds = None
+                if rate > 0:
+                    remaining = max(0, 1000 - post_count)
+                    if remaining > 0:
+                        eta_seconds = remaining / rate
+                targets.append(
+                    {
+                        "type": ttype,
+                        "name": name,
+                        "enabled": enabled,
+                        "status": status or "active",
+                        "icon_url": icon_url,
+                        "last_created": last_created.isoformat()
+                        if last_created
+                        else None,
+                        "post_count": post_count,
+                        "total_media": tot_media or 0,
+                        "downloaded_media": dl_media or 0,
+                        "pending_media": pend_media or 0,
+                        "rate_per_second": round(rate, 4),
+                        "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
+                        "progress_percent": min(100, round(post_count / 10, 1))
+                        if post_count > 0
+                        else 0,
                     }
-                conn = connection_pool.getconn()
-                cur = conn.cursor()
-                cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
-                total_posts = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = TRUE")
-                excluded_posts = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM comments")
-                total_comments = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM media WHERE status='done'")
-                dl_media = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM media WHERE status='pending'")
-                pend_media = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM media")
-                tot_media = cur.fetchone()[0]
-                return {
-                    "total_posts": total_posts,
-                    "excluded_posts": excluded_posts,
-                    "total_comments": total_comments,
-                    "downloaded_media": dl_media,
-                    "pending_media": pend_media,
-                    "total_media": tot_media,
-                }
-            finally:
-                if cur:
-                    cur.close()
-                if conn and connection_pool:
-                    connection_pool.putconn(conn)
+                )
 
-        return await asyncio.to_thread(_query)
-
-    async def db_target_stats():
-        def _query():
-            conn = None
-            cur = None
-            try:
-                if not connection_pool:
-                    return []
-                conn = connection_pool.getconn()
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT 
-                        t.type, 
-                        t.name, 
-                        t.enabled,
-                        t.status,
-                        t.icon_url,
-                        t.last_created,
-                        COUNT(DISTINCT p.id) AS post_count,
-                        COUNT(DISTINCT p.id) FILTER (WHERE p.created_utc > now() - INTERVAL '7 days') AS posts_7d,
-                        COUNT(DISTINCT m.id) AS total_media,
-                        COUNT(DISTINCT CASE WHEN m.status = 'done' THEN m.id END) AS downloaded_media,
-                        COUNT(DISTINCT CASE WHEN m.status = 'pending' THEN m.id END) AS pending_media
-                    FROM targets t
-                    LEFT JOIN posts p ON (t.type = 'subreddit' AND LOWER(p.subreddit) = LOWER(t.name)) 
-                                      OR (t.type = 'user'      AND LOWER(p.author)    = LOWER(t.name))
-                    LEFT JOIN media m ON m.post_id = p.id
-                    GROUP BY t.type, t.name, t.enabled, t.status, t.icon_url, t.last_created
-                    ORDER BY t.type, t.name
-                """)
-                target_rows = cur.fetchall()
-                targets = []
-                for row in target_rows:
-                    (
-                        ttype,
-                        name,
-                        enabled,
-                        status,
-                        icon_url,
-                        last_created,
-                        post_count,
-                        posts_7d,
-                        tot_media,
-                        dl_media,
-                        pend_media,
-                    ) = row
-                    post_count = post_count or 0
-                    posts_7d = posts_7d or 0
-                    tot_media = tot_media or 0
-                    dl_media = dl_media or 0
-                    pend_media = pend_media or 0
-
-                    rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
-                    eta_seconds = None
-                    if rate > 0:
-                        remaining = max(0, 1000 - post_count)
-                        if remaining > 0:
-                            eta_seconds = remaining / rate
-
-                    targets.append(
-                        {
-                            "type": ttype,
-                            "name": name,
-                            "enabled": enabled,
-                            "status": status or "active",
-                            "icon_url": icon_url,
-                            "last_created": last_created.isoformat()
-                            if last_created
-                            else None,
-                            "post_count": post_count,
-                            "total_media": tot_media,
-                            "downloaded_media": dl_media,
-                            "pending_media": pend_media,
-                            "rate_per_second": round(rate, 4),
-                            "eta_seconds": round(eta_seconds, 0)
-                            if eta_seconds
-                            else None,
-                            "progress_percent": min(100, round(post_count / 10, 1))
-                            if post_count > 0
-                            else 0,
-                        }
-                    )
-                return targets
-            finally:
-                if cur:
-                    cur.close()
-                if conn and connection_pool:
-                    connection_pool.putconn(conn)
-
-        return await asyncio.to_thread(_query)
-
-    async def db_new_posts(after_dt):
-        def _query():
-            conn = None
-            cur = None
-            try:
-                if not connection_pool:
-                    return []
-                conn = connection_pool.getconn()
-                cur = conn.cursor()
-                if after_dt is None:
-                    cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE excluded = FALSE ORDER BY ingested_at DESC NULLS LAST LIMIT 1"
-                    )
-                else:
-                    cur.execute(
-                        "SELECT id, title, subreddit, author, created_utc, ingested_at FROM posts WHERE excluded = FALSE AND ingested_at > %s ORDER BY ingested_at DESC NULLS LAST LIMIT 20",
-                        (after_dt,),
-                    )
-                return cur.fetchall()
-            finally:
-                if cur:
-                    cur.close()
-                if conn and connection_pool:
-                    connection_pool.putconn(conn)
-
-        return await asyncio.to_thread(_query)
-
-    async def db_new_media(after_dt):
-        def _query():
-            conn = None
-            cur = None
-            try:
-                if not connection_pool:
-                    return []
-                conn = connection_pool.getconn()
-                cur = conn.cursor()
-                if after_dt is None:
-                    cur.execute(
-                        "SELECT id, post_id, url, file_path, downloaded_at FROM media WHERE status = 'done' ORDER BY downloaded_at DESC LIMIT 1"
-                    )
-                else:
-                    cur.execute(
-                        "SELECT id, post_id, url, file_path, downloaded_at FROM media WHERE status = 'done' AND downloaded_at > %s ORDER BY downloaded_at DESC LIMIT 20",
-                        (after_dt,),
-                    )
-                return cur.fetchall()
-            finally:
-                if cur:
-                    cur.close()
-                if conn and connection_pool:
-                    connection_pool.putconn(conn)
-
-        return await asyncio.to_thread(_query)
-
-    async def check_health():
-        def _check():
-            issues = []
-            conn = None
-            cur = None
-            try:
-                if connection_pool:
-                    conn = connection_pool.getconn()
-                    try:
-                        cur = conn.cursor()
-                        cur.execute("SELECT 1")
-                    finally:
-                        if cur:
-                            cur.close()
-                        if conn and connection_pool:
-                            connection_pool.putconn(conn)
-            except Exception as e:
-                issues.append(f"Database: {str(e)}")
-            try:
-                if not os.path.exists(ARCHIVE_PATH):
-                    issues.append(f"Archive path not accessible: {ARCHIVE_PATH}")
-            except Exception as e:
-                issues.append(f"Archive path: {str(e)}")
-            try:
-                if not os.path.exists(THUMB_PATH):
-                    issues.append(f"Thumb path not accessible: {THUMB_PATH}")
-            except Exception as e:
-                issues.append(f"Thumb path: {str(e)}")
-            return {"status": "healthy" if not issues else "degraded", "issues": issues}
-
-        return await asyncio.to_thread(_check)
-
-    async def generate():
-        seed_posts = await db_new_posts(None)
-        last_post_ingested = seed_posts[0][5] if seed_posts else None
-
-        seed_media = await db_new_media(None)
-        last_media_downloaded = seed_media[0][4] if seed_media else None
-
-        while True:
-            try:
-                stats = await db_stats()
-
-                redis_ok = False
-                if redis_client:
-                    try:
-                        stats["queue_length"] = await asyncio.to_thread(
-                            redis_client.llen, "media_queue"
-                        )
-                        redis_ok = True
-                    except Exception:
-                        stats["queue_length"] = 0
-                else:
-                    stats["queue_length"] = 0
-
-                try:
-                    stats["targets"] = await db_target_stats()
-                except Exception as e:
-                    logger.error(f"SSE target stats error: {e}")
-
-                try:
-                    health = await check_health()
-                    if not redis_ok:
-                        health["issues"].append("Redis: not connected")
-                        health["status"] = "degraded"
-                    stats["health"] = health
-                except Exception as e:
-                    logger.error(f"SSE health check error: {e}")
-
-                new_rows = await db_new_posts(last_post_ingested)
-                if new_rows:
-                    stats["new_posts"] = [
+            new_posts = []
+            if _sse_last_post_ts is None:
+                cur.execute(
+                    "SELECT id, title, subreddit, author, created_utc FROM posts WHERE excluded = FALSE ORDER BY ingested_at DESC NULLS LAST LIMIT 1"
+                )
+                row = cur.fetchone()
+                if row:
+                    _sse_last_post_ts = row[4]
+            else:
+                cur.execute(
+                    "SELECT id, title, subreddit, author, created_utc FROM posts WHERE excluded = FALSE AND ingested_at > %s ORDER BY ingested_at DESC NULLS LAST LIMIT 20",
+                    (_sse_last_post_ts,),
+                )
+                for r in cur.fetchall():
+                    new_posts.append(
                         {
                             "id": r[0],
                             "title": r[1],
@@ -2153,30 +2047,112 @@ async def event_stream():
                             "author": r[3],
                             "created_utc": r[4].isoformat() if r[4] else None,
                         }
-                        for r in new_rows
-                    ]
-                    last_post_ingested = new_rows[0][5]
+                    )
+                if new_posts:
+                    _sse_last_post_ts = new_posts[0].get("created_utc")
 
-                media_rows = await db_new_media(last_media_downloaded)
-                if media_rows:
-                    stats["new_media"] = [
-                        {
-                            "id": r[0],
-                            "post_id": r[1],
-                            "url": r[2],
-                            "file_path": r[3],
-                        }
-                        for r in media_rows
-                    ]
-                    last_media_downloaded = media_rows[0][4]
+            new_media = []
+            if _sse_last_media_ts is None:
+                cur.execute(
+                    "SELECT id, post_id, url, file_path FROM media WHERE status = 'done' ORDER BY downloaded_at DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                if row:
+                    _sse_last_media_ts = row[3]
+            else:
+                cur.execute(
+                    "SELECT id, post_id, url, file_path FROM media WHERE status = 'done' AND downloaded_at > %s ORDER BY downloaded_at DESC LIMIT 20",
+                    (_sse_last_media_ts,),
+                )
+                for r in cur.fetchall():
+                    new_media.append(
+                        {"id": r[0], "post_id": r[1], "url": r[2], "file_path": r[3]}
+                    )
+                if new_media:
+                    _sse_last_media_ts = new_media[0].get("file_path")
+
+            cur.close()
+            connection_pool.putconn(conn)
+
+            with _sse_cache_lock:
+                _sse_cache = {
+                    "total_posts": total_posts,
+                    "excluded_posts": excluded_posts,
+                    "total_comments": total_comments,
+                    "downloaded_media": dl_media,
+                    "pending_media": pend_media,
+                    "total_media": tot_media,
+                    "targets": targets,
+                    "new_posts": new_posts,
+                    "new_media": new_media,
+                }
+
+        except Exception as e:
+            logger.error(f"SSE polling error: {e}")
+
+        time.sleep(5)
+
+
+@app.on_event("startup")
+def _start_sse_background():
+    global _sse_background_running
+    _sse_background_running = True
+    threading.Thread(target=_run_sse_polling_loop, daemon=True).start()
+    logger.info("SSE background polling started")
+
+
+@app.on_event("shutdown")
+def _stop_sse_background():
+    global _sse_background_running
+    _sse_background_running = False
+
+
+@app.get("/api/events")
+async def event_stream():
+    """Server-Sent Events endpoint for real-time UI updates (uses cached DB state)."""
+
+    async def generate():
+        while True:
+            try:
+                with _sse_cache_lock:
+                    stats = dict(_sse_cache)
+
+                if redis_client:
+                    try:
+                        stats["queue_length"] = await asyncio.to_thread(
+                            redis_client.llen, "media_queue"
+                        )
+                    except Exception:
+                        stats["queue_length"] = 0
+                else:
+                    stats["queue_length"] = 0
 
                 try:
-                    payload = json.dumps(stats)
+                    issues = []
+                    conn = connection_pool.getconn()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("SELECT 1")
+                        cur.close()
+                    finally:
+                        connection_pool.putconn(conn)
+                    if not os.path.exists(ARCHIVE_PATH):
+                        issues.append(f"Archive path not accessible")
+                    if not os.path.exists(THUMB_PATH):
+                        issues.append(f"Thumb path not accessible")
+                    health = {
+                        "status": "healthy" if not issues else "degraded",
+                        "issues": issues,
+                    }
                 except Exception as e:
-                    logger.error(f"SSE serialize error (stripping targets/health): {e}")
-                    stats.pop("targets", None)
-                    stats.pop("health", None)
-                    payload = json.dumps(stats)
+                    health = {"status": "degraded", "issues": [str(e)]}
+
+                if not redis_client:
+                    health["issues"].append("Redis: not connected")
+                    health["status"] = "degraded"
+                stats["health"] = health
+
+                payload = json.dumps(stats)
                 yield f"data: {payload}\n\n"
             except Exception as e:
                 logger.error(f"SSE generation error: {e}")
@@ -2196,15 +2172,15 @@ async def event_stream():
 
 
 @app.get("/metrics")
-def metrics():
+async def metrics():
     if redis_client:
         try:
-            queue_len = redis_client.llen("media_queue")
+            queue_len = await asyncio.to_thread(redis_client.llen, "media_queue")
             queue_length.set(queue_len)
         except Exception as e:
             logger.warning(f"Redis unavailable for metrics: {e}")
 
-    try:
+    def _fetch_metrics():
         with get_db_cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM posts")
             posts_in_db.set(cur.fetchone()[0] or 0)
@@ -2226,6 +2202,9 @@ def metrics():
                     target_last_fetch.labels(target_type=ttype, target_name=name).set(
                         ts
                     )
+
+    try:
+        await asyncio.to_thread(_fetch_metrics)
     except Exception as e:
         logger.error(f"Metrics DB error: {e}")
 
