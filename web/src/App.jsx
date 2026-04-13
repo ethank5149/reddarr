@@ -75,7 +75,7 @@ const getTextColor = (gradient) => {
 }
 
 export default function App(){
-  const [token, setToken] = useState(null)
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("apiKey"))
   const [role, setRole] = useState(() => {
     const params = new URLSearchParams(window.location.search)
     return params.get("viewer") === "readonly" ? "guest" : "admin"
@@ -609,11 +609,12 @@ export default function App(){
   // Polling fallback every 10s on system and activity tabs
   useEffect(()=>{
     if(activeTab !== "system" && activeTab !== "activity") return
+    const apiKey = localStorage.getItem("apiKey")
     const poll = setInterval(()=>{
-      axios.get("/api/admin/stats").then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
-      axios.get("/api/admin/queue").then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
-      axios.get("/api/admin/health").then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
-      axios.get("/api/admin/activity?limit=50&include_failures=true").then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
+      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
+      axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
+      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
+      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
       setLastUpdated(new Date())
     }, 10000)
     return ()=> clearInterval(poll)
@@ -809,11 +810,12 @@ export default function App(){
 
   function loadAdmin(){
     setAdminLoading(true)
+    const apiKey = localStorage.getItem("apiKey")
     Promise.all([
-      axios.get("/api/admin/stats").catch(()=>({data:null})),
-      axios.get("/api/admin/activity?limit=50&include_failures=true").catch(()=>({data:[]})),
-      axios.get("/api/admin/queue").catch(()=>({data:null})),
-      axios.get("/api/admin/health").catch(()=>({data:null}))
+      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:null})),
+      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:[]})),
+      axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:null})),
+      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:null}))
     ]).then(([statsRes,logsRes,queueRes,healthRes])=>{
       if(statsRes.data) setAdminData(statsRes.data)
       if(logsRes.data) setLogs(logsRes.data)
@@ -824,25 +826,30 @@ export default function App(){
   }
 
   function toggleTarget(ttype,name){
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`).then(()=>loadAdmin()).catch(()=>toastError("Failed to toggle target"))
+    if(!apiKey) return
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`, null, {headers:{"X-Api-Key":apiKey}}).then(()=>loadAdmin()).catch(()=>toastError("Failed to toggle target"))
   }
 
   function setTargetStatus(ttype,name,status){
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`).then(()=>loadAdmin()).catch(()=>toastError("Failed to set status"))
+    if(!apiKey) return
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`, null, {headers:{"X-Api-Key":apiKey}}).then(()=>loadAdmin()).catch(()=>toastError("Failed to set status"))
   }
 
   function rescanTarget(ttype,name){
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`).then(()=>{ toastSuccess("Rescan queued"); loadAdmin() }).catch(()=>toastError("Failed to rescan target"))
+    if(!apiKey) return
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`, null, {headers:{"X-Api-Key":apiKey}}).then(()=>{ toastSuccess("Rescan queued"); loadAdmin() }).catch(()=>toastError("Failed to rescan target"))
   }
 
   function scrapeNow(){
-    axios.post("/api/admin/scrape")
+    if(!apiKey) return
+    axios.post("/api/admin/trigger-scrape", null, {headers:{"X-Api-Key":apiKey}})
       .then(()=>{ setScrapeTriggered(true); setTimeout(()=>setScrapeTriggered(false), 3000) })
       .catch(()=>toastError("Failed to trigger scrape"))
   }
 
   function triggerBackfill(){
-    axios.post(`/api/admin/backfill?passes=2&workers=3`)
+    if(!apiKey) return
+    axios.post(`/api/admin/trigger-backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey}})
       .then(()=>{
         setBackfillTriggered(true)
         startBackfillPoll()
@@ -854,7 +861,8 @@ export default function App(){
   function startBackfillPoll(){
     if(backfillPollRef.current) clearInterval(backfillPollRef.current)
     backfillPollRef.current = setInterval(()=>{
-      axios.get("/api/admin/backfill/status")
+      if(!apiKey) return
+      axios.get("/api/admin/backfill-status", {headers:{"X-Api-Key":apiKey}})
         .then(r=>{
           setBackfillStatus(r.data)
           if(r.data.status === "done" || r.data.status === "partial" || r.data.status === "none"){
@@ -871,23 +879,25 @@ export default function App(){
   }, [])
 
   function deleteTarget(ttype,name){
+    if(!apiKey) return
     const removeOnly = window.confirm(`Delete target ${ttype}:${name}?\n\nClick OK to remove from scrape list only (keeps posts and media).\nClick Cancel to abort.`)
     if (!removeOnly) return
     const shouldPrune = window.confirm(`Also delete all posts and media associated with ${name}?\n\nClick OK to delete posts and media.\nClick Cancel to keep them.`)
     if (!shouldPrune) {
-      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`).then(()=>{ toastSuccess("Target removed"); loadAdmin() }).catch(()=>toastError("Failed to delete target"))
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`, {headers:{"X-Api-Key":apiKey}}).then(()=>{ toastSuccess("Target removed"); loadAdmin() }).catch(()=>toastError("Failed to delete target"))
     } else {
       const alsoDeleteFiles = window.confirm("Also delete downloaded media files from disk? (This cannot be undone)")
-      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}?prune=true&delete_files=${alsoDeleteFiles}`)
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}?prune=true&delete_files=${alsoDeleteFiles}`, {headers:{"X-Api-Key":apiKey}})
         .then(r=>{ toastSuccess(`Deleted: ${r.data.deleted_posts} posts, ${r.data.deleted_media} media, ${r.data.deleted_files} files`); loadAdmin() })
         .catch(()=>toastError("Failed to delete target"))
     }
   }
 
   function addTarget(){
+    if(!apiKey) return
     const name = addTargetName.trim()
     if(!name) return
-    axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`)
+    axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`, null, {headers:{"X-Api-Key":apiKey}})
       .then(()=>{ setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin() })
       .catch(()=>toastError("Failed to add target"))
   }
@@ -917,7 +927,7 @@ export default function App(){
   function fetchCardAudit(ttype, name){
     const key = `${ttype}:${name}`
     setCardAuditLoading(prev => ({...prev, [key]: true}))
-    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/audit`)
+    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/audit`, {headers:{"X-Api-Key":apiKey}})
       .then(r => {
         setCardAudit(prev => ({...prev, [key]: r.data}))
         setCardAuditLoading(prev => ({...prev, [key]: false}))
@@ -931,7 +941,7 @@ export default function App(){
   function scrapeTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardScraping(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/scrape`)
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/scrape`, null, {headers:{"X-Api-Key":apiKey}})
       .then(() => {
         toastSuccess(`Scrape triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
         setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
@@ -945,7 +955,7 @@ export default function App(){
   function rescrapeTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardScraping(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescrape`)
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescrape`, null, {headers:{"X-Api-Key":apiKey}})
       .then(r => {
         toastSuccess(`Requeued ${r.data.requeued} missing items for ${name}`)
         setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
@@ -959,7 +969,7 @@ export default function App(){
   function backfillTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardBackfilling(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/backfill?passes=2&workers=3`)
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey}})
       .then(() => {
         toastSuccess(`Backfill triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
         startBackfillPoll()
@@ -973,13 +983,15 @@ export default function App(){
 
   function clearQueue(){
     if(!window.confirm("Clear the entire download queue?")) return
-    axios.delete("/api/admin/queue").then(()=>{ toastSuccess("Queue cleared"); loadAdmin() }).catch(()=>toastError("Failed to clear queue"))
+    if(!apiKey) return
+    axios.delete("/api/admin/queue", {headers:{"X-Api-Key":apiKey}}).then(()=>{ toastSuccess("Queue cleared"); loadAdmin() }).catch(()=>toastError("Failed to clear queue"))
   }
 
   function doReset(){
     if(resetInput !== "RESET") return
+    if(!apiKey) return
     setResetLoading(true)
-    axios.delete("/api/admin/reset?confirm=RESET")
+    axios.delete("/api/admin/reset?confirm=RESET", {headers:{"X-Api-Key":apiKey}})
       .then(r=>{
         setResetResult(r.data)
         setResetLoading(false)
@@ -1729,7 +1741,7 @@ export default function App(){
                 {liveConnected?"Connected":"Connecting…"}
                 {queueInfo && <span style={{marginLeft:"8px",color:queueInfo.queue_length>0?"#f9c300":"#46d160"}}>{queueInfo.queue_length||0}Q</span>}
               </div>
-              {!isReadOnly && <button onClick={()=>{setToken(null);setRole(null);localStorage.clear();window.location.reload()}} style={{background:"none",border:"none",color:"#5a7b9a",cursor:"pointer",textDecoration:"underline",fontSize:"11px",padding:0}}>Logout</button>}
+              {!isReadOnly && <button onClick={()=>{setApiKey(null);localStorage.removeItem("apiKey");window.location.reload()}} style={{background:"none",border:"none",color:"#5a7b9a",cursor:"pointer",textDecoration:"underline",fontSize:"11px",padding:0}}>Logout</button>}
               {isReadOnly && <span style={{color:"#5a7b9a",fontSize:"10px"}}>Read-only</span>}
             </div>
           )}
@@ -2571,7 +2583,48 @@ export default function App(){
                     const tsMatch = line.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*)\s*(.*)/)
                     const ts = tsMatch ? tsMatch[1] : null
                     const msg = tsMatch ? tsMatch[2] : line
-                    return (
+  const [loginApiKey, setLoginApiKey] = useState("")
+  const [loginError, setLoginError] = useState(null)
+  const [loginLoading, setLoginLoading] = useState(false)
+
+  function handleLogin(e){
+    e.preventDefault()
+    if(!loginApiKey) return
+    setLoginLoading(true)
+    setLoginError(null)
+    axios.get("/api/admin/stats", {headers: {"X-Api-Key": loginApiKey}})
+      .then(r => {
+        if(r.status === 200){
+          localStorage.setItem("apiKey", loginApiKey)
+          setApiKey(loginApiKey)
+          setLoginLoading(false)
+        } else {
+          setLoginError("Invalid API key")
+          setLoginLoading(false)
+        }
+      })
+      .catch(err => {
+        setLoginError(err.response?.status === 401 ? "Invalid API key" : "API request failed")
+        setLoginLoading(false)
+      })
+  }
+
+  if(!apiKey && !isReadOnly){
+    return (
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#0d1117"}}>
+        <form onSubmit={handleLogin} style={{display:"flex",flexDirection:"column",gap:"16px",padding:"24px",background:"#161d2f",borderRadius:"6px",border:"1px solid #2a2a2a",minWidth:"300px"}}>
+          <h2 style={{margin:0,textAlign:"center",color:"#f0f6fc"}}>Enter API Key</h2>
+          <input type="password" value={loginApiKey} onChange={e=>setLoginApiKey(e.target.value)} placeholder="API Key" style={{padding:"10px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0d1117",color:"#f0f6fc"}}/>
+          {loginError && <div style={{color:"#f85149",fontSize:"14px",textAlign:"center"}}>{loginError}</div>}
+          <button type="submit" disabled={loginLoading} style={{padding:"10px",borderRadius:"3px",border:"none",background:"#35c5f4",color:"#0d1117",fontWeight:"bold",cursor:"pointer"}}>
+            {loginLoading ? "Verifying..." : "Login"}
+          </button>
+        </form>
+      </div>
+    )
+  }
+
+  return (
                       <div key={idx} style={{display:"flex",gap:"12px",padding:"2px 0",borderBottom:"1px solid #1a1a1a"}}>
                         <span style={{color:"#3a5068",minWidth:"160px",fontVariantNumeric:"tabular-nums",flexShrink:0}}>{ts || "-"}</span>
                         <span style={{color,minWidth:"80px",fontWeight:"500",flexShrink:0}}>{selectedLog}</span>
