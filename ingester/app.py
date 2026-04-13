@@ -117,11 +117,22 @@ def _read_secret(path):
         return f.read().strip()
 
 
-reddit = praw.Reddit(
-    client_id=_read_secret("/run/secrets/reddit_client_id"),
-    client_secret=_read_secret("/run/secrets/reddit_client_secret"),
-    user_agent=os.getenv("REDDIT_USER_AGENT"),
-)
+def _create_reddit_client():
+    """Create a new PRAW client instance.
+
+    PRAW is not thread-safe, so each thread/worker needs its own instance.
+    This function is used by both the main thread and backfill workers.
+    """
+    return praw.Reddit(
+        client_id=_read_secret("/run/secrets/reddit_client_id"),
+        client_secret=_read_secret("/run/secrets/reddit_client_secret"),
+        user_agent=os.getenv("REDDIT_USER_AGENT"),
+    )
+
+
+# Global reddit instance for main thread only
+# Backfill workers create their own instances via _create_reddit_client()
+reddit = _create_reddit_client()
 
 logger.info(f"Reddit client initialized (read only: {reddit.read_only})")
 
@@ -599,8 +610,21 @@ def ingest_post(db, p):
     return True
 
 
-def fetch_target_posts(ttype, name, sort_method="new"):
-    """Scrape a single target with the specified sort method."""
+def fetch_target_posts(ttype, name, sort_method="new", reddit_client=None):
+    """Scrape a single target with the specified sort method.
+
+    Args:
+        ttype: Target type ('subreddit' or 'user')
+        name: Target name
+        sort_method: Sort method ('new', 'top_all', 'top_year', 'top_month')
+        reddit_client: Optional PRAW client instance. If not provided, uses the
+                      global instance (for main thread) or creates a new one.
+    """
+    # Use provided client, global (main thread), or create new (worker threads)
+    rc = reddit_client
+    if rc is None:
+        rc = reddit
+
     db = get_db()
     new_posts_found = 0
     posts_processed = 0
@@ -612,7 +636,7 @@ def fetch_target_posts(ttype, name, sort_method="new"):
 
     try:
         if ttype == "subreddit":
-            sr = reddit.subreddit(name)
+            sr = rc.subreddit(name)
             if sort_method == "top_all":
                 src = sr.top(time_filter="all", limit=SCRAPE_LIMIT)
             elif sort_method == "top_year":
@@ -622,7 +646,7 @@ def fetch_target_posts(ttype, name, sort_method="new"):
             else:
                 src = sr.new(limit=SCRAPE_LIMIT)
         else:
-            user = reddit.redditor(name)
+            user = rc.redditor(name)
             if sort_method == "top_all":
                 src = user.submissions.top(time_filter="all", limit=SCRAPE_LIMIT)
             elif sort_method == "top_year":
@@ -767,7 +791,12 @@ def run_backfill_parallel(targets, passes=None, workers=None):
                 worker_queues[worker_id].append((ttype, name, sort_method))
 
         def _run_backfill_worker_batch(targets_batch):
-            """Run backfill for a batch of targets assigned to a worker."""
+            """Run backfill for a batch of targets assigned to a worker.
+
+            Each worker creates its own PRAW client instance to avoid thread-safety issues.
+            """
+            # Create a separate PRAW client for this worker thread
+            worker_reddit = _create_reddit_client()
             total_found = 0
             total_processed = 0
             rate_limited = False
@@ -775,7 +804,7 @@ def run_backfill_parallel(targets, passes=None, workers=None):
             for ttype, name, sort_method in targets_batch:
                 try:
                     new_found, processed, was_limited = fetch_target_posts(
-                        ttype, name, sort_method
+                        ttype, name, sort_method, reddit_client=worker_reddit
                     )
                     total_found += new_found
                     total_processed += processed

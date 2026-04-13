@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, Query, HTTPException, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
@@ -30,47 +30,69 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Simple in-memory rate limiter
-class RateLimiter:
-    def __init__(self, requests_per_minute: int = 60):
+class RedisRateLimiter:
+    """Redis-based rate limiter for API endpoints.
+
+    Uses Redis to track request counts, allowing rate limiting to work
+    correctly across multiple API workers (Gunicorn/Uvicorn).
+    """
+
+    def __init__(self, requests_per_minute: int = 60, redis_client=None):
         self.requests_per_minute = requests_per_minute
-        self.requests = defaultdict(list)
-        self.cleanup_interval = 60
-        self._lock = threading.Lock()
-        # Start cleanup thread
-        threading.Thread(target=self._cleanup_loop, daemon=True).start()
+        self._redis = redis_client
+        self._window = 60  # seconds
 
-    def _cleanup_loop(self):
-        while True:
-            time.sleep(self.cleanup_interval)
-            self._cleanup()
-
-    def _cleanup(self):
-        now = time.time()
-        with self._lock:
-            for key in list(self.requests.keys()):
-                self.requests[key] = [t for t in self.requests[key] if now - t < 60]
-                if not self.requests[key]:
-                    del self.requests[key]
+    def _get_redis(self):
+        if self._redis is None:
+            return redis.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                decode_responses=True,
+                socket_connect_timeout=2,
+            )
+        return self._redis
 
     def check(self, key: str) -> bool:
-        now = time.time()
-        with self._lock:
-            # Clean old entries for this key
-            self.requests[key] = [t for t in self.requests[key] if now - t < 60]
-            if len(self.requests[key]) >= self.requests_per_minute:
+        """Check if request is allowed. Returns True if allowed, False if rate limited."""
+        try:
+            r = self._get_redis()
+            rate_key = f"ratelimit:{key}"
+            current = r.get(rate_key)
+            if current is None:
+                r.setex(rate_key, self._window, "1")
+                return True
+            count = int(current)
+            if count >= self.requests_per_minute:
                 return False
-            self.requests[key].append(now)
+            r.incr(rate_key)
             return True
+        except Exception as e:
+            logger.warning(f"Redis rate limit error: {e}, allowing request")
+            return True  # Fail open on Redis errors
 
     def get_remaining(self, key: str) -> int:
-        now = time.time()
-        with self._lock:
-            self.requests[key] = [t for t in self.requests[key] if now - t < 60]
-            return max(0, self.requests_per_minute - len(self.requests[key]))
+        """Get remaining requests for this key."""
+        try:
+            r = self._get_redis()
+            rate_key = f"ratelimit:{key}"
+            current = r.get(rate_key)
+            if current is None:
+                return self.requests_per_minute
+            return max(0, self.requests_per_minute - int(current))
+        except Exception:
+            return self.requests_per_minute
 
 
-rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("RATE_LIMIT_RPM", "60")))
+_rate_limiter = None
+
+
+def get_rate_limiter():
+    global _rate_limiter
+    if _rate_limiter is None:
+        _rate_limiter = RedisRateLimiter(
+            requests_per_minute=int(os.getenv("RATE_LIMIT_RPM", "60"))
+        )
+    return _rate_limiter
+
 
 posts_total = Gauge("reddit_posts_total", "Total posts ingested", ["subreddit"])
 comments_total = Gauge(
@@ -92,6 +114,25 @@ target_last_fetch = Gauge(
     ["target_type", "target_name"],
 )
 ingest_duration = Histogram("reddit_ingest_duration_seconds", "Ingest cycle duration")
+
+
+def get_api_key():
+    """Load the API key from secrets or environment."""
+    from shared.config import get_secret
+
+    key = get_secret("API_KEY", os.getenv("API_KEY", ""))
+    return key
+
+
+async def require_api_key(x_api_key: str = Header(None)):
+    """FastAPI dependency to require API key for protected endpoints."""
+    api_key = get_api_key()
+    if not api_key:
+        logger.warning("API_KEY not configured - admin endpoints are unprotected!")
+        return  # Fail open if no key configured
+    if x_api_key is None or x_api_key != api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
 
 # HTTP request metrics
 http_requests_total = Counter(
@@ -125,8 +166,9 @@ async def metrics_middleware(request: Request, call_next):
     if path.startswith("/api/"):
         client_ip = request.client.host if request.client else "unknown"
         rate_key = f"api:{client_ip}"
-        if not rate_limiter.check(rate_key):
-            remaining = rate_limiter.get_remaining(rate_key)
+        limiter = get_rate_limiter()
+        if not limiter.check(rate_key):
+            remaining = limiter.get_remaining(rate_key)
             return JSONResponse(
                 status_code=429,
                 content={
@@ -1290,7 +1332,7 @@ def _delete_post_media(post_id: str):
     return files_deleted, errors
 
 
-@app.post("/api/post/{post_id}/delete")
+@app.post("/api/post/{post_id}/delete", dependencies=[Depends(require_api_key)])
 def delete_post(post_id: str, delete_media: bool = Query(True)):
     """Delete a post and its associated data (comments, media records).
     If delete_media is true, also deletes the files from disk."""
@@ -1608,7 +1650,7 @@ class TargetRequest(BaseModel):
     name: str
 
 
-@app.post("/api/admin/targets")
+@app.post("/api/admin/targets", dependencies=[Depends(require_api_key)])
 def add_target(req: TargetRequest):
     """Add a new subreddit or user target."""
     if req.type not in ("subreddit", "user"):
@@ -1635,7 +1677,9 @@ def add_target(req: TargetRequest):
     return {"status": "ok", "type": req.type, "name": req.name}
 
 
-@app.delete("/api/admin/targets/{target_type}/{name}")
+@app.delete(
+    "/api/admin/targets/{target_type}/{name}", dependencies=[Depends(require_api_key)]
+)
 def delete_target(target_type: str, name: str):
     """Delete a target (disables it, does not remove data)."""
     with get_db_cursor() as cur:
@@ -1670,7 +1714,7 @@ class ScrapeRequest(BaseModel):
     target_name: Optional[str] = None
 
 
-@app.post("/api/admin/trigger-scrape")
+@app.post("/api/admin/trigger-scrape", dependencies=[Depends(require_api_key)])
 def trigger_scrape(req: ScrapeRequest):
     """Manually trigger a scrape cycle for all targets, or a single target."""
     r = get_redis()
@@ -1688,7 +1732,7 @@ class BackfillRequest(BaseModel):
     target_name: Optional[str] = None
 
 
-@app.post("/api/admin/trigger-backfill")
+@app.post("/api/admin/trigger-backfill", dependencies=[Depends(require_api_key)])
 def trigger_backfill(req: BackfillRequest):
     """Manually trigger a backfill for all targets, or a single target."""
     r = get_redis()

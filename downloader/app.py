@@ -276,6 +276,7 @@ def make_thumb(path):
         ["ffmpeg", "-y", "-i", path, "-vf", "scale=320:-1", "-frames:v", "1", thumb],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        timeout=60,
     )
     if result.returncode == 0:
         logger.info(f"Thumbnail created: {thumb}")
@@ -626,22 +627,43 @@ def process_item(item, session=None):
                 post_dir = get_post_dir(post_id, q_subreddit, q_author)
                 video_name = make_filename(q_subreddit, q_author, q_title, post_id, url)
                 video_stem = Path(video_name).stem
-                result = subprocess.run(
-                    [
-                        "yt-dlp",
-                        "-o",
-                        f"{post_dir}/{video_stem}.%(ext)s",
-                        url,
-                        "--quiet",
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                if result.returncode == 0:
-                    logger.info(f"Video downloaded: {url}")
-                else:
-                    err_msg = result.stderr.decode()
-                    logger.error(f"Video download failed for {url}: {err_msg}")
+                try:
+                    result = subprocess.run(
+                        [
+                            "yt-dlp",
+                            "-o",
+                            f"{post_dir}/{video_stem}.%(ext)s",
+                            url,
+                            "--quiet",
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=600,
+                    )
+                    if result.returncode == 0:
+                        logger.info(f"Video downloaded: {url}")
+                    else:
+                        err_msg = result.stderr.decode()
+                        logger.error(f"Video download failed for {url}: {err_msg}")
+                        try:
+                            rd.lpush(
+                                "failed_video_downloads",
+                                json.dumps(
+                                    {
+                                        "url": url,
+                                        "post_id": post_id,
+                                        "error": err_msg[:500],
+                                        "timestamp": datetime.now(
+                                            timezone.utc
+                                        ).isoformat(),
+                                    }
+                                ),
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to log failed video to Redis: {e}")
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Video download timed out after 600s for {url}")
+                    err_msg = "Download timed out after 600 seconds"
                     try:
                         rd.lpush(
                             "failed_video_downloads",
@@ -649,7 +671,7 @@ def process_item(item, session=None):
                                 {
                                     "url": url,
                                     "post_id": post_id,
-                                    "error": err_msg[:500],
+                                    "error": err_msg,
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 }
                             ),
@@ -949,7 +971,41 @@ def worker(worker_id):
             rd.lrem(processing_queue, 0, data)
 
 
+def _recover_orphaned_queues():
+    """Scan for orphaned processing queues and move their contents back to main queue.
+
+    If the container restarted with fewer workers than before (e.g., CONCURRENCY reduced),
+    the processing queues for removed workers would be orphaned.
+    """
+    try:
+        # Find all processing queues
+        keys = rd.keys("media_processing_*")
+        if not keys:
+            return
+
+        recovered = 0
+        for key in keys:
+            key_str = key.decode() if isinstance(key, bytes) else key
+            items = rd.lrange(key_str, 0, -1)
+            if items:
+                logger.info(
+                    f"Recovering {len(items)} items from orphaned queue {key_str}"
+                )
+                for item in items:
+                    rd.lpush("media_queue", item)
+                    rd.lrem(key_str, 0, item)
+                    recovered += 1
+
+        if recovered > 0:
+            logger.info(f"Recovered {recovered} items from orphaned processing queues")
+    except Exception as e:
+        logger.warning(f"Failed to recover orphaned queues: {e}")
+
+
 def main():
+    # Recover any orphaned processing queues before starting workers
+    _recover_orphaned_queues()
+
     logger.info(f"Starting {CONCURRENCY} concurrent workers...")
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
         futures = [executor.submit(worker, i) for i in range(CONCURRENCY)]

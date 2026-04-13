@@ -1,19 +1,32 @@
 import pytest
-import praw
-import os
+import inspect
 
 
-def test_ingester_reddit_connection():
-    client_id = os.environ.get("REDDIT_CLIENT_ID")
-    client_secret = os.environ.get("REDDIT_CLIENT_SECRET")
-    user_agent = os.environ.get("REDDIT_USER_AGENT")
+class TestThreadSafeRedditClient:
+    """Test PRAW thread-safety fixes in ingester."""
 
-    if not client_id or not client_secret:
-        pytest.skip("Reddit credentials not provided")
+    def test_create_reddit_client_exists(self):
+        """Verify _create_reddit_client factory function exists."""
+        from ingester.app import _create_reddit_client
 
-    reddit = praw.Reddit(
-        client_id=client_id,
-        client_secret=client_secret,
-        user_agent=user_agent or "reddarr-tests/1.0",
-    )
-    assert reddit.read_only
+        assert callable(_create_reddit_client)
+
+    def test_fetch_target_accepts_client_param(self):
+        """Verify fetch_target_posts accepts reddit_client parameter."""
+        from ingester.app import fetch_target_posts
+
+        sig = inspect.signature(fetch_target_posts)
+        params = list(sig.parameters.keys())
+        assert "reddit_client" in params
+
+    def test_worker_creates_own_client(self):
+        """Verify backfill workers create their own PRAW instances."""
+        from ingester.app import run_backfill_parallel
+
+        source = inspect.getsource(run_backfill_parallel)
+        assert "_create_reddit_client" in source
+
+
+# For running without docker (local dev)
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -30,6 +30,7 @@ services:
       REDIS_HOST: redis
       ADMIN_PASSWORD: admin
       GUEST_PASSWORD: guest
+      API_KEY: test_api_key_12345
     secrets:
       - admin_password
       - guest_password
@@ -59,6 +60,7 @@ services:
       ADMIN_PASS: admin
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      API_KEY: test_api_key_12345
     command: ["pytest", "-vv", "tests/"]
     networks:
       - internal
