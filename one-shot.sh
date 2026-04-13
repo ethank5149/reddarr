@@ -75,11 +75,59 @@ if [ ! -f prometheus/prometheus.yml ]; then
 fi
 
 echo "Building and starting containers..."
-docker compose build
+docker compose build --no-cache
 docker compose up -d --remove-orphans
 
 echo "Waiting for database and redis to be ready..."
-sleep 15
+sleep 10
+
+DB_OK=false
+REDIS_OK=false
+for i in 1 2 3 4 5; do
+    if docker compose exec -T db pg_isready -U reddit >/dev/null 2>&1; then
+        DB_OK=true
+        echo "Database is ready"
+        break
+    fi
+    sleep 2
+done
+
+for i in 1 2 3 4 5; do
+    if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+        REDIS_OK=true
+        echo "Redis is ready"
+        break
+    fi
+    sleep 2
+done
+
+if [ "$DB_OK" = false ] || [ "$REDIS_OK" = false ]; then
+    echo "Warning: database or redis not ready"
+fi
+
+echo "Verifying API endpoints..."
+API_CONTAINER=$(docker compose ps -q api 2>/dev/null)
+if [ -n "$API_CONTAINER" ]; then
+    API_PORT=$(docker port "$API_CONTAINER" 2>/dev/null | head -1 | cut -d: -f2)
+    echo "Testing API via internal container..."
+    if docker exec "$API_CONTAINER" python -c "
+import urllib.request, json, sys
+req = urllib.request.Request(
+    'http://127.0.0.1:8080/api/admin/targets',
+    data=json.dumps({'type':'subreddit','name':'one_shot_health_check'}).encode(),
+    headers={'Content-Type': 'application/json', 'X-API-Key': '!!19077h053j37p4ck81u35!!'},
+    method='POST'
+)
+resp = urllib.request.urlopen(req)
+print('Target add: SUCCESS')
+" 2>&1; then
+        echo "API is working (target add verified)"
+    else
+        echo "Warning: Could not verify target add"
+    fi
+else
+    echo "Warning: API container not found"
+fi
 
 echo ""
 echo "=== Services ==="

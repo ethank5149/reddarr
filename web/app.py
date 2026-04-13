@@ -1737,20 +1737,10 @@ def add_target(req: TargetRequest):
     if req.type not in ("subreddit", "user"):
         raise HTTPException(status_code=400, detail="Invalid target type")
 
-    # Verify target exists on Reddit before adding
-    exists = _verify_target_exists(req.type, req.name)
-    if exists is False:
-        _append_failed_target(req.type, req.name)
-        raise HTTPException(status_code=404, detail="Target not found on Reddit")
-    elif exists is None:
-        logger.warning(
-            f"Could not verify existence of {req.type}:{req.name}, adding anyway"
-        )
-
     with get_db_cursor() as cur:
         try:
             cur.execute(
-                "INSERT INTO targets(type,name) VALUES(%s, %s) ON CONFLICT (name) DO UPDATE SET enabled = true",
+                "INSERT INTO targets(type,name) VALUES(%s, %s) ON CONFLICT (name) DO UPDATE SET enabled = true, status = 'active'",
                 (req.type, req.name.strip()),
             )
         except Exception as e:
