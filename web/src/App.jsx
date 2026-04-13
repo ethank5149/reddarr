@@ -242,11 +242,12 @@ export default function App(){
     if(!loginApiKey) return
     setLoginLoading(true)
     setLoginError(null)
-    axios.get("/api/admin/stats", {headers: {"X-Api-Key": loginApiKey}})
+    const trimmedApiKey = loginApiKey.trim()
+    axios.get("/api/admin/stats", {headers: {"X-Api-Key": trimmedApiKey}})
       .then(r => {
         if(r.status === 200){
-          localStorage.setItem("apiKey", loginApiKey)
-          setApiKey(loginApiKey)
+          localStorage.setItem("apiKey", trimmedApiKey)
+          setApiKey(trimmedApiKey)
           setLoginLoading(false)
         } else {
           setLoginError("Invalid API key")
@@ -648,10 +649,10 @@ export default function App(){
     if(activeTab !== "system" && activeTab !== "activity") return
     const apiKey = localStorage.getItem("apiKey")
     const poll = setInterval(()=>{
-      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
-      axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
-      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
-      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
+      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
+      axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
+      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
+      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
       setLastUpdated(new Date())
     }, 10000)
     return ()=> clearInterval(poll)
@@ -849,10 +850,10 @@ export default function App(){
     setAdminLoading(true)
     const apiKey = localStorage.getItem("apiKey")
     Promise.all([
-      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:null})),
-      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:[]})),
-      axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:null})),
-      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey}} : {}).catch(()=>({data:null}))
+      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null})),
+      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:[]})),
+      axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null})),
+      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null}))
     ]).then(([statsRes,logsRes,queueRes,healthRes])=>{
       if(statsRes.data) setAdminData(statsRes.data)
       if(logsRes.data) setLogs(logsRes.data)
@@ -864,29 +865,29 @@ export default function App(){
 
   function toggleTarget(ttype,name){
     if(!apiKey) return
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`, null, {headers:{"X-Api-Key":apiKey}}).then(()=>loadAdmin()).catch(()=>toastError("Failed to toggle target"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/toggle`, null, {headers:{"X-Api-Key":apiKey.trim()}}).then(()=>loadAdmin()).catch(()=>toastError("Failed to toggle target"))
   }
 
   function setTargetStatus(ttype,name,status){
     if(!apiKey) return
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`, null, {headers:{"X-Api-Key":apiKey}}).then(()=>loadAdmin()).catch(()=>toastError("Failed to set status"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/status?new_status=${status}`, null, {headers:{"X-Api-Key":apiKey.trim()}}).then(()=>loadAdmin()).catch(()=>toastError("Failed to set status"))
   }
 
   function rescanTarget(ttype,name){
     if(!apiKey) return
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`, null, {headers:{"X-Api-Key":apiKey}}).then(()=>{ toastSuccess("Rescan queued"); loadAdmin() }).catch(()=>toastError("Failed to rescan target"))
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescan`, null, {headers:{"X-Api-Key":apiKey.trim()}}).then(()=>{ toastSuccess("Rescan queued"); loadAdmin() }).catch(()=>toastError("Failed to rescan target"))
   }
 
   function scrapeNow(){
     if(!apiKey) return
-    axios.post("/api/admin/trigger-scrape", null, {headers:{"X-Api-Key":apiKey}})
+    axios.post("/api/admin/trigger-scrape", null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(()=>{ setScrapeTriggered(true); setTimeout(()=>setScrapeTriggered(false), 3000) })
       .catch(()=>toastError("Failed to trigger scrape"))
   }
 
   function triggerBackfill(){
     if(!apiKey) return
-    axios.post(`/api/admin/trigger-backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey}})
+    axios.post(`/api/admin/trigger-backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(()=>{
         setBackfillTriggered(true)
         startBackfillPoll()
@@ -899,7 +900,7 @@ export default function App(){
     if(backfillPollRef.current) clearInterval(backfillPollRef.current)
     backfillPollRef.current = setInterval(()=>{
       if(!apiKey) return
-      axios.get("/api/admin/backfill-status", {headers:{"X-Api-Key":apiKey}})
+      axios.get("/api/admin/backfill-status", {headers:{"X-Api-Key":apiKey.trim()}})
         .then(r=>{
           setBackfillStatus(r.data)
           if(r.data.status === "done" || r.data.status === "partial" || r.data.status === "none"){
@@ -921,10 +922,10 @@ export default function App(){
     if (!removeOnly) return
     const shouldPrune = window.confirm(`Also delete all posts and media associated with ${name}?\n\nClick OK to delete posts and media.\nClick Cancel to keep them.`)
     if (!shouldPrune) {
-      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`, {headers:{"X-Api-Key":apiKey}}).then(()=>{ toastSuccess("Target removed"); loadAdmin() }).catch(()=>toastError("Failed to delete target"))
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}`, {headers:{"X-Api-Key":apiKey.trim()}}).then(()=>{ toastSuccess("Target removed"); loadAdmin() }).catch(()=>toastError("Failed to delete target"))
     } else {
       const alsoDeleteFiles = window.confirm("Also delete downloaded media files from disk? (This cannot be undone)")
-      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}?prune=true&delete_files=${alsoDeleteFiles}`, {headers:{"X-Api-Key":apiKey}})
+      axios.delete(`/api/admin/target/${ttype}/${encodeURIComponent(name)}?prune=true&delete_files=${alsoDeleteFiles}`, {headers:{"X-Api-Key":apiKey.trim()}})
         .then(r=>{ toastSuccess(`Deleted: ${r.data.deleted_posts} posts, ${r.data.deleted_media} media, ${r.data.deleted_files} files`); loadAdmin() })
         .catch(()=>toastError("Failed to delete target"))
     }
@@ -934,7 +935,7 @@ export default function App(){
     if(!apiKey) return
     const name = addTargetName.trim()
     if(!name) return
-    axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`, null, {headers:{"X-Api-Key":apiKey}})
+    axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`, null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(()=>{ setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin() })
       .catch(()=>toastError("Failed to add target"))
   }
@@ -964,7 +965,7 @@ export default function App(){
   function fetchCardAudit(ttype, name){
     const key = `${ttype}:${name}`
     setCardAuditLoading(prev => ({...prev, [key]: true}))
-    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/audit`, {headers:{"X-Api-Key":apiKey}})
+    axios.get(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/audit`, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(r => {
         setCardAudit(prev => ({...prev, [key]: r.data}))
         setCardAuditLoading(prev => ({...prev, [key]: false}))
@@ -978,7 +979,7 @@ export default function App(){
   function scrapeTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardScraping(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/scrape`, null, {headers:{"X-Api-Key":apiKey}})
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/scrape`, null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(() => {
         toastSuccess(`Scrape triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
         setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
@@ -992,7 +993,7 @@ export default function App(){
   function rescrapeTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardScraping(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescrape`, null, {headers:{"X-Api-Key":apiKey}})
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescrape`, null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(r => {
         toastSuccess(`Requeued ${r.data.requeued} missing items for ${name}`)
         setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
@@ -1006,7 +1007,7 @@ export default function App(){
   function backfillTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardBackfilling(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey}})
+    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(() => {
         toastSuccess(`Backfill triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
         startBackfillPoll()
@@ -1021,14 +1022,14 @@ export default function App(){
   function clearQueue(){
     if(!window.confirm("Clear the entire download queue?")) return
     if(!apiKey) return
-    axios.delete("/api/admin/queue", {headers:{"X-Api-Key":apiKey}}).then(()=>{ toastSuccess("Queue cleared"); loadAdmin() }).catch(()=>toastError("Failed to clear queue"))
+    axios.delete("/api/admin/queue", {headers:{"X-Api-Key":apiKey.trim()}}).then(()=>{ toastSuccess("Queue cleared"); loadAdmin() }).catch(()=>toastError("Failed to clear queue"))
   }
 
   function doReset(){
     if(resetInput !== "RESET") return
     if(!apiKey) return
     setResetLoading(true)
-    axios.delete("/api/admin/reset?confirm=RESET", {headers:{"X-Api-Key":apiKey}})
+    axios.delete("/api/admin/reset?confirm=RESET", {headers:{"X-Api-Key":apiKey.trim()}})
       .then(r=>{
         setResetResult(r.data)
         setResetLoading(false)

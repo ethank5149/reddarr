@@ -124,8 +124,8 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
       TARGETS_FILE: /app/targets.txt
+      API_KEY: "!!19077h053j37p4ck81u35!!"
     secrets:
-      - api_key
       - admin_password
       - guest_password
       - postgres_password
@@ -235,8 +235,6 @@ secrets:
     file: ./secrets/reddit_client_id
   reddit_client_secret:
     file: ./secrets/reddit_client_secret
-  api_key:
-    file: ./secrets/api_key
   admin_password:
     file: ./secrets/admin_password
   guest_password:
