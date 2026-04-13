@@ -321,7 +321,7 @@ def startup():
     try:
         from shared.database import init_pool
 
-        connection_pool = init_pool(minconn=1, maxconn=10)
+        connection_pool = init_pool(minconn=1, maxconn=25)
         logger.info("Database connection pool initialized")
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
@@ -2101,7 +2101,13 @@ def _run_sse_polling_loop():
                         {"id": r[0], "post_id": r[1], "url": r[2], "file_path": r[3]}
                     )
                 if new_media:
-                    _sse_last_media_ts = new_media[0].get("file_path")
+                    cur.execute(
+                        "SELECT downloaded_at FROM media WHERE id = %s",
+                        (new_media[0]["id"],),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        _sse_last_media_ts = row[0]
 
             cur.close()
             connection_pool.putconn(conn)

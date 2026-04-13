@@ -16,7 +16,7 @@ _pool_lock = threading.Lock()
 
 
 def init_pool(
-    minconn: int = 1, maxconn: int = 10
+    minconn: int = 5, maxconn: int = 50
 ) -> psycopg2.pool.ThreadedConnectionPool:
     """Initialize the global connection pool."""
     global _connection_pool
