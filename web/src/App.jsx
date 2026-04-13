@@ -2033,7 +2033,48 @@ export default function App(){
                 if(targetDetailSortBy === "last_added") return new Date(b.ingested_at||0) - new Date(a.ingested_at||0)
                 return 0
               })
-              return (
+  const [loginApiKey, setLoginApiKey] = useState("")
+  const [loginError, setLoginError] = useState(null)
+  const [loginLoading, setLoginLoading] = useState(false)
+
+  function handleLogin(e){
+    e.preventDefault()
+    if(!loginApiKey) return
+    setLoginLoading(true)
+    setLoginError(null)
+    axios.get("/api/admin/stats", {headers: {"X-Api-Key": loginApiKey}})
+      .then(r => {
+        if(r.status === 200){
+          localStorage.setItem("apiKey", loginApiKey)
+          setApiKey(loginApiKey)
+          setLoginLoading(false)
+        } else {
+          setLoginError("Invalid API key")
+          setLoginLoading(false)
+        }
+      })
+      .catch(err => {
+        setLoginError(err.response?.status === 401 ? "Invalid API key" : "API request failed")
+        setLoginLoading(false)
+      })
+  }
+
+  if(!apiKey && !isReadOnly){
+    return (
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"#0d1117"}}>
+        <form onSubmit={handleLogin} style={{display:"flex",flexDirection:"column",gap:"16px",padding:"24px",background:"#161d2f",borderRadius:"6px",border:"1px solid #2a2a2a",minWidth:"300px"}}>
+          <h2 style={{margin:0,textAlign:"center",color:"#f0f6fc"}}>Enter API Key</h2>
+          <input type="password" value={loginApiKey} onChange={e=>setLoginApiKey(e.target.value)} placeholder="API Key" style={{padding:"10px",borderRadius:"3px",border:"1px solid #2a2a2a",background:"#0d1117",color:"#f0f6fc"}}/>
+          {loginError && <div style={{color:"#f85149",fontSize:"14px",textAlign:"center"}}>{loginError}</div>}
+          <button type="submit" disabled={loginLoading} style={{padding:"10px",borderRadius:"3px",border:"none",background:"#35c5f4",color:"#0d1117",fontWeight:"bold",cursor:"pointer"}}>
+            {loginLoading ? "Verifying..." : "Login"}
+          </button>
+        </form>
+      </div>
+    )
+  }
+
+  return (
               <>
                 {filteredPosts.length > 0 && (
                   <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"16px",padding:"0 4px"}}>
