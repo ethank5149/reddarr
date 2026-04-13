@@ -125,6 +125,12 @@ services:
       REDIS_HOST: redis
       TARGETS_FILE: /app/targets.txt
       API_KEY: "!!19077h053j37p4ck81u35!!"
+    volumes:
+      - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
+      - ${THUMB_PATH}:${THUMB_PATH}
+      - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
+      - ./logs:/mnt/user/scripts/reddarr/logs:ro
+      - ./targets.txt:/app/targets.txt:ro
     secrets:
       - admin_password
       - guest_password
@@ -134,14 +140,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
-      - ${THUMB_PATH}:${THUMB_PATH}
-      - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
-      - ./logs:/mnt/user/scripts/reddarr/logs:ro
-      - ./targets.txt:/app/targets.txt:ro
     ports:
-      - "0.0.0.0:${REDDIT_ARCHIVE_API_PORT:-8090}:8080"
+      - "0.0.0.0:8011:8080"
     restart: unless-stopped
     networks:
       - internal

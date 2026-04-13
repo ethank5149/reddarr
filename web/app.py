@@ -321,7 +321,7 @@ def startup():
     try:
         from shared.database import init_pool
 
-        connection_pool = init_pool(minconn=1, maxconn=25)
+        connection_pool = init_pool(minconn=5, maxconn=100)
         logger.info("Database connection pool initialized")
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
