@@ -2072,19 +2072,21 @@ export default function App(){
                 if(targetDetailSortBy === "title_desc") return (b.title||"").localeCompare(a.title||"")
                 if(targetDetailSortBy === "last_added") return new Date(b.ingested_at||0) - new Date(a.ingested_at||0)
                 return 0
-              <>
-                {filteredPosts.length > 0 && (
-                  <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"16px",padding:"0 4px"}}>
-                    Showing {filteredPosts.length.toLocaleString()} of {targetPosts.length.toLocaleString()} posts
+              })
+              return (
+                <>
+                  {filteredPosts.length > 0 && (
+                    <div style={{fontSize:"12px",color:"#5a7b9a",marginBottom:"16px",padding:"0 4px"}}>
+                      Showing {filteredPosts.length.toLocaleString()} of {targetPosts.length.toLocaleString()} posts
+                    </div>
+                  )}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"16px"}} className="mobile-grid-2">
+                    {filteredPosts.map(p=><PostCard key={p.id} p={p}/>)}
                   </div>
-                )}
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:"16px"}} className="mobile-grid-2">
-                  {filteredPosts.map(p=><PostCard key={p.id} p={p}/>)}
-                </div>
-                {filteredPosts.length === 0 && targetPosts.length > 0 && (
-                  <div style={{padding:"40px",textAlign:"center",color:"#5a7b9a"}}>No posts match the current filters.</div>
-                )}
-              </>
+                  {filteredPosts.length === 0 && targetPosts.length > 0 && (
+                    <div style={{padding:"40px",textAlign:"center",color:"#5a7b9a"}}>No posts match the current filters.</div>
+                  )}
+                </>
               )
             })()}
             {targetPostsLoading && (
