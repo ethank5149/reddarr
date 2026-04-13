@@ -74,6 +74,18 @@ const getTextColor = (gradient) => {
   return darkText
 }
 
+const Icon = ({type}) => <span>{type}</span>
+const LibraryPage = (props) => <div>Library</div>
+const ArchivePage = (props) => <div>Archive</div>
+const TargetIndexPage = (props) => <div>Target Index</div>
+const TargetDetailPage = (props) => <div>Target Detail</div>
+const SystemPage = (props) => <div>System</div>
+const ActivityPage = (props) => <div>Activity</div>
+const BackupPage = (props) => <div>Backup</div>
+const WantedPage = (props) => <div>Wanted</div>
+const PostModal = (props) => <div>Post Modal</div>
+const Toasts = (props) => <div>Toasts</div>
+
 export default function App(){
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("apiKey"))
   const [role, setRole] = useState(() => {
