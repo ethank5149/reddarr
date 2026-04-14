@@ -990,7 +990,10 @@ export default function App(){
   function scrapeTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardScraping(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/scrape`, null, {headers:{"X-Api-Key":apiKey.trim()}})
+    axios.post("/api/admin/trigger-scrape", {
+      target_type: ttype,
+      target_name: name
+    }, { headers: { "X-Api-Key": apiKey.trim() } })
       .then(() => {
         toastSuccess(`Scrape triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
         setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
@@ -1018,7 +1021,12 @@ export default function App(){
   function backfillTargetNow(ttype, name){
     const key = `${ttype}:${name}`
     setCardBackfilling(prev => ({...prev, [key]: true}))
-    axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/backfill?passes=2&workers=3`, null, {headers:{"X-Api-Key":apiKey.trim()}})
+    axios.post("/api/admin/trigger-backfill", {
+      target_type: ttype,
+      target_name: name,
+      passes: 2,
+      workers: 3
+    }, { headers: { "X-Api-Key": apiKey.trim() } })
       .then(() => {
         toastSuccess(`Backfill triggered for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
         startBackfillPoll()
@@ -1507,7 +1515,7 @@ export default function App(){
 
   // Mini bar chart
   function PostsChart({data}){
-    if(!data || data.length === 0) return null
+    if(!data || !Array.isArray(data) || data.length === 0) return null
     const max = Math.max(...data.map(d=>d.count), 1)
     return (
       <div style={{marginBottom:"40px"}}>

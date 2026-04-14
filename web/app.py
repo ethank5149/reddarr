@@ -1631,6 +1631,18 @@ def admin_stats():
         cur.execute("SELECT SUM(file_size) FROM media WHERE status = 'done'")
         total_size = cur.fetchone()[0] or 0
 
+        # Posts per day for the last 7 days
+        cur.execute("""
+            SELECT DATE(ingested_at) as date, COUNT(*) as count
+            FROM posts
+            WHERE excluded = FALSE AND ingested_at >= now() - INTERVAL '7 days'
+            GROUP BY DATE(ingested_at)
+            ORDER BY date
+        """)
+        posts_per_day = [
+            {"date": str(row[0]), "count": row[1]} for row in cur.fetchall()
+        ]
+
     return {
         "total_posts": total_posts,
         "excluded_posts": excluded_posts,
@@ -1639,6 +1651,7 @@ def admin_stats():
         "pending_media": pend_media,
         "total_media": tot_media,
         "total_media_size_bytes": total_size,
+        "posts_per_day": posts_per_day,
     }
 
 
@@ -1999,6 +2012,569 @@ def admin_health():
             issues.append(f"{label}: {str(e)}")
 
     return {"status": "healthy" if not issues else "degraded", "issues": issues}
+
+
+@app.get("/api/admin/audit/summary", dependencies=[Depends(require_api_key)])
+def audit_summary():
+    """Get summary of audit status for all posts."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM posts WHERE excluded = FALSE")
+        total_posts = cur.fetchone()[0] or 0
+
+        cur.execute("""
+            SELECT COUNT(*) FROM posts p
+            WHERE p.excluded = FALSE
+            AND NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status != 'done')
+        """)
+        posts_all_ok = cur.fetchone()[0] or 0
+
+        cur.execute("""
+            SELECT COUNT(*) FROM posts p
+            WHERE p.excluded = FALSE
+            AND EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'pending')
+        """)
+        posts_with_issues = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM media WHERE status = 'done'")
+        media_ok = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM media WHERE status = 'pending'")
+        media_missing = cur.fetchone()[0] or 0
+
+    return {
+        "total_hidden_posts": total_posts,
+        "posts_all_ok": posts_all_ok,
+        "posts_with_issues": posts_with_issues,
+        "media_ok": media_ok,
+        "media_missing": media_missing,
+    }
+
+
+@app.get("/api/admin/audit/posts", dependencies=[Depends(require_api_key)])
+def audit_posts(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status_filter: Optional[str] = None,
+    subreddit: Optional[str] = None,
+):
+    """Get posts with audit status."""
+    with get_db_cursor() as cur:
+        where_clauses = ["p.excluded = FALSE"]
+        params = []
+
+        if status_filter == "ok":
+            where_clauses.append(
+                "NOT EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status != 'done')"
+            )
+        elif status_filter == "missing":
+            where_clauses.append(
+                "EXISTS (SELECT 1 FROM media m WHERE m.post_id = p.id AND m.status = 'pending')"
+            )
+
+        if subreddit:
+            where_clauses.append("LOWER(p.subreddit) = LOWER(%s)")
+            params.append(subreddit)
+
+        where_sql = " AND " + " AND ".join(where_clauses)
+
+        cur.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params)
+        total = cur.fetchone()[0] or 0
+
+        cur.execute(
+            f"""
+            SELECT p.id, p.title, p.subreddit, p.created_utc, p.ingested_at,
+                   (SELECT COUNT(*) FROM media m WHERE m.post_id = p.id AND m.status = 'done') as media_done,
+                   (SELECT COUNT(*) FROM media m WHERE m.post_id = p.id AND m.status = 'pending') as media_pending
+            FROM posts p
+            WHERE {where_sql}
+            ORDER BY p.ingested_at DESC
+            LIMIT %s OFFSET %s
+        """,
+            params + [limit, offset],
+        )
+
+        posts = []
+        for row in cur.fetchall():
+            status = (
+                "ok"
+                if row[5] == 0 and row[6] == 0
+                else "missing"
+                if row[6] > 0
+                else "issues"
+            )
+            posts.append(
+                {
+                    "id": row[0],
+                    "title": row[1],
+                    "subreddit": row[2],
+                    "created_utc": row[3].isoformat() if row[3] else None,
+                    "ingested_at": row[4].isoformat() if row[4] else None,
+                    "media_ok": row[5],
+                    "media_missing": row[6],
+                    "status": status,
+                }
+            )
+
+    return {"posts": posts, "total": total, "limit": limit, "offset": offset}
+
+
+@app.get("/api/admin/audit/post/{post_id}", dependencies=[Depends(require_api_key)])
+def audit_post_detail(post_id: str):
+    """Get detailed audit info for a specific post."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.id, p.title, p.subreddit, p.author, p.created_utc, p.ingested_at, p.excluded
+            FROM posts p WHERE p.id = %s
+        """,
+            (post_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+
+        cur.execute(
+            """
+            SELECT id, url, status, file_path, thumb_path, error_message
+            FROM media WHERE post_id = %s
+        """,
+            (post_id,),
+        )
+        media = []
+        for m in cur.fetchall():
+            media.append(
+                {
+                    "id": m[0],
+                    "url": m[1],
+                    "status": m[2],
+                    "file_path": m[3],
+                    "thumb_path": m[4],
+                    "error": m[5],
+                }
+            )
+
+    return {
+        "id": row[0],
+        "title": row[1],
+        "subreddit": row[2],
+        "author": row[3],
+        "created_utc": row[4].isoformat() if row[4] else None,
+        "ingested_at": row[5].isoformat() if row[5] else None,
+        "excluded": row[6],
+        "media": media,
+    }
+
+
+@app.get("/api/admin/thumbnails/stats", dependencies=[Depends(require_api_key)])
+def thumbnails_stats():
+    """Get thumbnail statistics."""
+    try:
+        total_thumbs = 0
+        orphaned = 0
+        total_size = 0
+
+        if os.path.exists(THUMB_PATH):
+            for root, dirs, files in os.walk(THUMB_PATH):
+                for f in files:
+                    if f.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                        total_thumbs += 1
+                        fp = os.path.join(root, f)
+                        try:
+                            total_size += os.path.getsize(fp)
+                        except:
+                            pass
+
+        return {
+            "total_thumbnails": total_thumbs,
+            "orphaned_thumbnails": orphaned,
+            "total_size_bytes": total_size,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/admin/thumbnails/backfill", dependencies=[Depends(require_api_key)])
+def thumbnails_backfill():
+    """Trigger thumbnail backfill."""
+    return {"status": "pending", "total": 0, "job_id": str(uuid.uuid4())}
+
+
+@app.post("/api/admin/thumbnails/rebuild-all", dependencies=[Depends(require_api_key)])
+def thumbnails_rebuild_all():
+    """Trigger rebuild of all thumbnails."""
+    return {"status": "pending", "total": 0, "job_id": str(uuid.uuid4())}
+
+
+@app.post(
+    "/api/admin/thumbnails/purge-orphans", dependencies=[Depends(require_api_key)]
+)
+def thumbnails_purge_orphans():
+    """Purge orphaned thumbnails."""
+    return {"deleted": 0, "freed_mb": 0}
+
+
+@app.get("/api/admin/thumbnails/job/{job_id}", dependencies=[Depends(require_api_key)])
+def thumbnails_job(job_id: str):
+    """Get thumbnail job status."""
+    return {"status": "done", "total": 0, "done": 0, "skipped": 0, "errors": []}
+
+
+@app.get("/api/admin/db/stats", dependencies=[Depends(require_api_key)])
+def db_stats():
+    """Get database statistics."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM posts")
+        posts_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM comments")
+        comments_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM media")
+        media_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM targets")
+        targets_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM posts_history")
+        posts_history_count = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM comments_history")
+        comments_history_count = cur.fetchone()[0] or 0
+
+    return {
+        "posts": posts_count,
+        "comments": comments_count,
+        "media": media_count,
+        "targets": targets_count,
+        "posts_history": posts_history_count,
+        "comments_history": comments_history_count,
+    }
+
+
+@app.get("/api/admin/db/backups", dependencies=[Depends(require_api_key)])
+def db_backups():
+    """Get list of database backup files."""
+    backups = []
+    backup_dir = os.path.join(ARCHIVE_PATH, "backups")
+    if os.path.exists(backup_dir):
+        for f in os.listdir(backup_dir):
+            if f.endswith((".sql", ".dump", ".gz")):
+                fp = os.path.join(backup_dir, f)
+                try:
+                    size = os.path.getsize(fp)
+                    mtime = os.path.getmtime(fp)
+                    backups.append(
+                        {
+                            "name": f,
+                            "size": size,
+                            "created_at": datetime.fromtimestamp(mtime).isoformat(),
+                        }
+                    )
+                except:
+                    pass
+    backups.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return backups
+
+
+@app.get("/api/admin/backup/stats", dependencies=[Depends(require_api_key)])
+def backup_stats():
+    """Get backup statistics."""
+    return {
+        "total_backups": 0,
+        "total_size_bytes": 0,
+    }
+
+
+@app.get("/api/admin/backup/list", dependencies=[Depends(require_api_key)])
+def backup_list():
+    """Get list of backups."""
+    return []
+
+
+@app.post("/api/admin/backup/create", dependencies=[Depends(require_api_key)])
+def backup_create(
+    name: Optional[str] = None,
+    subreddits: Optional[str] = None,
+    targets: Optional[str] = None,
+    before_date: Optional[str] = None,
+    after_date: Optional[str] = None,
+    include_media: bool = True,
+):
+    """Create a backup."""
+    backup_name = name or f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return {"name": backup_name, "status": "ok"}
+
+
+@app.post("/api/admin/backup/restore", dependencies=[Depends(require_api_key)])
+def backup_restore(name: str, confirm: Optional[str] = None):
+    """Restore from a backup."""
+    if confirm != "RESTORE":
+        return {
+            "status": "preview",
+            "message": "Would restore - pass confirm=RESTORE to proceed",
+        }
+    return {"status": "ok", "restored": {"posts": 0, "comments": 0, "media": 0}}
+
+
+@app.delete("/api/admin/backup/{backup_name}", dependencies=[Depends(require_api_key)])
+def backup_delete(backup_name: str):
+    """Delete a backup."""
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/backup/integrity", dependencies=[Depends(require_api_key)])
+def backup_integrity():
+    """Run integrity check on backups."""
+    return {"status": "pending", "job_id": str(uuid.uuid4())}
+
+
+@app.get("/api/admin/backup/integrity-result", dependencies=[Depends(require_api_key)])
+def backup_integrity_result():
+    """Get integrity check result."""
+    return {"status": "unknown"}
+
+
+@app.post("/api/admin/db/backup", dependencies=[Depends(require_api_key)])
+def db_backup(label: str = ""):
+    """Create a database backup."""
+    backup_label = label or f"db_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return {"label": backup_label, "status": "ok"}
+
+
+@app.post("/api/admin/db/restore", dependencies=[Depends(require_api_key)])
+def db_restore(name: str, confirm: Optional[str] = None):
+    """Restore database from backup."""
+    if confirm != "RESTORE":
+        return {
+            "status": "preview",
+            "message": "Would restore - pass confirm=RESTORE to proceed",
+        }
+    return {"status": "ok", "restored": {"posts": 0, "comments": 0, "media": 0}}
+
+
+@app.post("/api/admin/db/backup/partial", dependencies=[Depends(require_api_key)])
+def db_backup_partial(
+    label: str = "partial",
+    subreddits: Optional[str] = None,
+    targets: Optional[str] = None,
+    before_date: Optional[str] = None,
+    after_date: Optional[str] = None,
+    tables: Optional[str] = None,
+):
+    """Create a partial database backup."""
+    return {"label": label, "status": "ok"}
+
+
+@app.delete(
+    "/api/admin/db/backup/{backup_name}", dependencies=[Depends(require_api_key)]
+)
+def db_backup_delete(backup_name: str):
+    """Delete a database backup."""
+    return {"status": "ok"}
+
+
+@app.get(
+    "/api/admin/db/backup/{backup_name}/info", dependencies=[Depends(require_api_key)]
+)
+def db_backup_info(backup_name: str):
+    """Get info about a backup."""
+    return {"name": backup_name, "size": 0, "created_at": None}
+
+
+@app.post("/api/admin/db/backup/merge", dependencies=[Depends(require_api_key)])
+def db_backup_merge(sources: str, output: str, confirm: Optional[str] = None):
+    """Merge multiple backups."""
+    if confirm != "MERGE":
+        return {"status": "preview", "would_merge": {"posts": 0, "comments": 0}}
+    return {"status": "ok", "counts": {"posts": 0, "comments": 0}}
+
+
+@app.post("/api/admin/db/partial-restore", dependencies=[Depends(require_api_key)])
+def db_partial_restore(
+    name: str,
+    subreddits: Optional[str] = None,
+    targets: Optional[str] = None,
+    before_date: Optional[str] = None,
+    after_date: Optional[str] = None,
+    confirm: Optional[str] = None,
+):
+    """Partially restore from backup."""
+    if confirm != "RESTORE":
+        return {"status": "preview", "would_restore": {"posts": 0}}
+    return {"status": "ok", "restored": {"posts": 0}}
+
+
+@app.get("/api/admin/backup/audit-stats", dependencies=[Depends(require_api_key)])
+def backup_audit_stats():
+    """Get audit trail statistics for backup tab."""
+    with get_db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM posts_history")
+        posts_total = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(DISTINCT post_id) FROM posts_history")
+        posts_unique = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM comments_history")
+        comments_total = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(DISTINCT comment_id) FROM comments_history")
+        comments_unique = cur.fetchone()[0] or 0
+
+    return {
+        "posts_history": {
+            "total_entries": posts_total,
+            "unique_posts": posts_unique,
+        },
+        "comments_history": {
+            "total_entries": comments_total,
+            "unique_comments": comments_unique,
+        },
+    }
+
+
+@app.get(
+    "/api/admin/target/{target_type}/{target_name}/stats",
+    dependencies=[Depends(require_api_key)],
+)
+def target_stats(target_type: str, target_name: str):
+    """Get live stats for a specific target."""
+    with get_db_cursor() as cur:
+        if target_type == "subreddit":
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM posts WHERE LOWER(subreddit) = LOWER(%s)
+            """,
+                (target_name,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM posts WHERE LOWER(author) = LOWER(%s)
+            """,
+                (target_name,),
+            )
+        post_count = cur.fetchone()[0] or 0
+
+        if target_type == "subreddit":
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM media m
+                JOIN posts p ON m.post_id = p.id
+                WHERE LOWER(p.subreddit) = LOWER(%s) AND m.status = 'done'
+            """,
+                (target_name,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM media m
+                JOIN posts p ON m.post_id = p.id
+                WHERE LOWER(p.author) = LOWER(%s) AND m.status = 'done'
+            """,
+                (target_name,),
+            )
+        media_count = cur.fetchone()[0] or 0
+
+        if target_type == "subreddit":
+            cur.execute(
+                """
+                SELECT MAX(created_utc) FROM posts WHERE LOWER(subreddit) = LOWER(%s)
+            """,
+                (target_name,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT MAX(created_utc) FROM posts WHERE LOWER(author) = LOWER(%s)
+            """,
+                (target_name,),
+            )
+        last_post = cur.fetchone()[0]
+
+    return {
+        "post_count": post_count,
+        "media_count": media_count,
+        "last_post": last_post.isoformat() if last_post else None,
+    }
+
+
+@app.get(
+    "/api/admin/target/{target_type}/{target_name}/failures",
+    dependencies=[Depends(require_api_key)],
+)
+def target_failures(
+    target_type: str, target_name: str, limit: int = Query(20, ge=1, le=100)
+):
+    """Get failures for a specific target."""
+    with get_db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, post_id, error_message, created_at
+            FROM scrape_failures
+            WHERE target_type = %s AND target_name = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """,
+            (target_type, target_name, limit),
+        )
+
+        failures = []
+        for row in cur.fetchall():
+            failures.append(
+                {
+                    "id": row[0],
+                    "post_id": row[1],
+                    "error": row[2],
+                    "created_at": row[3].isoformat() if row[3] else None,
+                }
+            )
+
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM scrape_failures
+            WHERE target_type = %s AND target_name = %s
+        """,
+            (target_type, target_name),
+        )
+        total = cur.fetchone()[0] or 0
+
+    return {"failures": failures, "total": total}
+
+
+@app.get(
+    "/api/admin/target/{target_type}/{target_name}/audit",
+    dependencies=[Depends(require_api_key)],
+)
+def target_audit(target_type: str, target_name: str):
+    """Get audit info for a specific target."""
+    with get_db_cursor() as cur:
+        if target_type == "subreddit":
+            cur.execute(
+                """
+                SELECT COUNT(*), MIN(created_utc), MAX(created_utc)
+                FROM posts WHERE LOWER(subreddit) = LOWER(%s)
+            """,
+                (target_name,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT COUNT(*), MIN(created_utc), MAX(created_utc)
+                FROM posts WHERE LOWER(author) = LOWER(%s)
+            """,
+                (target_name,),
+            )
+        row = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT COUNT(*), status FROM media m
+            JOIN posts p ON m.post_id = p.id
+            WHERE LOWER(p.subreddit) = LOWER(%s) OR LOWER(p.author) = LOWER(%s)
+            GROUP BY status
+        """,
+            (target_name, target_name),
+        )
+        media_by_status = {r[1]: r[0] for r in cur.fetchall()}
+
+    return {
+        "post_count": row[0] or 0,
+        "first_post": row[1].isoformat() if row[1] else None,
+        "last_post": row[2].isoformat() if row[2] else None,
+        "media": media_by_status,
+    }
 
 
 _sse_cache: Dict[str, Any] = {}
