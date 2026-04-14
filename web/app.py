@@ -327,20 +327,6 @@ def startup():
         logger.error(f"Database connection failed: {e}")
         raise
 
-    try:
-        from shared.config import get_secret
-
-        # Migrations are now handled by Alembic - only run legacy migration check if needed
-        run_migrations = get_secret("RUN_MIGRATIONS", "false").lower() == "true"
-        if run_migrations:
-            try:
-                _run_migrations(connection_pool)
-                logger.info(
-                    "Legacy schema migrations complete (deprecated - use Alembic)"
-                )
-            except Exception as e:
-                logger.warning(f"Legacy migration error (non-fatal): {e}")
-
         # Validate critical tables exist
         critical_tables = ["posts", "media", "targets", "comments", "scrape_failures"]
         conn = connection_pool.getconn()
@@ -1479,6 +1465,9 @@ def search(
     offset: int = Query(0, ge=0),
     sort_by: Optional[str] = Query("rank"),
     sort_order: Optional[str] = Query("desc"),
+    excluded: Optional[bool] = Query(
+        None
+    ),  # None shows all, True shows excluded, False shows visible
 ):
     """Full-text search for posts.
 
@@ -1507,11 +1496,18 @@ def search(
         search_query = "&".join(q.split())
 
         # Count total matches using pre-computed tsv column
+        excluded_filter = ""
+        if excluded is True:
+            excluded_filter = "AND p.excluded = TRUE"
+        elif excluded is False:
+            excluded_filter = "AND p.excluded = FALSE"
+        # excluded=None shows all posts (no filter)
+
         cur.execute(
-            """
-            SELECT COUNT(*) FROM posts
-            WHERE tsv @@ to_tsquery('english', %s)
-            AND excluded = FALSE
+            f"""
+            SELECT COUNT(*) FROM posts p
+            WHERE p.tsv @@ to_tsquery('english', %s)
+            {excluded_filter}
             """,
             (search_query,),
         )
@@ -1526,7 +1522,7 @@ def search(
                    ts_rank_cd(p.tsv, to_tsquery('english', %s)) as rank
             FROM posts p
             WHERE p.tsv @@ to_tsquery('english', %s)
-            AND p.excluded = FALSE
+            {excluded_filter}
             ORDER BY {sort_by} {sort_order.upper()} LIMIT %s OFFSET %s
             """,
             (search_query, search_query, limit, offset),

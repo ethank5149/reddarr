@@ -332,21 +332,27 @@ def fetch_youtube_video_url(post_url: str) -> str | None:
 
 def make_thumb(
     path: str,
-    media_dir: str,
-    thumb_dir: str,
+    media_dir: str = None,
+    thumb_dir: str = None,
     scale: str = "320:-1",
 ) -> Optional[str]:
     """Create a thumbnail for a media file using ffmpeg.
 
     Args:
         path: Path to the media file
-        media_dir: Base directory for media files
-        thumb_dir: Base directory for thumbnails
+        media_dir: Base directory for media files (defaults to ARCHIVE_PATH env var)
+        thumb_dir: Base directory for thumbnails (defaults to ARCHIVE_PATH/.thumbs)
         scale: FFmpeg scale filter
 
     Returns:
         Path to the created thumbnail, or None if failed
     """
+    import os
+
+    if media_dir is None:
+        media_dir = os.getenv("ARCHIVE_PATH", "/data")
+    if thumb_dir is None:
+        thumb_dir = os.path.join(os.getenv("ARCHIVE_PATH", "/data"), ".thumbs")
     try:
         rel = os.path.relpath(path, media_dir)
     except ValueError:

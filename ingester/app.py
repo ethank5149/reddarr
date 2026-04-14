@@ -18,7 +18,11 @@ from targets import load_targets
 from shared.media_utils import (
     extract_media_urls,
     fetch_youtube_video_url as _fetch_youtube_video_url,
+    extract_redgifs_video_id,
+    fetch_redgifs_video_urls,
+    is_direct_media_url as _is_direct_media_url,
 )
+from shared.config import read_secret as _read_secret
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -110,11 +114,6 @@ BACKFILL_PASSES = int(os.getenv("BACKFILL_PASSES", "2"))
 
 logger.info(f"POLL_INTERVAL set to: {POLL_INTERVAL}")
 logger.info(f"BACKFILL_MODE: {BACKFILL_MODE}")
-
-
-def _read_secret(path):
-    with open(path) as f:
-        return f.read().strip()
 
 
 def _create_reddit_client():
@@ -221,25 +220,6 @@ def fetch_comments(post):
     return comments
 
 
-_DIRECT_IMAGE_EXTS = (
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".gif",
-    ".mp4",
-    ".gifv",
-    ".webm",
-)
-_DIRECT_MEDIA_HOSTS = (
-    "i.redd.it",
-    "v.redd.it",
-    "youtube.com",
-    "youtu.be",
-    "i.imgur.com",
-)
-
-
 def _extract_redgifs_video_id(url_or_html: str) -> str | None:
     """Extract RedGifs video ID from iframe HTML or URL."""
     patterns = [
@@ -251,84 +231,6 @@ def _extract_redgifs_video_id(url_or_html: str) -> str | None:
         if match:
             return match.group(1)
     return None
-
-
-_redgifs_token: str | None = None
-_redgifs_token_expiry: float = 0.0
-_redgifs_token_lock = threading.Lock()
-
-
-def _get_redgifs_token() -> str | None:
-    """Obtain (and cache) a temporary RedGifs API bearer token."""
-    global _redgifs_token, _redgifs_token_expiry
-    with _redgifs_token_lock:
-        if _redgifs_token and time.time() < _redgifs_token_expiry:
-            return _redgifs_token
-        try:
-            resp = requests.get(
-                "https://api.redgifs.com/v2/auth/temporary",
-                timeout=10,
-                headers={"User-Agent": "reddit-archive/1.0"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                _redgifs_token = data.get("token")
-                # Tokens are valid for ~24 h; refresh after 20 h to be safe
-                _redgifs_token_expiry = time.time() + 20 * 3600
-                return _redgifs_token
-            else:
-                logger.warning(f"RedGifs auth returned {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"Failed to obtain RedGifs token: {e}")
-        return _redgifs_token  # stale token is better than none
-
-
-def _parse_redgifs_urls(data: dict) -> list[str]:
-    """Extract HD/SD URLs from RedGifs API response."""
-    urls = []
-    if "gif" in data:
-        gif = data["gif"]
-        hd = gif.get("urls", {}).get("hd")
-        sd = gif.get("urls", {}).get("sd")
-        if hd:
-            urls.append(hd)
-        if sd:
-            urls.append(sd)
-    return urls
-
-
-def _fetch_redgifs_video_urls(video_id: str) -> list[str]:
-    """Fetch HD/SD video URLs from RedGifs API."""
-    urls = []
-    token = _get_redgifs_token()
-    headers = {"User-Agent": "reddit-archive/1.0"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        resp = requests.get(
-            f"https://api.redgifs.com/v2/gifs/{video_id}",
-            timeout=10,
-            headers=headers,
-        )
-        if resp.status_code == 200:
-            urls = _parse_redgifs_urls(resp.json())
-        elif resp.status_code == 401:
-            # Token expired or invalid — force refresh and retry once
-            global _redgifs_token_expiry
-            _redgifs_token_expiry = 0.0
-            token = _get_redgifs_token()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-                resp = requests.get(
-                    f"https://api.redgifs.com/v2/gifs/{video_id}",
-                    timeout=10,
-                    headers=headers,
-                )
-                if resp.status_code == 200:
-                    urls = _parse_redgifs_urls(resp.json())
-    except Exception as e:
-        logger.warning(f"Failed to fetch RedGifs video URLs for {video_id}: {e}")
-    return urls
 
 
 from shared.media_utils import (

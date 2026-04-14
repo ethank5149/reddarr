@@ -17,6 +17,9 @@ from prometheus_client import (
     start_http_server,
 )
 
+from shared.media_utils import sha256, detect_image_corruption, make_thumb
+from shared.database import ThreadLocalDB
+
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -196,40 +199,19 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(base_delay=RATE_LIMIT_BASE, max_delay=60)
 
-_tls = threading.local()
+from shared.database import ThreadLocalDB
+
+_db = ThreadLocalDB()
 
 
 def get_db():
-    if not hasattr(_tls, "conn") or _tls.conn is None or _tls.conn.closed:
-        if hasattr(_tls, "conn") and _tls.conn:
-            try:
-                _tls.conn.close()
-            except Exception:
-                pass
-        _tls.conn = psycopg2.connect(_DB_URL)
-        logger.debug("Thread-local DB connection created")
-        return _tls.conn
-
-    try:
-        # Check if connection is still valid
-        with _tls.conn.cursor() as cur:
-            cur.execute("SELECT 1")
-        return _tls.conn
-    except (psycopg2.InterfaceError, psycopg2.OperationalError):
-        logger.warning("DB connection lost in thread, reconnecting...")
-        try:
-            _tls.conn.close()
-        except Exception:
-            pass
-        _tls.conn = psycopg2.connect(_DB_URL)
-        logger.info("DB reconnected in thread")
-        return _tls.conn
+    """Get a database connection from thread-local storage."""
+    return _db.get_connection()
 
 
 for _attempt in range(10):
     try:
-        # Initialize for main thread
-        conn = psycopg2.connect(_DB_URL)
+        conn = get_pool().getconn()
         conn.close()
         logger.info("DB initial connection successful")
         break
@@ -241,102 +223,25 @@ else:
     sys.exit(1)
 
 
-def sha256(p):
-    h = hashlib.sha256()
-    with open(p, "rb") as f:
-        for c in iter(lambda: f.read(131072), b""):
-            h.update(c)
-    return h.hexdigest()
-
-
-def detect_image_corruption(path):
-    """Check if an image file is corrupted due to non-thread-safe writes.
-
-    Detects corruption patterns from concurrent writes:
-    - Partial writes (truncated files)
-    - Interleaved writes (mixed data from multiple threads)
-    - Invalid image headers (incomplete/malformed headers)
-
-    Uses multiple detection strategies for robustness.
-    """
-    try:
-        file_size = os.path.getsize(path)
-        if file_size < 100:
-            logger.warning(
-                f"Image corruption detected (truncated): {path} ({file_size} bytes)"
-            )
-            return True
-
-        with open(path, "rb") as f:
-            header = f.read(32)
-
-        if len(header) < 12:
-            logger.warning(f"Image corruption detected (incomplete header): {path}")
-            return True
-
-        png_sig = b"\x89PNG\r\n\x1a\n"
-        jpeg_sig = b"\xff\xd8\xff"
-        gif_sig = b"GIF87a" or b"GIF89a"
-        webp_sig = b"RIFF"
-        webp_riff = b"WEBP"
-        webm_sig = b"\x1a\x45\xdf\xa3"
-
-        is_png = header.startswith(png_sig)
-        is_jpeg = header.startswith(jpeg_sig)
-        is_gif = header.startswith((b"GIF87a", b"GIF89a"))
-        is_webp = (
-            header.startswith(webp_sig)
-            and len(header) >= 12
-            and header[8:12] == webp_riff
-        )
-        is_video = header.startswith(webm_sig) or path.lower().endswith(
-            (".mp4", ".webm", ".gifv")
-        )
-
-        if is_video:
-            return False
-
-        if not (is_png or is_jpeg or is_gif or is_webp):
-            logger.warning(
-                f"Image corruption detected (invalid header): {path}, header={header[:8]!r}"
-            )
-            return True
-
-        try:
-            with Image.open(path) as img:
-                img.verify()
-        except Exception as e:
-            logger.warning(
-                f"Image corruption detected (PIL verify failed): {path}: {e}"
-            )
-            return True
-
-        try:
-            with Image.open(path) as img:
-                img.load()
-        except Exception as e:
-            logger.warning(f"Image corruption detected (PIL load failed): {path}: {e}")
-            return True
-
-        return False
-    except Exception as e:
-        logger.warning(f"Image corruption detection failed for {path}: {e}")
-        return True
-
-
 def make_thumb(path):
+    """Create thumbnail using module-level MEDIA_DIR and THUMB_DIR."""
+    return _make_thumb_impl(path, MEDIA_DIR, THUMB_DIR)
+
+
+def _make_thumb_impl(path, media_dir, thumb_dir, scale="320:-1"):
+    """Shared thumbnail logic for downloader."""
     try:
-        rel = os.path.relpath(path, MEDIA_DIR)
+        rel = os.path.relpath(path, media_dir)
     except ValueError:
         rel = Path(path).name
 
-    thumb_subdir = Path(THUMB_DIR) / Path(rel).parent
+    thumb_subdir = Path(thumb_dir) / Path(rel).parent
     thumb_subdir.mkdir(parents=True, exist_ok=True)
     thumb = str(thumb_subdir / (Path(path).stem + ".thumb.jpg"))
 
     logger.info(f"Creating thumbnail: {thumb}")
     result = subprocess.run(
-        ["ffmpeg", "-y", "-i", path, "-vf", "scale=320:-1", "-frames:v", "1", thumb],
+        ["ffmpeg", "-y", "-i", path, "-vf", f"scale={scale}", "-frames:v", "1", thumb],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=60,
