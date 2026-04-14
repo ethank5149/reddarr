@@ -23,6 +23,7 @@ from shared.media_utils import (
     is_direct_media_url as _is_direct_media_url,
 )
 from shared.config import read_secret as _read_secret
+from shared.pubsub import PubSubPublisher, MEDIA_CHANNEL
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -105,6 +106,7 @@ logger.info("Starting ingester...")
 
 DB_URL = os.getenv("DB_URL")
 rd = redis.Redis(host=os.getenv("REDIS_HOST"))
+publisher = PubSubPublisher(rd)
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 300))
 SCRAPE_LIMIT = os.getenv("SCRAPE_LIMIT")
 SCRAPE_LIMIT = int(SCRAPE_LIMIT) if SCRAPE_LIMIT else None
@@ -412,18 +414,15 @@ def ingest_post(db, p):
 
         for med_url in media_urls:
             if med_url and med_url not in existing_urls:
-                rd.lpush(
-                    "media_queue",
-                    json.dumps(
-                        {
-                            "post_id": p.id,
-                            "url": med_url,
-                            "subreddit": subreddit,
-                            "author": str(p.author),
-                            "title": title,
-                        }
-                    ),
-                )
+                media_item = {
+                    "post_id": p.id,
+                    "url": med_url,
+                    "subreddit": subreddit,
+                    "author": str(p.author),
+                    "title": title,
+                }
+                rd.lpush("media_queue", json.dumps(media_item))
+                publisher.publish_media(media_item)
                 urls_queued += 1
                 media_queued.inc()
     if urls_queued > 0:

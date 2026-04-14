@@ -41,3 +41,6 @@ This applies to changes in:
 - `downloader/app.py` → rebuild `downloader`
 - `docker-compose.yml` → rebuild all
 - Any configuration or dependency changes
+
+## Updating `one-shot.sh`
+For every applicable edit to the codebase and build / deploy procedure, update the `one-shot.sh` script accordingly to fully rebuild and redeploy the entire project so no stale code can interfere with development.

@@ -32,6 +32,11 @@ for secret in secrets/postgres_password secrets/reddit_client_id secrets/reddit_
     fi
 done
 
+echo "Checking Redis Pub/Sub..."
+if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+    docker compose exec -T redis redis-cli PUBSUB CHANNELS >/dev/null 2>&1 && echo "Redis Pub/Sub: available"
+fi
+
 if [ ! -f secrets/admin_password ]; then
     echo "admin" > secrets/admin_password
 fi

@@ -12,10 +12,29 @@ A self-hosted Reddit data archiving platform that collects posts, comments, and 
 
 ## Architecture
 
+### Redis Pub/Sub Model
+
+The system uses Redis Pub/Sub for real-time media queue notifications:
+
+```
+Ingester                  Redis                    Downloader
+    │                     │                          │
+    ├─── publish ────────►│  media:new channel       │
+    │   (to list + pub)   │  (Pub/Sub)              │
+    │                     │                        ├─── subscribe ────► queue
+    │                     │                          │                  │
+    │                     │                          ▼
+    │                     │                     workers process
+```
+
+- **List-based fallback**: Items are still pushed to `media_queue` list for durability
+- **Pub/Sub real-time**: Pub/Sub provides instant notification to wake up downloader workers
+- This hybrid approach ensures reliability even if Pub/Sub messages are missed
+
 | Component | Description |
 |-----------|-------------|
 | **db** | PostgreSQL 16 - Primary database for posts, comments, media, and targets |
-| **redis** | Redis 7 - Message queue for media download tasks |
+| **redis** | Redis 7 - Message queue and Pub/Sub for media download tasks |
 | **ingester** | Polls Reddit API and ingests posts into the database |
 | **downloader** | Downloads media (images, videos) from queued URLs |
 | **api** | FastAPI + React - REST API and web UI for querying and tagging archived content |
@@ -177,6 +196,23 @@ user:automoderator
 - `GET /api/admin/activity` - Recent activity log
 
 The web UI is available at the API port and provides a graphical interface for browsing and searching archived content.
+
+## Debugging
+
+Check Redis Pub/Sub channels:
+```bash
+docker compose exec redis redis-cli PUBSUB CHANNELS
+```
+
+Monitor media queue:
+```bash
+docker compose exec redis redis-cli LLEN media_queue
+```
+
+Monitor failed downloads:
+```bash
+docker compose exec redis redis-cli LRANGE media_dead_letter 0 -1
+```
 
 ## Scripts
 

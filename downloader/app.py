@@ -19,6 +19,7 @@ from prometheus_client import (
 
 from shared.media_utils import sha256, detect_image_corruption, make_thumb
 from shared.database import ThreadLocalDB
+from shared.pubsub import PubSubSubscriber, MEDIA_CHANNEL
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -108,6 +109,7 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RATE_LIMIT_BASE = int(os.getenv("RATE_LIMIT_BASE", "2"))
 
 rd = redis.Redis(host=os.getenv("REDIS_HOST"))
+pubsub_subscriber = PubSubSubscriber(rd)
 MEDIA_DIR = os.getenv("ARCHIVE_PATH", "/data")
 THUMB_DIR = os.getenv("THUMB_PATH", os.path.join(MEDIA_DIR, ".thumbs"))
 Path(MEDIA_DIR).mkdir(parents=True, exist_ok=True)
@@ -970,9 +972,46 @@ def _recover_orphaned_queues():
         logger.warning(f"Failed to recover orphaned queues: {e}")
 
 
+def _pubsub_listener():
+    """Listen for Pub/Sub messages and push to the queue.
+
+    This runs in a separate thread and forwards media items received via
+    Pub/Sub to the local Redis queue for processing by workers.
+    """
+    logger.info("Starting Pub/Sub listener...")
+    subscriber = PubSubSubscriber(rd)
+    try:
+        subscriber.subscribe([MEDIA_CHANNEL])
+        for message in subscriber.listen():
+            if _shutdown_requested:
+                break
+            if message["type"] == "message":
+                try:
+                    data = message["data"]
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
+                    item = json.loads(data)
+                    rd.lpush("media_queue", json.dumps(item))
+                    logger.debug(f"Received via Pub/Sub: post_id={item.get('post_id')}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in Pub/Sub message: {e}")
+                except Exception as e:
+                    logger.error(f"Error processing Pub/Sub message: {e}")
+    except Exception as e:
+        logger.error(f"Pub/Sub listener error: {e}")
+    finally:
+        subscriber.unsubscribe()
+        logger.info("Pub/Sub listener stopped")
+
+
 def main():
     # Recover any orphaned processing queues before starting workers
     _recover_orphaned_queues()
+
+    # Start Pub/Sub listener thread
+    pubsub_thread = threading.Thread(target=_pubsub_listener, daemon=True)
+    pubsub_thread.start()
+    logger.info("Pub/Sub listener started")
 
     logger.info(f"Starting {CONCURRENCY} concurrent workers...")
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
