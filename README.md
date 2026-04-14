@@ -75,7 +75,7 @@ Once running, access the following services:
 
 | Service | URL | Default Credentials | Security Note |
 |---------|-----|---------------------|----------------|
-| **Web UI/API** | http://localhost:8090 | See `secrets/admin_password` | **CHANGE DEFAULTS** |
+| **Web UI/API** | http://localhost:8011 | See `secrets/admin_password` | **CHANGE DEFAULTS** |
 | **Backup UI** | http://localhost:8091 | None (configured via secrets) | Internal network |
 | **Prometheus** | http://localhost:9090 | N/A | Exposed for monitoring |
 | **Grafana** | http://localhost:3000 | admin / admin | **CHANGE IN PRODUCTION** |
@@ -121,7 +121,7 @@ Create a `.env` file with the following variables:
 | `ARCHIVE_MEDIA_PATH` | Directory for archived media | /mnt/user/Archive/reddit/.archive |
 | `POLL_INTERVAL` | Seconds between Reddit API polls | 300 |
 | `SCRAPE_LIMIT` | Maximum posts to fetch per poll | 500 |
-| `REDDIT_ARCHIVE_API_PORT` | API/Web UI port | 8090 |
+| `REDDIT_ARCHIVE_API_PORT` | API/Web UI port | 8011 |
 | `REDDIT_ARCHIVE_BACKUP_PORT` | Backup UI port | 8091 |
 | `REDDIT_ARCHIVE_PROMETHEUS_PORT` | Prometheus port | 9090 |
 | `REDDIT_ARCHIVE_GRAFANA_PORT` | Grafana port | 3000 |
@@ -135,7 +135,7 @@ THUMB_PATH=/mnt/user/Archive/reddit/.thumbs
 ARCHIVE_MEDIA_PATH=/mnt/user/Archive/reddit/.archive
 POLL_INTERVAL=300
 SCRAPE_LIMIT=500
-REDDIT_ARCHIVE_API_PORT=8090
+REDDIT_ARCHIVE_API_PORT=8011
 REDDIT_ARCHIVE_BACKUP_PORT=8091
 REDDIT_ARCHIVE_PROMETHEUS_PORT=9090
 REDDIT_ARCHIVE_GRAFANA_PORT=3000
@@ -156,11 +156,25 @@ user:automoderator
 ## API Endpoints
 
 - `GET /api/posts` - List posts with pagination
-- `GET /api/posts/<id>` - Get single post details
-- `GET /api/comments/<post_id>` - Get comments for a post
+- `GET /api/post/{post_id}` - Get single post details with comments
 - `GET /api/search?q=<query>` - Full-text search posts
+- `POST /api/post/{post_id}/hide` - Hide a post
+- `POST /api/post/{post_id}/unhide` - Unhide a post
 - `POST /api/tag?post_id=<id>&tag=<name>` - Tag a post
+- `GET /api/events` - Server-sent events for real-time updates
 - `GET /api/media/queue` - View queued media downloads
+
+### Admin Endpoints (require X-API-Key header)
+
+- `GET /api/admin/stats` - System statistics
+- `GET /api/admin/targets` - List all targets
+- `POST /api/admin/targets` - Add a new target
+- `POST /api/admin/target/{target_type}` - Enable/disable a target
+- `GET /api/admin/queue` - View media download queue
+- `POST /api/admin/trigger-scrape` - Trigger immediate scrape
+- `POST /api/admin/trigger-backfill` - Trigger backfill for a target
+- `GET /api/admin/backfill-status` - Get backfill status
+- `GET /api/admin/activity` - Recent activity log
 
 The web UI is available at the API port and provides a graphical interface for browsing and searching archived content.
 
