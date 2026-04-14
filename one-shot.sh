@@ -129,26 +129,65 @@ else
     echo "Warning: API container not found"
 fi
 
+add_target() {
+    TYPE="$1"
+    NAME="$2"
+    if [ -z "$TYPE" ] || [ -z "$NAME" ]; then
+        echo "Usage: add_target <subreddit|user> <name>"
+        return 1
+    fi
+    DB_CONTAINER=$(docker compose ps -q db 2>/dev/null)
+    if [ -n "$DB_CONTAINER" ]; then
+        docker exec "$DB_CONTAINER" psql -U reddit -d reddit -t -c "INSERT INTO targets (type, name, enabled) VALUES ('$TYPE', '$NAME', true) ON CONFLICT (name) DO UPDATE SET enabled = true RETURNING name, type;" 2>/dev/null && echo "Added: $TYPE/$NAME"
+    else
+        echo "Error: DB container not found"
+        return 1
+    fi
+}
+
+add_target_http() {
+    TYPE="$1"
+    NAME="$2"
+    API_CONTAINER=$(docker compose ps -q api 2>/dev/null)
+    if [ -n "$API_CONTAINER" ]; then
+        docker exec "$API_CONTAINER" python -c "
+import urllib.request, json
+urllib.request.urlopen(urllib.request.Request(
+    'http://127.0.0.1:8080/api/admin/targets',
+    data=json.dumps({'type':'$TYPE','name':'$NAME'}).encode(),
+    headers={'Content-Type': 'application/json', 'X-API-Key': '!!19077h053j37p4ck81u35!!'},
+    method='POST'
+))
+print('Added: $TYPE/$NAME')
+" 2>/dev/null && echo "Added: $TYPE/$NAME"
+    else
+        echo "Error: API container not found"
+        return 1
+    fi
+}
+
 echo ""
 echo "=== Services ==="
 docker compose ps
 
 echo ""
 echo "=== URLs ==="
-echo "Web UI/API:  http://localhost:${REDDIT_ARCHIVE_API_PORT}"
-echo "Prometheus:  http://localhost:${REDDIT_ARCHIVE_PROMETHEUS_PORT}"
-echo "Grafana:     http://localhost:${REDDIT_ARCHIVE_GRAFANA_PORT}"
-echo "Backup UI:   http://localhost:${ARCHIVE_BACKUP_PORT}"
+echo "Web UI/API (if localhost blocked, use alternative):"
+echo "  - Local:      http://localhost:8011/"
+echo "  - Via curl container: docker run --rm -it --network \$(docker inspect -f '{{.NetworkSettings.Sandbox}}' reddit_archive_api) curlimages/curl:latest ..."
 echo ""
-echo "Grafana login: admin / admin"
+echo "=== Add Target Commands ==="
+echo "  add_target <subreddit|user> <name>      - Add via database (fallback)"
+echo "  add_target_http <subreddit|user> <name> - Add via API inside container"
+echo ""
+echo "Example: add_target subreddit mysubreddit"
+echo "Example: add_target user username"
+echo ""
+echo "=== Direct Usage URLs ==="
+echo "API Health:   docker exec reddit_archive_api python -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8080/health\").read().decode()[:100])'"
+echo "Prometheus:  http://localhost:${REDDIT_ARCHIVE_PROMETHEUS_PORT}/graph"
+echo "Grafana:    http://localhost:${REDDIT_ARCHIVE_GRAFANA_PORT}"
+echo "Backup UI:  http://localhost:${ARCHIVE_BACKUP_PORT}"
 echo ""
 echo "=== Security Note ==="
 echo "Default credentials are set for admin/guest. Change these in secrets/ for production!"
-echo ""
-echo "=== Direct Usage URLs ==="
-DOCKER_BRIDGE=$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
-echo "API Health:   curl http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_API_PORT}/health"
-echo "Prometheus:    http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_PROMETHEUS_PORT}/graph"
-echo "Grafana:       http://${DOCKER_BRIDGE}:${REDDIT_ARCHIVE_GRAFANA_PORT}/dashboard"
-echo ""
-echo "(If localhost doesn't work, use the Docker bridge IP above)"

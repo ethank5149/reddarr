@@ -1733,7 +1733,7 @@ class TargetRequest(BaseModel):
 
 @app.post("/api/admin/targets", dependencies=[Depends(require_api_key)])
 def add_target(req: TargetRequest):
-    """Add a new subreddit or user target."""
+    """Add a new subreddit or user target via JSON body."""
     if req.type not in ("subreddit", "user"):
         raise HTTPException(status_code=400, detail="Invalid target type")
 
@@ -1746,6 +1746,58 @@ def add_target(req: TargetRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     return {"status": "ok", "type": req.type, "name": req.name}
+
+
+@app.post("/api/admin/target/{target_type}", dependencies=[Depends(require_api_key)])
+def add_target_by_name(target_type: str, name: str):
+    """Add a new subreddit or user target via query parameter."""
+    if target_type not in ("subreddit", "user"):
+        raise HTTPException(status_code=400, detail="Invalid target type")
+
+    with get_db_cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO targets(type,name) VALUES(%s, %s) ON CONFLICT (name) DO UPDATE SET enabled = true, status = 'active'",
+                (target_type, name.strip()),
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok", "type": target_type, "name": name}
+
+
+@app.post("/internal/add-target")
+async def add_target_internal(request: Request):
+    """Internal endpoint to add target - works from same origin."""
+    try:
+        body = await request.body()
+        data = json.loads(body) if body else {}
+    except:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+
+    api_key = data.get("api_key", "")
+    if not api_key:
+        return JSONResponse({"error": "Missing API key"}, status_code=401)
+    expected_key = os.getenv("API_KEY", "!!19077h053j37p4ck81u35!!")
+    if api_key != expected_key:
+        return JSONResponse({"error": "Invalid API key"}, status_code=401)
+
+    target_type = data.get("type", "subreddit")
+    name = data.get("name", "").strip()
+    if not name:
+        return JSONResponse({"error": "Missing name"}, status_code=400)
+    if target_type not in ("subreddit", "user"):
+        return JSONResponse({"error": "Invalid type"}, status_code=400)
+
+    with get_db_cursor() as cur:
+        try:
+            cur.execute(
+                "INSERT INTO targets(type,name) VALUES(%s, %s) ON CONFLICT (name) DO UPDATE SET enabled = true, status = 'active'",
+                (target_type, name),
+            )
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    return {"status": "ok", "type": target_type, "name": name}
 
 
 @app.delete(

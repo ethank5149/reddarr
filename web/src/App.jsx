@@ -931,13 +931,24 @@ export default function App(){
     }
   }
 
-  function addTarget(){
+  async function addTarget(){
     if(!apiKey) return
     const name = addTargetName.trim()
     if(!name) return
-    axios.post(`/api/admin/target/${addTargetType}?name=${encodeURIComponent(name)}`, null, {headers:{"X-Api-Key":apiKey.trim()}})
-      .then(()=>{ setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin() })
-      .catch(()=>toastError("Failed to add target"))
+    try {
+      const resp = await fetch('/internal/add-target', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({type: addTargetType, name, api_key: apiKey.trim()})
+      })
+      if(resp.ok){
+        setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin()
+      } else {
+        toastError("Failed to add target")
+      }
+    } catch {
+      toastError("Failed to add target")
+    }
   }
 
   function toggleCardExpand(ttype, name){
