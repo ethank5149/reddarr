@@ -1790,7 +1790,7 @@ async def add_target_internal(request: Request):
     api_key = data.get("api_key", "")
     if not api_key:
         return JSONResponse({"error": "Missing API key"}, status_code=401)
-    expected_key = os.getenv("API_KEY", "!!19077h053j37p4ck81u35!!")
+    expected_key = get_api_key()
     if api_key != expected_key:
         return JSONResponse({"error": "Invalid API key"}, status_code=401)
 
@@ -1814,10 +1814,12 @@ async def add_target_internal(request: Request):
 
 
 @app.delete(
-    "/api/admin/targets/{target_type}/{name}", dependencies=[Depends(require_api_key)]
+    "/api/admin/target/{target_type}/{name}", dependencies=[Depends(require_api_key)]
 )
-def delete_target(target_type: str, name: str):
-    """Delete a target (disables it, does not remove data)."""
+def delete_target(
+    target_type: str, name: str, prune: bool = False, delete_files: bool = False
+):
+    """Delete a target (disable and optionally prune posts/media)."""
     with get_db_cursor() as cur:
         cur.execute(
             "UPDATE targets SET enabled = false WHERE type = %s AND name = %s",
@@ -1825,6 +1827,48 @@ def delete_target(target_type: str, name: str):
         )
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Target not found")
+
+        deleted_posts = 0
+        deleted_media = 0
+        deleted_files = 0
+
+        if prune:
+            cur.execute("SELECT id FROM posts WHERE subreddit = %s", (name,))
+            post_ids = [row[0] for row in cur.fetchall()]
+            deleted_posts = len(post_ids)
+
+            if post_ids:
+                cur.execute("DELETE FROM posts WHERE subreddit = %s", (name,))
+                cur.execute("DELETE FROM posts_history WHERE subreddit = %s", (name,))
+
+            if delete_files:
+                media_dir = f"/data/media/{name}"
+                import subprocess
+
+                try:
+                    result = subprocess.run(
+                        ["sh", "-c", f"find {media_dir} -type f 2>/dev/null | wc -l"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    deleted_files = (
+                        int(result.stdout.strip()) if result.returncode == 0 else 0
+                    )
+                except:
+                    pass
+                try:
+                    subprocess.run(["rm", "-rf", media_dir], timeout=30)
+                except:
+                    pass
+
+    if prune:
+        return {
+            "status": "ok",
+            "deleted_posts": deleted_posts,
+            "deleted_media": deleted_media,
+            "deleted_files": deleted_files,
+        }
     return {"status": "ok"}
 
 

@@ -120,7 +120,7 @@ import urllib.request, json, sys
 req = urllib.request.Request(
     'http://127.0.0.1:8080/api/admin/targets',
     data=json.dumps({'type':'subreddit','name':'one_shot_health_check'}).encode(),
-    headers={'Content-Type': 'application/json', 'X-API-Key': '!!19077h053j37p4ck81u35!!'},
+    headers={'Content-Type': 'application/json', 'X-API-Key': os.environ.get('API_KEY', '')},
     method='POST'
 )
 resp = urllib.request.urlopen(req)
@@ -160,7 +160,7 @@ import urllib.request, json
 urllib.request.urlopen(urllib.request.Request(
     'http://127.0.0.1:8080/api/admin/targets',
     data=json.dumps({'type':'$TYPE','name':'$NAME'}).encode(),
-    headers={'Content-Type': 'application/json', 'X-API-Key': '!!19077h053j37p4ck81u35!!'},
+    headers={'Content-Type': 'application/json', 'X-API-Key': os.environ.get('API_KEY', '')},
     method='POST'
 ))
 print('Added: $TYPE/$NAME')
