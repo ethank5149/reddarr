@@ -127,15 +127,13 @@ def get_api_key():
 async def require_api_key(x_api_key: str = Header(None)):
     """FastAPI dependency to require API key for protected endpoints."""
     api_key = get_api_key()
-    logger.info(
-        f"require_api_key: header={x_api_key[:20] if x_api_key else None}, expected={api_key[:20] if api_key else None}"
-    )
     if not api_key:
-        logger.warning("API_KEY not configured - admin endpoints are unprotected!")
-        return  # Fail open if no key configured
-    if x_api_key is None or x_api_key != api_key:
-        logger.warning(f"API key mismatch: received={x_api_key}, expected={api_key}")
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        logger.info("API_KEY not configured - admin endpoints are open")
+        return
+    if x_api_key is None:
+        raise HTTPException(status_code=401, detail="API key required")
+    if x_api_key != api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 # HTTP request metrics
