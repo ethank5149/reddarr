@@ -3,12 +3,12 @@ FROM node:20-slim AS frontend
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY web/package.json web/package-lock.json ./
 RUN npm ci --silent
 
-COPY index.html vite.config.js ./
-COPY src ./src
-COPY public ./public
+COPY web/index.html web/vite.config.js ./
+COPY web/src ./src
+COPY web/public ./public
 RUN npm run build
 
 # Stage 2: Python runtime
@@ -20,14 +20,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY web/requirements.txt .
 RUN pip install -r requirements.txt --no-cache-dir
 
 COPY shared ./shared
 
 COPY --from=frontend /app/dist ./dist
 
-COPY app.py .
+COPY web/app.py .
 
 ENV PYTHONPATH=/app
 

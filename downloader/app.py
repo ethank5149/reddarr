@@ -213,7 +213,7 @@ def get_db():
 
 for _attempt in range(10):
     try:
-        conn = get_pool().getconn()
+        conn = _db.get_connection()
         conn.close()
         logger.info("DB initial connection successful")
         break
