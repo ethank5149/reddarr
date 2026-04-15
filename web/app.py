@@ -321,7 +321,7 @@ def startup():
     try:
         from shared.database import init_pool
 
-        connection_pool = init_pool(minconn=5, maxconn=100)
+        connection_pool = init_pool(minconn=2, maxconn=20)
         logger.info("Database connection pool initialized")
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
@@ -2700,28 +2700,28 @@ def _run_sse_polling_loop():
             new_media = []
             if _sse_last_media_ts is None:
                 cur.execute(
-                    "SELECT id, post_id, url, file_path FROM media WHERE status = 'done' ORDER BY downloaded_at DESC LIMIT 1"
+                    "SELECT id, post_id, url, file_path, downloaded_at FROM media WHERE status = 'done' ORDER BY downloaded_at DESC LIMIT 1"
                 )
                 row = cur.fetchone()
                 if row:
-                    _sse_last_media_ts = row[3]
+                    _sse_last_media_ts = row[4]
             else:
                 cur.execute(
-                    "SELECT id, post_id, url, file_path FROM media WHERE status = 'done' AND downloaded_at > %s ORDER BY downloaded_at DESC LIMIT 20",
+                    "SELECT id, post_id, url, file_path, downloaded_at FROM media WHERE status = 'done' AND downloaded_at > %s ORDER BY downloaded_at DESC LIMIT 20",
                     (_sse_last_media_ts,),
                 )
                 for r in cur.fetchall():
                     new_media.append(
-                        {"id": r[0], "post_id": r[1], "url": r[2], "file_path": r[3]}
+                        {
+                            "id": r[0],
+                            "post_id": r[1],
+                            "url": r[2],
+                            "file_path": r[3],
+                            "downloaded_at": r[4],
+                        }
                     )
                 if new_media:
-                    cur.execute(
-                        "SELECT downloaded_at FROM media WHERE id = %s",
-                        (new_media[0]["id"],),
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        _sse_last_media_ts = row[0]
+                    _sse_last_media_ts = new_media[0].get("downloaded_at")
 
             cur.close()
             connection_pool.putconn(conn)

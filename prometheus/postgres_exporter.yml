@@ -2,9 +2,6 @@
 # Data Source Name - uses environment variables
 # Format: postgresql://user:password@host:port/database
 
-# Disable default queries (not needed for basic metrics)
-extend.query_path: ""
-
 # PostgreSQL connection settings
 # The exporter will auto-discover databases and use default queries
 

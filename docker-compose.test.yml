@@ -24,7 +24,9 @@ services:
       - internal
 
   api:
-    build: ./web
+    build:
+      context: .
+      dockerfile: web/Dockerfile
     environment:
       DB_URL: postgresql://reddit:changeme@db:5432/reddit
       REDIS_HOST: redis

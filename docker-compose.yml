@@ -44,8 +44,8 @@ services:
   ingester:
     container_name: reddit_archive_ingester
     build:
-      context: ./ingester
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ingester/Dockerfile
     env_file:
       - .env
     environment:
@@ -81,8 +81,8 @@ services:
   downloader:
     container_name: reddit_archive_downloader
     build:
-      context: ./downloader
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: downloader/Dockerfile
     env_file:
       - .env
     environment:
@@ -116,7 +116,9 @@ services:
 
   api:
     container_name: reddit_archive_api
-    build: ./web
+    build:
+      context: .
+      dockerfile: web/Dockerfile
     env_file:
       - .env
     environment:
@@ -124,7 +126,6 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_HOST: redis
       TARGETS_FILE: /app/targets.txt
-      API_KEY: "!!19077h053j37p4ck81u35!!"
     volumes:
       - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
       - ${THUMB_PATH}:${THUMB_PATH}
@@ -135,6 +136,7 @@ services:
       - admin_password
       - guest_password
       - postgres_password
+      - API_KEY
     depends_on:
       db:
         condition: service_healthy
@@ -241,6 +243,8 @@ secrets:
     file: ./secrets/guest_password
   backup_passphrase:
     file: ./secrets/backup_passphrase
+  API_KEY:
+    file: ./secrets/api_key
 
 networks:
   internal:
