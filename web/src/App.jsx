@@ -9,6 +9,18 @@ if ('serviceWorker' in navigator) {
   })
 }
 
+// Axios interceptor to add API key to all /api/admin/* requests
+axios.interceptors.request.use((config) => {
+  if (config.url && config.url.startsWith('/api/admin/')) {
+    const apiKey = localStorage.getItem("apiKey")
+    if (apiKey) {
+      config.headers = config.headers || {}
+      config.headers['X-Api-Key'] = apiKey.trim()
+    }
+  }
+  return config
+})
+
 // Touch device detection
 const isTouchDevice = () => 'ontouchstart' in window || navigator.maxTouchPoints > 0
 
@@ -1063,10 +1075,12 @@ export default function App(){
   }
 
   function loadThumbStats(){
-    axios.get("/api/admin/thumbnails/stats").then(r=>setThumbStats(r.data)).catch(()=>setThumbStats(null))
+    const apiKey = localStorage.getItem("apiKey")
+    axios.get("/api/admin/thumbnails/stats", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>setThumbStats(r.data)).catch(()=>setThumbStats(null))
   }
 
   function startThumbPoll(jobId){
+    const apiKey = localStorage.getItem("apiKey")
     if(thumbPollRef.current) clearInterval(thumbPollRef.current)
     thumbPollRef.current = setInterval(()=>{
       axios.get(`/api/admin/thumbnails/job/${jobId}`)
