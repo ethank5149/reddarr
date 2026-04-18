@@ -9,18 +9,29 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from sqlalchemy import func
 
-from reddarr.database import get_db, SessionLocal, init_engine
-from reddarr.models import Post, Comment, Media, Target
-
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
+
+
+# Lazy imports to avoid circular dependency and ensure init
+def _get_session_local():
+    from reddarr.database import SessionLocal, init_engine
+
+    init_engine()
+    return SessionLocal
+
+
+def _get_models():
+    from reddarr.models import Post, Comment, Media, Target
+
+    return Post, Comment, Media, Target
 
 
 @router.get("/health")
@@ -37,26 +48,21 @@ async def metrics():
     """
     try:
         from reddarr.utils.metrics import posts_total, comments_total, media_total, targets_enabled
+        from reddarr.database import init_engine
+        from reddarr.models import Post, Comment, Media, Target
 
         init_engine()
+        SessionLocal = _get_session_local()
         with SessionLocal() as db:
             posts_total.set(db.query(func.count(Post.id)).scalar() or 0)
             comments_total.set(db.query(func.count(Comment.id)).scalar() or 0)
 
             for status in ("done", "failed", "pending", "corrupted"):
-                count = (
-                    db.query(func.count(Media.id))
-                    .filter(Media.status == status)
-                    .scalar()
-                    or 0
-                )
+                count = db.query(func.count(Media.id)).filter(Media.status == status).scalar() or 0
                 media_total.labels(status=status).set(count)
 
             targets_enabled.set(
-                db.query(func.count(Target.id))
-                .filter(Target.enabled.is_(True))
-                .scalar()
-                or 0
+                db.query(func.count(Target.id)).filter(Target.enabled.is_(True)).scalar() or 0
             )
     except Exception as e:
         logger.warning(f"Could not refresh metrics: {e}")
@@ -79,6 +85,8 @@ async def event_stream(request: Request):
     """
 
     async def generate():
+        from reddarr.database import init_engine
+
         init_engine()
 
         while True:
@@ -111,16 +119,31 @@ def _build_sse_payload() -> dict:
 
     This is the simplified version of the old _run_sse_polling_loop()
     that ran in a background thread with a global cache.
+
+    Includes:
+    - Overall stats (posts, comments, media)
+    - Target summaries with post counts and media counts
+    - Recent posts list (new since last check)
+    - Recent media downloads list
+    - Per-target detailed stats (rate, ETA, progress_percent)
     """
+    from reddarr.database import init_engine
+
+    init_engine()
+    SessionLocal = _get_session_local()
+    Post, Comment, Media, Target = _get_models()
+
     with SessionLocal() as db:
         total_posts = db.query(func.count(Post.id)).filter(Post.hidden.is_(False)).scalar() or 0
         hidden_posts = db.query(func.count(Post.id)).filter(Post.hidden.is_(True)).scalar() or 0
         total_comments = db.query(func.count(Comment.id)).scalar() or 0
         dl_media = db.query(func.count(Media.id)).filter(Media.status == "done").scalar() or 0
-        pending_media = db.query(func.count(Media.id)).filter(Media.status == "pending").scalar() or 0
+        pending_media = (
+            db.query(func.count(Media.id)).filter(Media.status == "pending").scalar() or 0
+        )
         total_media = db.query(func.count(Media.id)).scalar() or 0
 
-        # Target summaries
+        # Target summaries with detailed stats
         targets = db.query(Target).order_by(Target.type, Target.name).all()
         target_list = []
         for t in targets:
@@ -131,6 +154,17 @@ def _build_sse_payload() -> dict:
                     .scalar()
                     or 0
                 )
+                # Posts in last 7 days for rate calculation
+                from datetime import timedelta
+
+                seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+                posts_7d = (
+                    db.query(func.count(Post.id))
+                    .filter(func.lower(Post.subreddit) == t.name.lower())
+                    .filter(Post.created_utc >= seven_days_ago)
+                    .scalar()
+                    or 0
+                )
             else:
                 post_count = (
                     db.query(func.count(Post.id))
@@ -138,16 +172,102 @@ def _build_sse_payload() -> dict:
                     .scalar()
                     or 0
                 )
+                seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+                posts_7d = (
+                    db.query(func.count(Post.id))
+                    .filter(func.lower(Post.author) == t.name.lower())
+                    .filter(Post.created_utc >= seven_days_ago)
+                    .scalar()
+                    or 0
+                )
 
-            target_list.append({
-                "type": t.type,
-                "name": t.name,
-                "enabled": t.enabled,
-                "status": t.status or "active",
-                "icon_url": t.icon_url,
-                "last_created": t.last_created.isoformat() if t.last_created else None,
-                "post_count": post_count,
-            })
+            # Media counts per target
+            if t.type == "subreddit":
+                total_media_q = (
+                    db.query(func.count(Media.id))
+                    .join(Post)
+                    .filter(func.lower(Post.subreddit) == t.name.lower())
+                )
+                downloaded_media_q = total_media_q.filter(Media.status == "done")
+                pending_media_q = total_media_q.filter(Media.status == "pending")
+            else:
+                total_media_q = (
+                    db.query(func.count(Media.id))
+                    .join(Post)
+                    .filter(func.lower(Post.author) == t.name.lower())
+                )
+                downloaded_media_q = total_media_q.filter(Media.status == "done")
+                pending_media_q = total_media_q.filter(Media.status == "pending")
+
+            tot_media = total_media_q.scalar() or 0
+            dl_media_cnt = downloaded_media_q.scalar() or 0
+            pend_media_cnt = pending_media_q.scalar() or 0
+
+            # Calculate rate and ETA
+            rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
+            eta_seconds = None
+            if rate > 0:
+                remaining = max(0, 1000 - post_count)
+                if remaining > 0:
+                    eta_seconds = remaining / rate
+
+            target_list.append(
+                {
+                    "type": t.type,
+                    "name": t.name,
+                    "enabled": t.enabled,
+                    "status": t.status or "active",
+                    "icon_url": t.icon_url,
+                    "last_created": t.last_created.isoformat() if t.last_created else None,
+                    "post_count": post_count,
+                    "total_media": tot_media,
+                    "downloaded_media": dl_media_cnt,
+                    "pending_media": pend_media_cnt,
+                    "rate_per_second": round(rate, 4),
+                    "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
+                    "progress_percent": min(100, round(post_count / 10, 1))
+                    if post_count > 0
+                    else 0,
+                }
+            )
+
+        # Recent posts (last 20)
+        recent_posts = (
+            db.query(Post)
+            .filter(Post.hidden.is_(False))
+            .order_by(Post.ingested_at.desc())
+            .limit(20)
+            .all()
+        )
+        new_posts = [
+            {
+                "id": p.id,
+                "title": p.title,
+                "subreddit": p.subreddit,
+                "author": p.author,
+                "created_utc": p.created_utc.isoformat() if p.created_utc else None,
+            }
+            for p in recent_posts
+        ]
+
+        # Recent media downloads (last 20)
+        recent_media = (
+            db.query(Media)
+            .filter(Media.status == "done")
+            .order_by(Media.downloaded_at.desc())
+            .limit(20)
+            .all()
+        )
+        new_media = [
+            {
+                "id": m.id,
+                "post_id": m.post_id,
+                "url": m.url,
+                "file_path": m.file_path,
+                "downloaded_at": m.downloaded_at.isoformat() if m.downloaded_at else None,
+            }
+            for m in recent_media
+        ]
 
     return {
         "stats": {
@@ -159,5 +279,7 @@ def _build_sse_payload() -> dict:
             "total_media": total_media,
         },
         "targets": target_list,
+        "new_posts": new_posts,
+        "new_media": new_media,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

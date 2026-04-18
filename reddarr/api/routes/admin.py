@@ -53,12 +53,7 @@ def admin_activity(
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    recent_posts = (
-        db.query(func.count(Post.id))
-        .filter(Post.ingested_at >= since)
-        .scalar()
-        or 0
-    )
+    recent_posts = db.query(func.count(Post.id)).filter(Post.ingested_at >= since).scalar() or 0
 
     recent_downloads = (
         db.query(func.count(Media.id))
@@ -95,6 +90,7 @@ def admin_queue(db: Session = Depends(get_db)):
     celery_info = {}
     try:
         from reddarr.tasks import app as celery_app
+
         inspect = celery_app.control.inspect(timeout=2)
         active = inspect.active() or {}
         reserved = inspect.reserved() or {}
@@ -142,8 +138,10 @@ def trigger_backfill(req: BackfillRequest):
     from reddarr.tasks.ingest import trigger_backfill as backfill_task
 
     task = backfill_task.delay(
-        req.target_type, req.target_name,
-        sort=req.sort, time_filter=req.time_filter,
+        req.target_type,
+        req.target_name,
+        sort=req.sort,
+        time_filter=req.time_filter,
         passes=req.passes,
     )
     return {"status": "queued", "task_id": task.id}
@@ -174,3 +172,112 @@ def run_integrity_check():
 
     task = integrity_check.delay()
     return {"status": "queued", "task_id": task.id}
+
+
+@router.get("/health")
+def admin_health():
+    """Service health status for admin panel."""
+    from reddarr.database import _engine
+    from reddarr.config import get_settings
+
+    settings = get_settings()
+    health = {"api": "ok", "db": "unknown", "redis": "unknown"}
+
+    try:
+        with _engine.connect() as conn:
+            conn.execute("SELECT 1")
+        health["db"] = "ok"
+    except Exception:
+        health["db"] = "error"
+
+    try:
+        import redis
+
+        r = redis.Redis.from_url(settings.redis_url)
+        r.ping()
+        health["redis"] = "ok"
+    except Exception:
+        health["redis"] = "error"
+
+    return health
+
+
+@router.get("/backfill-status")
+def backfill_status():
+    """Check if a backfill is currently running."""
+    try:
+        from reddarr.tasks import app as celery_app
+
+        inspect = celery_app.control.inspect(timeout=2)
+        active = inspect.active() or {}
+
+        backfill_running = any(
+            "backfill" in str(t).lower() for tasks in active.values() for t in tasks
+        )
+        return {"running": backfill_running, "active_tasks": active}
+    except Exception as e:
+        return {"running": False, "error": str(e)}
+
+
+@router.get("/thumbnails/stats")
+def thumbnails_stats(db: Session = Depends(get_db)):
+    """Get thumbnail generation stats."""
+    total_with_thumb = (
+        db.query(func.count(Media.id))
+        .filter(Media.thumb_path.isnot(None), Media.status == "done")
+        .scalar()
+        or 0
+    )
+
+    total_done = db.query(func.count(Media.id)).filter(Media.status == "done").scalar() or 0
+
+    missing = total_done - total_with_thumb
+
+    return {
+        "total_done": total_done,
+        "with_thumbnails": total_with_thumb,
+        "missing_thumbnails": missing,
+    }
+
+
+@router.delete("/queue")
+def clear_queue():
+    """Clear all pending media downloads."""
+    from reddarr.tasks.download import download_media_item
+    from reddarr.database import SessionLocal, init_engine
+    from reddarr.models import Media
+    from celery import group
+
+    init_engine()
+    with SessionLocal() as db:
+        pending = db.query(Media).filter(Media.status == "pending").all()
+        # Revoke pending tasks
+        for m in pending:
+            download_media_item.revoke(m.post_id, m.url, terminate=True)
+        # Clear pending status
+        db.query(Media).filter(Media.status == "pending").update(
+            {"status": "failed", "error_message": "Cleared by admin"}
+        )
+        db.commit()
+
+    return {"cleared": len(pending)}
+
+
+@router.delete("/reset")
+def full_reset(confirm: str = Query(...)):
+    """Full reset - clears all data. Requires confirm=RESET."""
+    if confirm != "RESET":
+        return {"error": "Must provide confirm=RESET"}
+
+    from reddarr.database import SessionLocal, init_engine
+
+    init_engine()
+    with SessionLocal() as db:
+        db.query(Media).delete()
+        db.query(PostHistory).delete()
+        db.query(CommentHistory).delete()
+        db.query(Comment).delete()
+        db.query(Post).delete()
+        db.commit()
+
+    return {"status": "reset"}

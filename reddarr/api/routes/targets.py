@@ -42,16 +42,18 @@ def list_targets(db: Session = Depends(get_db)):
                 or 0
             )
 
-        results.append({
-            "id": t.id,
-            "type": t.type,
-            "name": t.name,
-            "enabled": t.enabled,
-            "status": t.status or "active",
-            "icon_url": t.icon_url,
-            "last_created": t.last_created.isoformat() if t.last_created else None,
-            "post_count": post_count,
-        })
+        results.append(
+            {
+                "id": t.id,
+                "type": t.type,
+                "name": t.name,
+                "enabled": t.enabled,
+                "status": t.status or "active",
+                "icon_url": t.icon_url,
+                "last_created": t.last_created.isoformat() if t.last_created else None,
+                "post_count": post_count,
+            }
+        )
 
     return {"targets": results}
 
@@ -77,7 +79,10 @@ def add_target(req: TargetRequest, db: Session = Depends(get_db)):
     db.commit()
 
     logger.info(f"Added target: {req.type}:{req.name}")
-    return {"status": "added", "target": {"id": target.id, "type": target.type, "name": target.name}}
+    return {
+        "status": "added",
+        "target": {"id": target.id, "type": target.type, "name": target.name},
+    }
 
 
 @router.delete("/targets/{target_id}")
@@ -129,6 +134,7 @@ def target_stats(
 
     # Join for media stats
     from sqlalchemy import and_
+
     media_stats = (
         db.query(
             func.count(Media.id),
@@ -150,3 +156,126 @@ def target_stats(
         "media_failed": media_stats[2] or 0,
         "media_pending": media_stats[3] or 0,
     }
+
+
+@router.post("/target/{target_type}/{target_name}/toggle")
+def toggle_target(
+    target_type: str,
+    target_name: str,
+    db: Session = Depends(get_db),
+):
+    """Toggle target enabled state."""
+    target = db.query(Target).filter_by(type=target_type, name=target_name).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    target.enabled = not target.enabled
+    db.commit()
+    return {"status": "toggled", "name": target.name, "enabled": target.enabled}
+
+
+@router.post("/target/{target_type}/{target_name}/status")
+def set_target_status(
+    target_type: str,
+    target_name: str,
+    new_status: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Set target status (active, paused, error, etc)."""
+    target = db.query(Target).filter_by(type=target_type, name=target_name).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    target.status = new_status
+    db.commit()
+    return {"status": "updated", "name": target.name, "status": target.status}
+
+
+@router.post("/target/{target_type}/{target_name}/rescan")
+def rescan_target(
+    target_type: str,
+    target_name: str,
+    db: Session = Depends(get_db),
+):
+    """Trigger a rescan for a target."""
+    from reddarr.tasks.ingest import ingest_target
+
+    task = ingest_target.delay(target_type, target_name)
+    return {"status": "queued", "task_id": task.id}
+
+
+@router.delete("/target/{target_type}/{target_name}")
+def delete_target_by_name(
+    target_type: str,
+    target_name: str,
+    db: Session = Depends(get_db),
+):
+    """Delete a target by type and name."""
+    target = db.query(Target).filter_by(type=target_type, name=target_name).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    name = target.name
+    db.delete(target)
+    db.commit()
+
+    logger.info(f"Deleted target: {name}")
+    return {"status": "deleted", "name": name}
+
+
+@router.get("/target/{target_type}/{target_name}/audit")
+def audit_target(
+    target_type: str,
+    target_name: str,
+    db: Session = Depends(get_db),
+):
+    """Audit a target - check for missing media, duplicates, etc."""
+    if target_type == "subreddit":
+        post_filter = func.lower(Post.subreddit) == target_name.lower()
+    else:
+        post_filter = func.lower(Post.author) == target_name.lower()
+
+    posts = db.query(Post).filter(post_filter).all()
+    post_ids = [p.id for p in posts]
+
+    if not post_ids:
+        return {"posts": 0, "media": 0, "issues": []}
+
+    total_media = db.query(func.count(Media.id)).filter(Media.post_id.in_(post_ids)).scalar() or 0
+    downloaded_media = (
+        db.query(func.count(Media.id))
+        .filter(Media.post_id.in_(post_ids), Media.status == "done")
+        .scalar()
+        or 0
+    )
+
+    # Find posts with no media
+    posts_no_media = (
+        db.query(func.count(Post.id))
+        .filter(
+            post_filter,
+            ~Post.id.in_(db.query(Media.post_id).filter(Media.status == "done").subquery()),
+        )
+        .scalar()
+        or 0
+    )
+
+    return {
+        "posts": len(posts),
+        "media": total_media,
+        "downloaded": downloaded_media,
+        "posts_without_media": posts_no_media,
+    }
+
+
+@router.post("/target/{target_type}/{target_name}/rescrape")
+def rescrape_target(
+    target_type: str,
+    target_name: str,
+    db: Session = Depends(get_db),
+):
+    """Rescrape a target - re-download all media for posts."""
+    from reddarr.tasks.ingest import trigger_backfill
+
+    task = trigger_backfill.delay(target_type, target_name, sort="new", passes=1)
+    return {"status": "queued", "task_id": task.id}

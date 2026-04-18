@@ -33,15 +33,27 @@ def list_posts(
     per_page: int = Query(50, ge=1, le=200),
     subreddit: Optional[str] = None,
     author: Optional[str] = None,
-    sort: str = Query("newest", regex="^(newest|oldest)$"),
+    sort: str = Query("newest", regex="^(newest|oldest|score|comments|media_count)$"),
     show_hidden: bool = False,
+    has_media: Optional[bool] = None,
+    media_type: Optional[str] = Query(None, regex="^(video|image|text)$"),
+    nsfw: str = Query("include", regex="^(include|exclude)$"),
     db: Session = Depends(get_db),
 ):
     """List posts with pagination and filtering.
 
-    This replaces the 300-line /api/posts endpoint from web/app.py,
+    This replaces the /api/posts endpoint from web/app.py,
     using SQLAlchemy ORM queries instead of raw SQL.
+
+    Features:
+    - Pagination (page-based or cursor-based)
+    - Filtering by subreddit, author, media type, NSFW
+    - Multiple sort options (newest, oldest, score, comments, media_count)
+    - Video URL extraction from raw JSON
+    - Remote media fallback (media_metadata, preview)
     """
+    from reddarr.services.media import extract_media_urls
+
     query = db.query(Post)
 
     if not show_hidden:
@@ -53,18 +65,73 @@ def list_posts(
     if author:
         query = query.filter(func.lower(Post.author) == author.lower())
 
+    # NSFW filter
+    if nsfw == "exclude":
+        from sqlalchemy import or_
+
+        query = query.filter(or_(Post.raw.is_(None), Post.raw["over_18"].is_(False)))
+
+    # Media type filtering
+    if media_type:
+        if media_type == "video":
+            query = query.filter(
+                or_(
+                    Post.url.like("%v.redd.it%"),
+                    Post.url.like("%youtube.com%"),
+                    Post.url.like("%youtu.be%"),
+                    Post.raw["media"]["reddit_video"].isnot(None),
+                )
+            )
+        elif media_type == "image":
+            query = query.filter(
+                or_(
+                    Post.url.like("%i.redd.it%"),
+                    Post.url.like("%i.imgur.com%"),
+                    Post.raw["media_metadata"].isnot(None),
+                    Post.raw["preview"]["images"].isnot(None),
+                )
+            )
+        elif media_type == "text":
+            from sqlalchemy import and_
+
+            query = query.filter(
+                and_(
+                    Post.url.is_(None),
+                    Post.raw["media"].is_(None),
+                    Post.raw["media_metadata"].is_(None),
+                )
+            )
+    elif has_media is True:
+        from sqlalchemy import or_
+
+        query = query.filter(or_(Post.url.isnot(None), Post.media_url.isnot(None)))
+    elif has_media is False:
+        query = query.filter(Post.url.is_(None))
+
     # Sort
     if sort == "newest":
         query = query.order_by(desc(Post.created_utc))
-    else:
+    elif sort == "oldest":
         query = query.order_by(Post.created_utc)
+    elif sort == "score":
+        # Score is in raw JSON
+        query = query.order_by(desc(Post.raw["score"].cast(type_=None).label("score")))
+    elif sort == "media_count":
+        # Would need a subquery - simplify to newest for now
+        query = query.order_by(desc(Post.created_utc))
 
     # Paginate
     total = query.count()
     posts = query.offset((page - 1) * per_page).limit(per_page).all()
 
+    results = []
+    settings = get_settings()
+    for p in posts:
+        serialized = _serialize_post_enhanced(p, db, settings)
+        results.append(serialized)
+
     return {
-        "posts": [_serialize_post(p, db) for p in posts],
+        "posts": results,
         "total": total,
         "page": page,
         "per_page": per_page,
@@ -87,10 +154,7 @@ def get_post(post_id: str, db: Session = Depends(get_db)):
 def get_post_history(post_id: str, db: Session = Depends(get_db)):
     """Get version history for a post."""
     versions = (
-        db.query(PostHistory)
-        .filter_by(post_id=post_id)
-        .order_by(desc(PostHistory.version))
-        .all()
+        db.query(PostHistory).filter_by(post_id=post_id).order_by(desc(PostHistory.version)).all()
     )
 
     return {
@@ -149,11 +213,7 @@ def search_posts(
     """
     tsquery = func.plainto_tsquery("english", q)
 
-    query = (
-        db.query(Post)
-        .filter(Post.tsv.op("@@")(tsquery))
-        .filter(Post.hidden.is_(False))
-    )
+    query = db.query(Post).filter(Post.tsv.op("@@")(tsquery)).filter(Post.hidden.is_(False))
 
     if subreddit:
         query = query.filter(func.lower(Post.subreddit) == subreddit.lower())
@@ -284,15 +344,21 @@ def _serialize_post(post: Post, db: Session, include_comments: bool = False) -> 
 
     media_list = []
     for m in media_items:
-        media_list.append({
-            "id": m.id,
-            "url": m.url,
-            "file_path": m.file_path,
-            "thumb_path": m.thumb_path,
-            "status": m.status,
-            "media_url": _build_media_url(m.file_path, settings.archive_path) if m.file_path else None,
-            "thumb_url": _build_thumb_url(m.thumb_path, settings.thumb_path) if m.thumb_path else None,
-        })
+        media_list.append(
+            {
+                "id": m.id,
+                "url": m.url,
+                "file_path": m.file_path,
+                "thumb_path": m.thumb_path,
+                "status": m.status,
+                "media_url": _build_media_url(m.file_path, settings.archive_path)
+                if m.file_path
+                else None,
+                "thumb_url": _build_thumb_url(m.thumb_path, settings.thumb_path)
+                if m.thumb_path
+                else None,
+            }
+        )
 
     result = {
         "id": post.id,
@@ -310,12 +376,7 @@ def _serialize_post(post: Post, db: Session, include_comments: bool = False) -> 
     }
 
     if include_comments:
-        comments = (
-            db.query(Comment)
-            .filter_by(post_id=post.id)
-            .order_by(Comment.created_utc)
-            .all()
-        )
+        comments = db.query(Comment).filter_by(post_id=post.id).order_by(Comment.created_utc).all()
         result["comments"] = [
             {
                 "id": c.id,
@@ -334,7 +395,7 @@ def _build_media_url(file_path: str, archive_path: str) -> Optional[str]:
     if not file_path:
         return None
     if file_path.startswith(archive_path):
-        relative = file_path[len(archive_path):].lstrip("/")
+        relative = file_path[len(archive_path) :].lstrip("/")
         return f"/media/{relative}"
     return None
 
@@ -344,6 +405,150 @@ def _build_thumb_url(thumb_path: str, thumb_base: str) -> Optional[str]:
     if not thumb_path:
         return None
     if thumb_path.startswith(thumb_base):
-        relative = thumb_path[len(thumb_base):].lstrip("/")
+        relative = thumb_path[len(thumb_base) :].lstrip("/")
+        return f"/thumb/{relative}"
+    return None
+
+
+def _serialize_post_enhanced(post: Post, db: Session, settings) -> dict:
+    """Enhanced post serialization with video extraction and remote media fallback.
+
+    Mirrors the old web/app.py /api/posts endpoint's response format.
+    """
+    from reddarr.services.media import extract_media_urls, is_video_url
+
+    media_items = db.query(Media).filter_by(post_id=post.id).all()
+
+    # Build local URLs from downloaded files
+    image_urls = []
+    video_urls = []
+    thumb_url = None
+
+    for m in media_items:
+        if m.file_path:
+            local_url = _build_media_url(m.file_path, settings.archive_path)
+            if local_url:
+                if m.file_path.lower().endswith((".mp4", ".webm", ".mkv", ".mov", ".avi")):
+                    video_urls.append(local_url)
+                else:
+                    image_urls.append(local_url)
+        if m.thumb_path and not thumb_url:
+            thumb_url = _build_thumb_url(m.thumb_path, settings.thumb_path)
+
+    # Check raw JSON for embedded media
+    is_video = is_video_url(post.url)
+    if post.raw:
+        try:
+            if post.raw.get("media") and post.raw["media"].get("reddit_video"):
+                is_video = True
+        except Exception:
+            pass
+
+    preview_url = None
+    remote_image_urls = []
+    remote_video_urls = []
+
+    # Extract remote media from raw JSON as fallback
+    if post.raw and not image_urls and not video_urls:
+        try:
+            data = post.raw
+            # Extract preview thumbnail
+            if "preview" in data and not thumb_url:
+                for img in data.get("preview", {}).get("images", []):
+                    u = img.get("source", {}).get("url")
+                    if u:
+                        preview_url = u
+                        break
+
+            # For videos: use remote as fallback
+            if is_video and not video_urls:
+                extracted = _extract_video_url(post.url, data)
+                if extracted:
+                    remote_video_urls.append(extracted)
+                elif post.url:
+                    remote_video_urls.append(post.url)
+
+            # For images: collect from media_metadata
+            if not image_urls:
+                if "media_metadata" in data:
+                    for img_id, img_data in data.get("media_metadata", {}).items():
+                        if "s" in img_data:
+                            u = img_data["s"].get("u")
+                            if u:
+                                remote_image_urls.append(u.replace("&amp;", "&"))
+                        elif img_data.get("p"):
+                            u = img_data["p"][-1].get("u")
+                            if u:
+                                remote_image_urls.append(u.replace("&amp;", "&"))
+                if not remote_image_urls and "preview" in data:
+                    for img in data.get("preview", {}).get("images", []):
+                        u = img.get("source", {}).get("url")
+                        if u:
+                            remote_image_urls.append(u.replace("&amp;", "&"))
+                        if img.get("variants", {}).get("n"):
+                            for v in img["variants"]["n"].values():
+                                vu = v.get("url")
+                                if vu:
+                                    remote_image_urls.append(vu.replace("&amp;", "&"))
+
+                if remote_image_urls:
+                    image_urls = remote_image_urls
+        except Exception as e:
+            logger.warning(f"Error parsing raw for {post.id}: {e}")
+
+    # Deduplicate
+    video_urls = list(dict.fromkeys([v.replace("&amp;", "&") for v in video_urls if v]))
+    image_urls = list(dict.fromkeys([i.replace("&amp;", "&") for i in image_urls if i]))
+
+    # Extract selftext from raw if not in column
+    selftext = post.selftext
+    if not selftext and post.raw:
+        selftext = post.raw.get("selftext", "")
+
+    return {
+        "id": post.id,
+        "title": post.title,
+        "image_url": image_urls[0] if image_urls else None,
+        "image_urls": image_urls,
+        "video_url": video_urls[0] if video_urls else None,
+        "video_urls": video_urls,
+        "is_video": is_video,
+        "selftext": selftext,
+        "subreddit": post.subreddit,
+        "author": post.author,
+        "created_utc": post.created_utc.isoformat() if post.created_utc else None,
+        "ingested_at": post.ingested_at.isoformat() if post.ingested_at else None,
+        "thumb_url": thumb_url,
+        "preview_url": preview_url,
+        "excluded": post.hidden,
+    }
+
+
+def _extract_video_url(url: str, raw: dict) -> Optional[str]:
+    """Extract playable video URL from post data.
+
+    Handles v.redd.it DASH playlists and crosspost videos.
+    """
+    if not url:
+        return None
+    if "v.redd.it" in url:
+        if raw:
+            media = raw.get("media") or {}
+            rv = media.get("reddit_video") or {}
+            fallback = rv.get("fallback_url")
+            if fallback:
+                return fallback.split("?")[0]
+            for cp in raw.get("crosspost_parent_list", []):
+                media2 = cp.get("media") or {}
+                rv2 = media2.get("reddit_video") or {}
+                fb2 = rv2.get("fallback_url")
+                if fb2:
+                    return fb2.split("?")[0]
+        return url
+    if "youtube.com" in url or "youtu.be" in url:
+        return url
+    return None
+    if thumb_path.startswith(thumb_base):
+        relative = thumb_path[len(thumb_base) :].lstrip("/")
         return f"/thumb/{relative}"
     return None

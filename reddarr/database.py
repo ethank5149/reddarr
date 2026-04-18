@@ -39,21 +39,21 @@ def init_engine():
     """
     global _engine, SessionLocal
 
-    if _engine is not None:
-        return _engine
+    if _engine is None:
+        settings = get_settings()
+        _engine = create_engine(
+            settings.db_url,
+            pool_size=settings.db_pool_min,
+            max_overflow=settings.db_pool_max - settings.db_pool_min,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            echo=settings.log_level == "DEBUG",
+        )
+        logger.info("Database engine initialized")
 
-    settings = get_settings()
-    _engine = create_engine(
-        settings.db_url,
-        pool_size=settings.db_pool_min,
-        max_overflow=settings.db_pool_max - settings.db_pool_min,
-        pool_pre_ping=True,  # reconnect on stale connections
-        pool_recycle=3600,  # recycle connections after 1h
-        echo=settings.log_level == "DEBUG",
-    )
+    if SessionLocal is None:
+        SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
 
-    SessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
-    logger.info("Database engine initialized")
     return _engine
 
 
