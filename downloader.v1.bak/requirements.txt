@@ -1,0 +1,6 @@
+requests
+psycopg2-binary
+redis
+yt-dlp
+prometheus-client
+Pillow

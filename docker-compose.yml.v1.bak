@@ -1,0 +1,251 @@
+services:
+  db:
+    container_name: reddit_archive_db
+    image: postgres:16
+    environment:
+      POSTGRES_DB: reddit
+      POSTGRES_USER: reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reddit"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    container_name: reddit_archive_redis
+    image: redis:7
+    volumes:
+      - ./redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  backup:
+    image: ainullcode/borg-ui:latest
+    container_name: reddit_archive_backup
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:${REDDIT_ARCHIVE_BACKUP_PORT:-8091}:8081"
+    networks:
+      - internal
+
+  ingester:
+    container_name: reddit_archive_ingester
+    build:
+      context: .
+      dockerfile: ingester/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_HOST: redis
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT}
+      TARGETS_FILE: /app/targets.txt
+      ARCHIVE_PATH: ${ARCHIVE_PATH}
+      POLL_INTERVAL: ${POLL_INTERVAL:-300}
+      SCRAPE_LIMIT: ${SCRAPE_LIMIT:-500}
+    secrets:
+      - reddit_client_id
+      - reddit_client_secret
+      - postgres_password
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./targets.txt:/app/targets.txt:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - internal
+
+  downloader:
+    container_name: reddit_archive_downloader
+    build:
+      context: .
+      dockerfile: downloader/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_HOST: redis
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT}
+      ARCHIVE_PATH: ${ARCHIVE_PATH}
+      THUMB_PATH: ${THUMB_PATH}
+      ARCHIVE_MEDIA_PATH: ${ARCHIVE_MEDIA_PATH}
+    secrets:
+      - postgres_password
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
+      - ${THUMB_PATH}:${THUMB_PATH}
+      - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - internal
+
+  api:
+    container_name: reddit_archive_api
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_HOST: redis
+      TARGETS_FILE: /app/targets.txt
+    volumes:
+      - ${ARCHIVE_PATH}:${ARCHIVE_PATH}
+      - ${THUMB_PATH}:${THUMB_PATH}
+      - ${ARCHIVE_MEDIA_PATH}:${ARCHIVE_MEDIA_PATH}
+      - ./logs:/mnt/user/scripts/reddarr/logs:ro
+      - ./targets.txt:/app/targets.txt:ro
+    secrets:
+      - admin_password
+      - guest_password
+      - postgres_password
+      - API_KEY
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:8011:8080"
+    restart: unless-stopped
+    networks:
+      - internal
+
+  postgres-exporter:
+    container_name: reddit_archive_postgres_exporter
+    image: prometheuscommunity/postgres-exporter:latest
+    command: --config.file=/etc/postgres_exporter/postgres_exporter.yml
+    environment:
+      DATA_SOURCE_NAME: "postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit?sslmode=disable"
+    volumes:
+      - ./prometheus/postgres_exporter.yml:/etc/postgres_exporter/postgres_exporter.yml
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - internal
+
+  redis-exporter:
+    container_name: reddit_archive_redis_exporter
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - internal
+
+  node-exporter:
+    container_name: reddit_archive_node_exporter
+    image: prom/node-exporter:latest
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/host:ro
+    pid: host
+    restart: unless-stopped
+    networks:
+      - internal
+
+  prometheus:
+    container_name: reddit_archive_prometheus
+    image: prom/prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/data:/prometheus
+    ports:
+      - "${REDDIT_ARCHIVE_PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - api
+      - ingester
+      - downloader
+      - postgres-exporter
+      - redis-exporter
+      - node-exporter
+    restart: unless-stopped
+    networks:
+      - internal
+
+  grafana:
+    container_name: reddit_archive_grafana
+    image: grafana/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/overview.json
+      # Allow Grafana to create files with correct ownership
+      GF_FILESYSTEM_ALLOW_EMTPY: "true"
+    volumes:
+      - ./grafana/data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    # Remove user specification to allow Grafana to run as root inside container
+    # user: "472:472"
+    ports:
+      - "0.0.0.0:${REDDIT_ARCHIVE_GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - internal
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  reddit_client_id:
+    file: ./secrets/reddit_client_id
+  reddit_client_secret:
+    file: ./secrets/reddit_client_secret
+  admin_password:
+    file: ./secrets/admin_password
+  guest_password:
+    file: ./secrets/guest_password
+  backup_passphrase:
+    file: ./secrets/backup_passphrase
+  API_KEY:
+    file: ./secrets/api_key
+
+networks:
+  internal:
+    driver: bridge

@@ -1,0 +1,5 @@
+psycopg2-binary
+requests
+redis
+praw
+prometheus-client

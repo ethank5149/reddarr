@@ -1,0 +1,466 @@
+import logging
+import os
+import re
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+_DIRECT_IMAGE_EXTS = (
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".mp4",
+    ".gifv",
+    ".webm",
+)
+_DIRECT_MEDIA_HOSTS = (
+    "i.redd.it",
+    "v.redd.it",
+    "youtube.com",
+    "youtu.be",
+    "i.imgur.com",
+)
+
+_VIDEO_URL_PATTERNS = (
+    "v.redd.it",
+    "youtube.com",
+    "youtu.be",
+    "streamable.com",
+    "redgifs.com",
+)
+
+
+def is_video_url(url: Optional[str]) -> bool:
+    """Check if a URL is a video URL."""
+    if not url:
+        return False
+    return any(pat in url for pat in _VIDEO_URL_PATTERNS)
+
+
+def is_direct_media_url(url: str) -> bool:
+    """Check if a URL points to direct media."""
+    lower = url.lower().split("?")[0]
+    if any(lower.endswith(ext) for ext in _DIRECT_IMAGE_EXTS):
+        return True
+    return any(host in url for host in _DIRECT_MEDIA_HOSTS)
+
+
+def extract_redgifs_video_id(url_or_html: str) -> Optional[str]:
+    """Extract RedGifs video ID from iframe HTML or URL."""
+    patterns = [
+        r"redgifs\.com/ifr/([a-zA-Z0-9]+)",
+        r"redgifs\.com/watch/([a-zA-Z0-9]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url_or_html)
+        if match:
+            return match.group(1)
+    return None
+
+
+def extract_video_url(url: Optional[str], raw: Optional[dict]) -> Optional[str]:
+    """Extract a playable video URL from post data."""
+    if not url:
+        return None
+    if "v.redd.it" in url:
+        if raw:
+            media = raw.get("media") or {}
+            rv = media.get("reddit_video") or {}
+            fallback = rv.get("fallback_url")
+            if fallback:
+                return fallback.split("?")[0]
+            for cp in raw.get("crosspost_parent_list", []):
+                media2 = cp.get("media") or {}
+                rv2 = media2.get("reddit_video") or {}
+                fb2 = rv2.get("fallback_url")
+                if fb2:
+                    return fb2.split("?")[0]
+        return url
+    if "youtube.com" in url or "youtu.be" in url:
+        return url
+    if is_video_url(url):
+        return url
+    return None
+
+
+def extract_media_urls(post) -> list[str]:
+    """Extract all media URLs from a Reddit post.
+
+    Covers:
+    - media_metadata (gallery posts, uploaded images)
+    - gallery_data (gallery post metadata)
+    - Direct URL (i.redd.it, v.redd.it, external images)
+    - preview images (fallback)
+    - crosspost media_metadata and preview
+    - rich_video_json (embedded video in selftext)
+    - poll images
+    - secure_media (Reddit's secure_media field)
+    - media (legacy field)
+    """
+    urls = []
+    data = post.__dict__
+
+    media_metadata = data.get("media_metadata")
+    if media_metadata and isinstance(media_metadata, dict):
+        for img_id, img_data in media_metadata.items():
+            if "s" in img_data:
+                s = img_data["s"]
+                u = s.get("gif") or s.get("mp4") or s.get("u")
+            elif img_data.get("p"):
+                u = img_data["p"][-1].get("u")
+            else:
+                u = None
+            if u:
+                urls.append(u)
+
+    gallery_data = data.get("gallery_data")
+    if gallery_data and isinstance(gallery_data, dict):
+        for item in gallery_data.get("items", []):
+            media_id = item.get("media_id")
+            if media_id and media_metadata:
+                img_data = media_metadata.get(media_id)
+                if img_data:
+                    if "s" in img_data:
+                        s = img_data["s"]
+                        u = s.get("gif") or s.get("mp4") or s.get("u")
+                    elif img_data.get("p"):
+                        u = img_data["p"][-1].get("u")
+                    else:
+                        u = None
+                    if u:
+                        urls.append(u)
+
+    post_url = getattr(post, "url", None)
+    if post_url:
+        if is_direct_media_url(post_url):
+            urls.append(post_url)
+
+    preview = data.get("preview")
+    if preview and isinstance(preview, dict):
+        imgs = preview.get("images", [])
+        for img in imgs:
+            u = img.get("source", {}).get("url")
+            if u:
+                urls.append(u)
+            for var_type, var_imgs in img.get("variants", {}).items():
+                if isinstance(var_imgs, dict):
+                    vu = var_imgs.get("source", {}).get("url")
+                    if vu:
+                        urls.append(vu)
+                elif isinstance(var_imgs, list):
+                    for vi in var_imgs:
+                        vu = vi.get("source", {}).get("url")
+                        if vu:
+                            urls.append(vu)
+
+        rich_video = preview.get("rich_video_json")
+        if rich_video:
+            fallback = rich_video.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
+            dash_url = rich_video.get("dash_url")
+            if dash_url:
+                urls.append(dash_url)
+
+    poll_data = data.get("poll_data")
+    if poll_data and isinstance(poll_data, dict):
+        for option in poll_data.get("options", []):
+            img = option.get("image")
+            if img and isinstance(img, dict):
+                u = img.get("url")
+                if u:
+                    urls.append(u)
+
+    crosspost_parent_list = data.get("crosspost_parent_list")
+    if crosspost_parent_list and isinstance(crosspost_parent_list, list):
+        for cp in crosspost_parent_list:
+            cp_media_metadata = cp.get("media_metadata")
+            if cp_media_metadata and isinstance(cp_media_metadata, dict):
+                for img_id, img_data in cp_media_metadata.items():
+                    if "s" in img_data:
+                        s = img_data["s"]
+                        u = s.get("gif") or s.get("mp4") or s.get("u")
+                        if u:
+                            urls.append(u)
+                    elif img_data.get("p"):
+                        u = img_data["p"][-1].get("u")
+                        if u:
+                            urls.append(u)
+            cp_preview = cp.get("preview")
+            if cp_preview and isinstance(cp_preview, dict):
+                for img in cp_preview.get("images", []):
+                    u = img.get("source", {}).get("url")
+                    if u:
+                        urls.append(u)
+                    for var_type, var_imgs in img.get("variants", {}).items():
+                        if isinstance(var_imgs, dict):
+                            vu = var_imgs.get("source", {}).get("url")
+                            if vu:
+                                urls.append(vu)
+                        elif isinstance(var_imgs, list):
+                            for vi in var_imgs:
+                                vu = vi.get("source", {}).get("url")
+                                if vu:
+                                    urls.append(vu)
+
+    secure = data.get("secure_media")
+    if secure and isinstance(secure, dict):
+        if "reddit_video" in secure:
+            rv = secure["reddit_video"]
+            fallback = rv.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
+
+    media = data.get("media")
+    if media and isinstance(media, dict):
+        if "reddit_video" in media:
+            rv = media["reddit_video"]
+            fallback = rv.get("fallback_url")
+            if fallback:
+                urls.append(fallback)
+
+    seen = set()
+    unique_urls = []
+    for u in urls:
+        if u:
+            u = u.replace("&amp;", "&")
+            if "preview.redd.it" in u or "external-preview.redd.it" in u:
+                u = u.split("?")[0]
+            if u not in seen:
+                seen.add(u)
+                unique_urls.append(u)
+
+    return unique_urls
+
+
+_redgifs_token: str | None = None
+_redgifs_token_expiry: float = 0.0
+_redgifs_token_lock = threading.Lock()
+
+
+def _get_redgifs_token() -> str | None:
+    """Obtain (and cache) a temporary RedGifs API bearer token."""
+    global _redgifs_token, _redgifs_token_expiry
+    with _redgifs_token_lock:
+        if _redgifs_token and time.time() < _redgifs_token_expiry:
+            return _redgifs_token
+        try:
+            resp = requests.get(
+                "https://api.redgifs.com/v2/auth/temporary",
+                timeout=10,
+                headers={"User-Agent": "reddit-archive/1.0"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                _redgifs_token = data.get("token")
+                _redgifs_token_expiry = time.time() + 20 * 3600
+                return _redgifs_token
+            else:
+                logger.warning(f"RedGifs auth returned {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to obtain RedGifs token: {e}")
+        return _redgifs_token
+
+
+def _parse_redgifs_urls(data: dict) -> list[str]:
+    """Extract HD/SD URLs from RedGifs API response."""
+    urls = []
+    if "gif" in data:
+        gif = data["gif"]
+        hd = gif.get("urls", {}).get("hd")
+        sd = gif.get("urls", {}).get("sd")
+        if hd:
+            urls.append(hd)
+        if sd:
+            urls.append(sd)
+    return urls
+
+
+def fetch_redgifs_video_urls(video_id: str) -> list[str]:
+    """Fetch HD/SD video URLs from RedGifs API."""
+    urls = []
+    token = _get_redgifs_token()
+    headers = {"User-Agent": "reddit-archive/1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = requests.get(
+            f"https://api.redgifs.com/v2/gifs/{video_id}",
+            timeout=10,
+            headers=headers,
+        )
+        if resp.status_code == 200:
+            urls = _parse_redgifs_urls(resp.json())
+        elif resp.status_code == 401:
+            global _redgifs_token_expiry
+            _redgifs_token_expiry = 0.0
+            token = _get_redgifs_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+                resp = requests.get(
+                    f"https://api.redgifs.com/v2/gifs/{video_id}",
+                    timeout=10,
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    urls = _parse_redgifs_urls(resp.json())
+    except Exception as e:
+        logger.warning(f"Failed to fetch RedGifs video URLs for {video_id}: {e}")
+    return urls
+
+
+def fetch_youtube_video_url(post_url: str) -> str | None:
+    """Get YouTube video URL. Returns the canonical watch URL."""
+    if not post_url:
+        return None
+    match = re.search(
+        r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})", post_url
+    )
+    if match:
+        video_id = match.group(1)
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return None
+
+
+def make_thumb(
+    path: str,
+    media_dir: str = None,
+    thumb_dir: str = None,
+    scale: str = "320:-1",
+) -> Optional[str]:
+    """Create a thumbnail for a media file using ffmpeg.
+
+    Args:
+        path: Path to the media file
+        media_dir: Base directory for media files (defaults to ARCHIVE_PATH env var)
+        thumb_dir: Base directory for thumbnails (defaults to ARCHIVE_PATH/.thumbs)
+        scale: FFmpeg scale filter
+
+    Returns:
+        Path to the created thumbnail, or None if failed
+    """
+    import os
+
+    if media_dir is None:
+        media_dir = os.getenv("ARCHIVE_PATH", "/data")
+    if thumb_dir is None:
+        thumb_dir = os.path.join(os.getenv("ARCHIVE_PATH", "/data"), ".thumbs")
+    try:
+        rel = os.path.relpath(path, media_dir)
+    except ValueError:
+        rel = Path(path).name
+
+    thumb_subdir = Path(thumb_dir) / Path(rel).parent
+    thumb_subdir.mkdir(parents=True, exist_ok=True)
+    thumb = str(thumb_subdir / (Path(path).stem + ".thumb.jpg"))
+
+    logger.info(f"Creating thumbnail: {thumb}")
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-i", path, "-vf", scale, "-frames:v", "1", thumb],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode == 0:
+        logger.info(f"Thumbnail created: {thumb}")
+    else:
+        logger.warning(
+            f"Thumbnail creation failed for {path}: {result.stderr.decode()[:200]}"
+        )
+        return None
+    return thumb
+
+
+def detect_image_corruption(path: str) -> bool:
+    """Check if an image file is corrupted due to non-thread-safe writes.
+
+    Detects corruption patterns from concurrent writes:
+    - Partial writes (truncated files)
+    - Interleaved writes (mixed data from multiple threads)
+    - Invalid image headers (incomplete/malformed headers)
+
+    Uses multiple detection strategies for robustness.
+    """
+    try:
+        file_size = os.path.getsize(path)
+        if file_size < 100:
+            logger.warning(
+                f"Image corruption detected (truncated): {path} ({file_size} bytes)"
+            )
+            return True
+
+        with open(path, "rb") as f:
+            header = f.read(32)
+
+        if len(header) < 12:
+            logger.warning(f"Image corruption detected (incomplete header): {path}")
+            return True
+
+        png_sig = b"\x89PNG\r\n\x1a\n"
+        jpeg_sig = b"\xff\xd8\xff"
+        gif_sig = b"GIF87a" or b"GIF89a"
+        webp_sig = b"RIFF"
+        webp_riff = b"WEBP"
+        webm_sig = b"\x1a\x45\xdf\xa3"
+
+        is_png = header.startswith(png_sig)
+        is_jpeg = header.startswith(jpeg_sig)
+        is_gif = header.startswith((b"GIF87a", b"GIF89a"))
+        is_webp = (
+            header.startswith(webp_sig)
+            and len(header) >= 12
+            and header[8:12] == webp_riff
+        )
+        is_video = header.startswith(webm_sig) or path.lower().endswith(
+            (".mp4", ".webm", ".gifv")
+        )
+
+        if is_video:
+            return False
+
+        if not (is_png or is_jpeg or is_gif or is_webp):
+            logger.warning(
+                f"Image corruption detected (invalid header): {path}, header={header[:8]!r}"
+            )
+            return True
+
+        from PIL import Image
+
+        try:
+            with Image.open(path) as img:
+                img.verify()
+        except Exception as e:
+            logger.warning(
+                f"Image corruption detected (PIL verify failed): {path}: {e}"
+            )
+            return True
+
+        try:
+            with Image.open(path) as img:
+                img.load()
+        except Exception as e:
+            logger.warning(f"Image corruption detected (PIL load failed): {path}: {e}")
+            return True
+
+        return False
+    except Exception as e:
+        logger.warning(f"Image corruption detection failed for {path}: {e}")
+        return True
+
+
+def sha256(path: str) -> str:
+    """Calculate SHA256 hash of a file."""
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for c in iter(lambda: f.read(131072), b""):
+            h.update(c)
+    return h.hexdigest()

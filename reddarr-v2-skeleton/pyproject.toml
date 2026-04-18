@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reddarr"
+version = "2.0.0-alpha"
+description = "Self-hosted Reddit media archiver"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi>=0.104",
+    "uvicorn[standard]>=0.24",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "alembic>=1.13",
+    "celery[redis]>=5.3",
+    "redis>=5.0",
+    "praw>=7.7",
+    "requests>=2.31",
+    "yt-dlp>=2024.1",
+    "Pillow>=10.0",
+    "prometheus-client>=0.19",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov",
+    "python-dotenv",
+    "ruff",
+    "mypy",
+]
+flower = [
+    "flower>=2.0",
+]
+all = [
+    "reddarr[dev,flower]",
+]
+
+[tool.setuptools.packages.find]
+include = ["reddarr*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

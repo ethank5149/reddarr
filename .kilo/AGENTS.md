@@ -1,46 +1,84 @@
-# Reddit Archive Project - Kilo Agent Instructions
+# Reddarr v2 — Kilo Agent Instructions
 
 ## Access URLs
 - **Primary URL**: http://192.168.1.13:8011
-- Use the LAN IP (192.168.1.13) when testing or accessing the application from browser
-- Do NOT use localhost or 127.0.0.1 - it won't work from external access
+- Use the LAN IP (192.168.1.13), NOT localhost
+
+## Architecture
+- Single Docker image, three roles: api, worker, beat
+- Source code: `reddarr/` Python package
+- Frontend: `web/src/` (React/Vite, built in Dockerfile)
+- Task queue: Celery with Redis broker
 
 ## Always Rebuild & Redeploy
-After ANY code changes, you MUST rebuild and redeploy the affected service(s):
+After ANY code changes:
 
-### Rebuild all services (safe default):
+### Rebuild all (safe default):
 ```bash
-cd /mnt/user/scripts/reddit-archive
+cd /mnt/user/scripts/reddarr
 docker-compose build
 docker-compose up -d
 ```
 
-### Rebuild specific services:
+### Rebuild by component:
 ```bash
-# API (web app) - for changes to web/app.py, web/src/App.jsx, etc.
-docker-compose build api
-docker-compose up -d api
+# API routes, auth, middleware, or frontend changes:
+docker-compose build api && docker-compose up -d api
 
-# Ingester - for changes to ingester/app.py
-docker-compose build ingester
-docker-compose up -d ingester
+# Task logic, providers, or service changes:
+docker-compose build worker && docker-compose up -d worker
 
-# Downloader - for changes to downloader/app.py
-docker-compose build downloader
-docker-compose up -d downloader
+# Schedule changes (reddarr/tasks/__init__.py):
+docker-compose build beat && docker-compose up -d beat
+
+# All three share the same image, so `docker-compose build api`
+# rebuilds the image for all roles. But you only need to restart
+# the container(s) whose code path changed.
 ```
 
-### Verify deployment:
+### Verify:
 ```bash
-docker ps | grep reddit_archive
+docker ps --format '{{.Names}} {{.Status}}' | grep reddarr
+curl -s http://192.168.1.13:8011/health
+docker logs reddarr_worker --tail 10
+docker logs reddarr_beat --tail 10
 ```
 
-This applies to changes in:
-- `web/app.py` or `web/src/*` → rebuild `api`
-- `ingester/app.py` → rebuild `ingester`
-- `downloader/app.py` → rebuild `downloader`
-- `docker-compose.yml` → rebuild all
-- Any configuration or dependency changes
+## Key files
+- `reddarr/config.py` — all settings (env + secrets)
+- `reddarr/models.py` — SQLAlchemy ORM (Post, Comment, Media, Target, etc.)
+- `reddarr/database.py` — engine + session factory
+- `reddarr/api/app.py` — FastAPI factory, mounts all route modules
+- `reddarr/api/routes/*.py` — route modules (posts, admin, targets, media, system, backups)
+- `reddarr/tasks/*.py` — Celery tasks (ingest, download, maintenance)
+- `reddarr/services/providers/*.py` — download provider pattern
+- `reddarr/utils/metrics.py` — all Prometheus metric definitions
 
-## Updating `one-shot.sh`
-For every applicable edit to the codebase and build / deploy procedure, update the `one-shot.sh` script accordingly to fully rebuild and redeploy the entire project so no stale code can interfere with development.
+## DB access pattern
+In API routes, use FastAPI dependency injection:
+```python
+from reddarr.database import get_db
+@router.get("/endpoint")
+def handler(db: Session = Depends(get_db)):
+    posts = db.query(Post).filter(...).all()
+```
+
+In Celery tasks, use SessionLocal context manager:
+```python
+from reddarr.database import SessionLocal, init_engine
+init_engine()
+with SessionLocal() as db:
+    posts = db.query(Post).filter(...).all()
+```
+
+## Triggering tasks manually
+```python
+from reddarr.tasks.ingest import ingest_target
+ingest_target.delay("subreddit", "python")
+```
+Or via API:
+```bash
+curl -X POST http://192.168.1.13:8011/api/admin/trigger-scrape \
+  -H "X-Api-Key: KEY" -H "Content-Type: application/json" \
+  -d '{"target_type":"subreddit","target_name":"python"}'
+```
