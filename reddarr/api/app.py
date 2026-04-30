@@ -64,7 +64,7 @@ def create_app() -> FastAPI:
 
     app.include_router(posts.router, prefix="/api")
     app.include_router(admin.router, prefix="/api/admin")
-    app.include_router(targets.router, prefix="/api/targets")
+    app.include_router(targets.router, prefix="/api/admin")
     app.include_router(media.router)
     app.include_router(system.router)
     app.include_router(backups.router, prefix="/api/admin")
