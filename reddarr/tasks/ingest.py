@@ -100,12 +100,39 @@ def ingest_target(self, target_type: str, target_name: str):
         # Commit all posts first before dispatching download tasks
         db.commit()
 
-        # Now dispatch download tasks for the newly ingested posts
+        # Then dispatch download tasks, creating pending Media records first
+        queued_count = 0
         for post_data in posts:
             media_urls = post_data.get("media_urls", [])
             for url in media_urls:
-                from reddarr.tasks.download import download_media_item
-                download_media_item.delay(post_data["id"], url)
+                try:
+                    # Don't re-queue if a Media record already exists
+                    # (e.g. from a previous partial run)
+                    media_exists = (
+                        db.query(Media).filter_by(post_id=post_data["id"], url=url).count()
+                        > 0
+                    )
+                    if media_exists:
+                        continue
+
+                    media = Media(post_id=post_data["id"], url=url, status="pending")
+                    db.add(media)
+                    db.commit()
+
+                    from reddarr.tasks.download import download_media_item
+
+                    download_media_item.delay(post_data["id"], url)
+                    queued_count += 1
+                except Exception as e:
+                    logger.error(
+                        f"Failed to queue download for post {post_data['id']} URL {url}: {e}"
+                    )
+                    db.rollback()
+
+        if queued_count > 0:
+            logger.info(
+                f"Queued {queued_count} media downloads for {target_type}:{target_name}"
+            )
 
         # Update target's last_created timestamp
         target = db.query(Target).filter_by(type=target_type, name=target_name).first()
@@ -272,12 +299,41 @@ def trigger_backfill(self, target_type: str, target_name: str, sort: str = "top"
                 # Final commit for remaining posts
                 db.commit()
 
-                # Then dispatch download tasks
+                # Then dispatch download tasks, creating pending Media records first
+                queued_count = 0
                 for post_data in new_posts:
                     media_urls = post_data.get("media_urls", [])
                     for url in media_urls:
-                        from reddarr.tasks.download import download_media_item
-                        download_media_item.delay(post_data["id"], url)
+                        try:
+                            # Don't re-queue if a Media record already exists
+                            media_exists = (
+                                db.query(Media)
+                                .filter_by(post_id=post_data["id"], url=url)
+                                .count()
+                                > 0
+                            )
+                            if media_exists:
+                                continue
+
+                            media = Media(
+                                post_id=post_data["id"], url=url, status="pending"
+                            )
+                            db.add(media)
+                            db.commit()
+
+                            from reddarr.tasks.download import download_media_item
+
+                            download_media_item.delay(post_data["id"], url)
+                            queued_count += 1
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to queue download for post {post_data['id']} URL {url}: {e}"
+                            )
+                            db.rollback()
+                if queued_count > 0:
+                    logger.info(
+                        f"Queued {queued_count} media downloads in backfill for {target_type}:{target_name}"
+                    )
 
             logger.info(f"Backfill pass {pass_num + 1}/{passes} complete for {target_type}:{target_name}")
         except Exception as e:
