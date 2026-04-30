@@ -29,6 +29,6 @@ echo "--- Verifying ---"
 sleep 3
 docker ps --format 'table {{.Names}}\t{{.Status}}' | grep reddarr
 echo ""
-curl -sf http://192.168.1.13:8011/health && echo " ✓ API healthy" || echo " ✗ API not responding"
+curl -sf http://localhost:${REDDARR_PORT:-8011}/health && echo " ✓ API healthy" || echo " ✗ API not responding"
 
 echo "=== Done ==="
