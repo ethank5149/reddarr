@@ -71,7 +71,7 @@ def create_app() -> FastAPI:
     assets_dir = os.path.join(dist_dir, "static")
     if os.path.isdir(dist_dir):
         if os.path.isdir(assets_dir):
-            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+            app.mount("/static", StaticFiles(directory=assets_dir), name="static")
 
         @app.get("/")
         def root():
