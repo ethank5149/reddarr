@@ -379,6 +379,33 @@ export default function App(){
     return () => document.removeEventListener('keydown', handler)
   }, [selectedPost, auditPostDetail, deleteModal, resetModal, resetLoading])
 
+  // Lock body scroll when modal is open and restore position on close
+  useEffect(() => {
+    if (selectedPost) {
+      savedScrollY.current = window.scrollY
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+      window.scrollTo(0, savedScrollY.current)
+    }
+    return () => { document.body.style.overflow = '' }
+  }, [!!selectedPost])
+
+  // Save and restore scroll position on route changes (BrowserRouter has no built-in restoration)
+  useEffect(() => {
+    return () => {
+      routeScrollPositions.current[location.pathname] = window.scrollY
+    }
+  }, [location.pathname])
+  useEffect(() => {
+    const saved = routeScrollPositions.current[location.pathname]
+    if (saved !== undefined) {
+      requestAnimationFrame(() => window.scrollTo(0, saved))
+    } else {
+      window.scrollTo(0, 0)
+    }
+  }, [location.pathname])
+
   // Toast helper
   function showToast(message, type = 'info', duration = 3000) {
     const id = Date.now()
@@ -475,6 +502,8 @@ export default function App(){
   const targetDetailSearchResultsRef=useRef(null)
   const esRef=useRef(null)
   const highlightTimerRef=useRef(null)
+  const savedScrollY=useRef(0)
+  const routeScrollPositions=useRef({})
 
   // SSE real-time connection
   useEffect(()=>{
@@ -1073,6 +1102,24 @@ export default function App(){
       .catch(() => {
         toastError(`Failed to trigger backfill for ${name}`)
         setCardBackfilling(prev => ({...prev, [key]: false}))
+      })
+  }
+
+  function scrapeAllMissingTarget(ttype, name){
+    const key = `${ttype}:${name}`
+    setCardScraping(prev => ({...prev, [key]: true}))
+    const headers = { "X-Api-Key": apiKey.trim() }
+    Promise.all([
+      axios.post("/api/admin/trigger-scrape", { target_type: ttype, target_name: name }, { headers }),
+      axios.post("/api/admin/trigger-backfill", { target_type: ttype, target_name: name, passes: 2 }, { headers }),
+    ])
+      .then(() => {
+        toastSuccess(`Scraping all missing for ${ttype === "subreddit" ? "r/" : "u/"}${name}`)
+        setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
+      })
+      .catch(() => {
+        toastError(`Failed to scrape ${name}`)
+        setCardScraping(prev => ({...prev, [key]: false}))
       })
   }
 
@@ -1977,13 +2024,9 @@ export default function App(){
                       <button onClick={()=>toggleTarget(currentTarget.type,currentTarget.name)} style={{padding:"6px 14px",background:currentTarget.enabled?"#46d160":"#3a3a3a",border:"none",borderRadius:"3px",color:currentTarget.enabled?"#000":"#5a7b9a",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>
                         {currentTarget.enabled?"Enabled":"Disabled"}
                       </button>
-                      <div style={{position:"relative",display:"inline-block"}}>
-                        <button onClick={()=>{const m=document.getElementById(`sync-menu-${currentTarget.name}`);m.style.display=m.style.display==="none"?"block":"none"}} style={{padding:"6px 14px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚡ Scrape Posts ▼</button>
-                        <div id={`sync-menu-${currentTarget.name}`} style={{display:"none",position:"absolute",top:"100%",left:0,zIndex:100,background:"#1a2234",border:"1px solid #333",borderRadius:"3px",minWidth:"140px",marginTop:"4px",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}>
-                          <div onClick={()=>{document.getElementById(`sync-menu-${currentTarget.name}`).style.display="none";scrapeTargetNow(currentTarget.type,currentTarget.name)}} style={{padding:"10px 14px",cursor:"pointer",color:"#f5f7fa",fontSize:"12px",borderBottom:"1px solid #222"}}>Get Latest</div>
-                          <div onClick={()=>{document.getElementById(`sync-menu-${currentTarget.name}`).style.display="none";backfillTargetNow(currentTarget.type,currentTarget.name)}} style={{padding:"10px 14px",cursor:"pointer",color:"#7ab3e0",fontSize:"12px"}}>Get History</div>
-                        </div>
-                      </div>
+                      <button onClick={()=>scrapeAllMissingTarget(currentTarget.type,currentTarget.name)} disabled={!!cardScraping[`${currentTarget.type}:${currentTarget.name}`]} style={{padding:"6px 14px",background:cardScraping[`${currentTarget.type}:${currentTarget.name}`]?"#243447":"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:cardScraping[`${currentTarget.type}:${currentTarget.name}`]?"#5a7b9a":"#f5f7fa",cursor:cardScraping[`${currentTarget.type}:${currentTarget.name}`]?"not-allowed":"pointer",fontSize:"12px",fontWeight:"600"}}>
+                        {cardScraping[`${currentTarget.type}:${currentTarget.name}`]?"⚡ Queued...":"⚡ Scrape All Missing"}
+                      </button>
                       <div style={{position:"relative",display:"inline-block"}}>
                         <button onClick={()=>{const m=document.getElementById(`dl-menu-${currentTarget.name}`);m.style.display=m.style.display==="none"?"block":"none"}} style={{padding:"6px 14px",background:"#1c2a3f",border:"1px solid #333",borderRadius:"3px",color:"#8aa4bd",cursor:"pointer",fontSize:"12px",fontWeight:"600"}}>⚙️ Maintenance ▼</button>
                         <div id={`dl-menu-${currentTarget.name}`} style={{display:"none",position:"absolute",top:"100%",left:0,zIndex:100,background:"#1a2234",border:"1px solid #333",borderRadius:"3px",minWidth:"160px",marginTop:"4px",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}>
