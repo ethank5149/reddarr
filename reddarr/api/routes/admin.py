@@ -1,4 +1,4 @@
-"""Admin API routes — stats, activity, queue management, trigger actions.
+"""Admin API routes - stats, activity, queue management, trigger actions.
 
 Extracts admin-specific endpoints from the old web/app.py.
 All routes require API key authentication.

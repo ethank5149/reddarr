@@ -1,4 +1,4 @@
-"""Generic download provider — catch-all for external media links."""
+"""Generic download provider - catch-all for external media links."""
 
 import logging
 from pathlib import Path
@@ -13,7 +13,7 @@ class GenericProvider(DownloadProvider):
     """Catch-all provider for external image/video links."""
 
     def match(self, url: str) -> bool:
-        return True  # Always matches — must be last in the registry
+        return True  # Always matches - must be last in the registry
 
     def download(self, url, post_id, post_dir, session) -> dict:
         result = {"path": None, "thumb": None, "hash": None, "status": "failed"}

@@ -1,4 +1,4 @@
-"""Backup API routes — database backup, restore, and management.
+"""Backup API routes - database backup, restore, and management.
 
 Extracts backup-related endpoints from the old web/app.py.
 All routes require API key authentication.

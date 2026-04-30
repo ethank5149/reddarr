@@ -1,4 +1,4 @@
-"""Targets API routes — CRUD for subreddits and users to archive.
+"""Targets API routes - CRUD for subreddits and users to archive.
 
 Replaces the old targets.txt flat file with full DB-driven management.
 All routes require API key authentication.

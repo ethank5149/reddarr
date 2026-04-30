@@ -1,4 +1,4 @@
-"""Prometheus metrics — single source of truth for all Reddarr metrics.
+"""Prometheus metrics - single source of truth for all Reddarr metrics.
 
 Replaces the scattered metric definitions across web/app.py,
 ingester/app.py, and downloader/app.py.

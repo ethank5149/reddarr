@@ -22,7 +22,7 @@ class DownloadProvider(ABC):
     """Base class for media download providers.
 
     Each provider handles a specific type of media source.
-    Providers are checked in order — first match wins.
+    Providers are checked in order - first match wins.
     """
 
     @abstractmethod

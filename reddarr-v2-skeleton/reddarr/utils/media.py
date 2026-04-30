@@ -1,4 +1,4 @@
-"""Media utility functions — hashing, thumbnails, filenames, corruption detection.
+"""Media utility functions - hashing, thumbnails, filenames, corruption detection.
 
 Consolidates the duplicated logic from shared/media_utils.py,
 downloader/media_utils.py, and downloader/app.py into one module.

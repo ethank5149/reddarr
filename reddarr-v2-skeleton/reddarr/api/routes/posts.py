@@ -1,4 +1,4 @@
-"""Posts API routes — listing, detail, search, hide/unhide, delete.
+"""Posts API routes - listing, detail, search, hide/unhide, delete.
 
 Extracts the post-related endpoints from the old web/app.py monolith:
   /api/posts          -> list_posts()
@@ -243,7 +243,7 @@ def delete_post(
 
 @router.get("/debug/{post_id}", dependencies=[Depends(require_api_key)])
 def debug_post(post_id: str, db: Session = Depends(get_db)):
-    """Debug endpoint — returns full raw data for a post."""
+    """Debug endpoint - returns full raw data for a post."""
     post = db.query(Post).filter_by(id=post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")

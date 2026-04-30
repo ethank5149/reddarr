@@ -1,4 +1,4 @@
-"""Maintenance tasks — periodic cleanup, icon refresh, integrity checks.
+"""Maintenance tasks - periodic cleanup, icon refresh, integrity checks.
 
 These run on the Celery beat schedule or can be triggered via the admin API.
 """

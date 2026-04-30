@@ -41,7 +41,7 @@ app.config_from_object(
         "worker_prefetch_multiplier": 1,
         # Result expiry (24h)
         "result_expires": 86400,
-        # Beat schedule — replaces the old poll loop in ingester
+        # Beat schedule - replaces the old poll loop in ingester
         "beat_schedule": {
             "ingest-cycle": {
                 "task": "reddarr.tasks.ingest.run_ingest_cycle",

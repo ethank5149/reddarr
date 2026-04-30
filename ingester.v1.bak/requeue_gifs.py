@@ -6,7 +6,7 @@ variants, extracts the correct URLs, and pushes any not-yet-downloaded
 ones to the media_queue for the downloader to pick up.
 
 Usage:
-    # Dry run (default) — just print what would be queued
+    # Dry run (default) - just print what would be queued
     docker compose exec ingester python /app/requeue_gifs.py
 
     # Actually queue items

@@ -1,4 +1,4 @@
-"""Download tasks — media fetching, thumbnail generation, deduplication.
+"""Download tasks - media fetching, thumbnail generation, deduplication.
 
 Replaces the old downloader/app.py monolith. Instead of a BLPOP worker loop,
 each media download is a discrete Celery task with automatic retries.

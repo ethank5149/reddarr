@@ -17,7 +17,7 @@ from reddarr.services.providers.youtube import YouTubeProvider
 from reddarr.services.providers.redgifs import RedGifsProvider
 from reddarr.services.providers.generic import GenericProvider
 
-# Ordered by specificity — first match wins, generic is the catch-all
+# Ordered by specificity - first match wins, generic is the catch-all
 PROVIDERS: list[DownloadProvider] = [
     RedditVideoProvider(),
     RedGifsProvider(),

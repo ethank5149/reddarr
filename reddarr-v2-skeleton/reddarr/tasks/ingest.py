@@ -1,4 +1,4 @@
-"""Ingest tasks — Reddit API polling and post ingestion.
+"""Ingest tasks - Reddit API polling and post ingestion.
 
 Replaces the old ingester/app.py monolith. Each function is a Celery task
 that can be invoked by the beat scheduler or triggered manually via the API.
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @app.task(name="reddarr.tasks.ingest.run_ingest_cycle", bind=True, max_retries=1)
 def run_ingest_cycle(self):
-    """Main ingest cycle — queries all enabled targets and ingests new posts.
+    """Main ingest cycle - queries all enabled targets and ingests new posts.
 
     This replaces the old `while True: run_cycle(); sleep(POLL_INTERVAL)` loop.
     Celery Beat now handles the scheduling.

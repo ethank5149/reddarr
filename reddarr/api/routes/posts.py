@@ -1,4 +1,4 @@
-"""Posts API routes — listing, detail, search, hide/unhide, delete.
+"""Posts API routes - listing, detail, search, hide/unhide, delete.
 
 Extracts the post-related endpoints from the old web/app.py monolith:
   /api/posts          -> list_posts()
@@ -36,15 +36,15 @@ def list_posts(
     offset: int = Query(0, ge=0),
     subreddit: Optional[str] = None,
     author: Optional[str] = None,
-    sort: str = Query("newest", regex="^(newest|oldest|score|comments|media_count)$"),
+    sort: str = Query("newest", pattern="^(newest|oldest|score|comments|media_count)$"),
     # sort_by/sort_order used by frontend
     sort_by: Optional[str] = None,
-    sort_order: str = Query("desc", regex="^(asc|desc)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     show_hidden: bool = False,
     excluded: bool = False,  # frontend alias for show_hidden=True (archive view)
     has_media: Optional[bool] = None,
-    media_type: Optional[str] = Query(None, regex="^(video|image|text)$"),
-    nsfw: str = Query("include", regex="^(include|exclude)$"),
+    media_type: Optional[str] = Query(None, pattern="^(video|image|text)$"),
+    nsfw: str = Query("include", pattern="^(include|exclude)$"),
     db: Session = Depends(get_db),
 ):
     """List posts with pagination and filtering.
@@ -59,8 +59,6 @@ def list_posts(
     - Video URL extraction from raw JSON
     - Remote media fallback (media_metadata, preview)
     """
-    from reddarr.services.media import extract_media_urls
-
     query = db.query(Post)
 
     # `excluded=True` means show only hidden posts (archive view)
@@ -118,7 +116,7 @@ def list_posts(
     elif has_media is False:
         query = query.filter(Post.url.is_(None))
 
-    # Sort — support both sort_by/sort_order (frontend) and sort (direct API)
+    # Sort - support both sort_by/sort_order (frontend) and sort (direct API)
     if sort_by:
         col_map = {
             "created_utc": Post.created_utc,
@@ -139,7 +137,7 @@ def list_posts(
     else:
         query = query.order_by(desc(Post.ingested_at))
 
-    # Paginate — offset-based (frontend) takes priority over page-based
+    # Paginate - offset-based (frontend) takes priority over page-based
     # Note: query.count() executes a separate COUNT query, which is necessary
     # for pagination. This is the standard SQLAlchemy pattern.
     total = query.count()
@@ -166,7 +164,6 @@ def list_posts(
         "per_page": per_page,
         "pages": (total + per_page - 1) // per_page,
     }
-
 
 @router.get("/post/{post_id}")
 def get_post(post_id: str, db: Session = Depends(get_db)):
@@ -339,7 +336,7 @@ def delete_post(
 
 @router.get("/debug/{post_id}", dependencies=[Depends(require_api_key)])
 def debug_post(post_id: str, db: Session = Depends(get_db)):
-    """Debug endpoint — returns full raw data for a post."""
+    """Debug endpoint - returns full raw data for a post."""
     post = db.query(Post).filter_by(id=post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -451,7 +448,7 @@ def _serialize_post_enhanced(post: Post, db: Session, settings) -> dict:
 
     Mirrors the old web/app.py /api/posts endpoint's response format.
     """
-    from reddarr.services.media import extract_media_urls, is_video_url
+    from reddarr.services.media import is_video_url
 
     media_items = db.query(Media).filter_by(post_id=post.id).all()
 

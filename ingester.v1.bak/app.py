@@ -873,7 +873,7 @@ def run():
                 if scrape_config.get("target_name"):
                     target_info = f" for {scrape_config['target_type']}:{scrape_config['target_name']}"
                 logger.info(
-                    f"Manual scrape triggered via UI{target_info} — running cycle now"
+                    f"Manual scrape triggered via UI{target_info} - running cycle now"
                 )
                 scrape_triggered = True
         except Exception:
@@ -929,7 +929,7 @@ def run():
                     msg = rd.lpop("scrape_trigger")
                     if msg:
                         logger.info(
-                            "Manual scrape triggered via UI — running cycle now"
+                            "Manual scrape triggered via UI - running cycle now"
                         )
                         break
                     msg = rd.lpop("backfill_trigger")

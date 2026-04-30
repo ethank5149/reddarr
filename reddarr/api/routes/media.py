@@ -1,4 +1,4 @@
-"""Media file serving routes — /media/*, /thumb/*.
+"""Media file serving routes - /media/*, /thumb/*.
 
 Replaces the static file serving from web/app.py with proper
 path traversal protection.

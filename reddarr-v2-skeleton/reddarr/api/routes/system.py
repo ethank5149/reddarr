@@ -1,4 +1,4 @@
-"""System routes — health check, Prometheus metrics, SSE event stream.
+"""System routes - health check, Prometheus metrics, SSE event stream.
 
 Replaces the /health, /metrics, and /api/events endpoints from web/app.py.
 The SSE polling loop is replaced by a simpler async generator that queries

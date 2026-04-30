@@ -54,6 +54,33 @@ PROVIDER_DOMAINS = {
     "www.imgur.com": "imgur",
 }
 
+_VIDEO_URL_PATTERNS = (
+    "v.redd.it",
+    "youtube.com",
+    "youtu.be",
+    "streamable.com",
+    "redgifs.com",
+)
+
+
+def is_video_url(url: Optional[str]) -> bool:
+    """Check if a URL is a video URL."""
+    if not url:
+        return False
+    return any(pat in url for pat in _VIDEO_URL_PATTERNS)
+
+
+def is_direct_media_url(url: str) -> bool:
+    """Check if a URL points to a direct media file."""
+    if not url:
+        return False
+    domain = urlparse(url).netloc.lower()
+    path = urlparse(url).path.lower()
+    if domain in MEDIA_DOMAINS:
+        return True
+    return any(path.endswith(ext) for ext in MEDIA_EXTENSIONS)
+
+
 def _get_redgifs_token() -> Optional[str]:
     """Obtain (and cache) a temporary RedGifs API bearer token using Redis."""
     from reddarr.config import get_settings

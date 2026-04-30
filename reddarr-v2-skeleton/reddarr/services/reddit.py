@@ -1,4 +1,4 @@
-"""Reddit API service — PRAW client and post fetching.
+"""Reddit API service - PRAW client and post fetching.
 
 Consolidates the old ingester/reddit.py, ingester/app.py::_create_reddit_client(),
 and ingester/app.py::fetch_target_posts() into a clean service layer.

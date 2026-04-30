@@ -1,4 +1,4 @@
-"""Middleware — metrics collection and rate limiting.
+"""Middleware - metrics collection and rate limiting.
 
 Replaces the inline middleware from web/app.py.
 """

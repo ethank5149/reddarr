@@ -88,7 +88,7 @@ def create_app() -> FastAPI:
             # Fallback to repo root
             return FileResponse("/app/icon.png", media_type="image/png")
 
-        # SPA catch-all — must be last
+        # SPA catch-all - must be last
         @app.get("/{full_path:path}")
         def spa(full_path: str):
             """Serve index.html for all non-API, non-media routes (SPA routing)."""

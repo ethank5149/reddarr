@@ -1,4 +1,4 @@
-"""System routes — health check, Prometheus metrics, SSE event stream.
+"""System routes - health check, Prometheus metrics, SSE event stream.
 
 Replaces the /health, /metrics, and /api/events endpoints from web/app.py.
 The SSE polling loop is replaced by a simpler async generator that queries
@@ -141,7 +141,7 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
     - queue_length (pending download count) for the sidebar indicator
     - health (quick db status)
     - Target summaries with post counts and media counts
-    - new_posts / new_media — only items newer than `since`
+    - new_posts / new_media - only items newer than `since`
     - Per-target detailed stats (rate, ETA, progress_percent)
     """
     from reddarr.database import init_engine
