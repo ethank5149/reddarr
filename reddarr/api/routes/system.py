@@ -175,7 +175,8 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
                     func.count(Post.id),
                     func.sum(case((Post.created_utc >= seven_days_ago, 1), else_=0))
                 ).filter(func.lower(Post.subreddit) == name_lower).first()
-                post_count, posts_7d = post_stats or (0, 0)
+                post_count = post_stats[0] or 0 if post_stats else 0
+                posts_7d = post_stats[1] or 0 if post_stats else 0
 
                 # Media stats with join
                 media_stats = db.query(
@@ -190,7 +191,8 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
                     func.count(Post.id),
                     func.sum(case((Post.created_utc >= seven_days_ago, 1), else_=0))
                 ).filter(func.lower(Post.author) == name_lower).first()
-                post_count, posts_7d = post_stats or (0, 0)
+                post_count = post_stats[0] or 0 if post_stats else 0
+                posts_7d = post_stats[1] or 0 if post_stats else 0
 
                 media_stats = db.query(
                     func.count(Media.id),
@@ -199,7 +201,9 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
                 ).join(Post).filter(
                     func.lower(Post.author) == name_lower
                 ).first()
-            tot_media, dl_media_cnt, pend_media_cnt = media_stats or (0, 0, 0)
+            tot_media = media_stats[0] or 0 if media_stats else 0
+            dl_media_cnt = media_stats[1] or 0 if media_stats else 0
+            pend_media_cnt = media_stats[2] or 0 if media_stats else 0
 
             # Calculate rate and ETA
             rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
@@ -235,14 +239,10 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
             )
 
         # New posts since the last SSE cycle (or last 20 if no watermark)
-        new_posts_q = (
-            db.query(Post)
-            .filter(Post.hidden.is_(False))
-            .order_by(Post.ingested_at.desc())
-            .limit(20)
-        )
+        new_posts_q = db.query(Post).filter(Post.hidden.is_(False))
         if since is not None:
             new_posts_q = new_posts_q.filter(Post.ingested_at > since)
+        new_posts_q = new_posts_q.order_by(Post.ingested_at.desc()).limit(20)
         new_posts = [
             {
                 "id": p.id,
@@ -255,14 +255,10 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
         ]
 
         # New media downloads since the last SSE cycle
-        new_media_q = (
-            db.query(Media)
-            .filter(Media.status == "done")
-            .order_by(Media.downloaded_at.desc())
-            .limit(20)
-        )
+        new_media_q = db.query(Media).filter(Media.status == "done")
         if since is not None:
             new_media_q = new_media_q.filter(Media.downloaded_at > since)
+        new_media_q = new_media_q.order_by(Media.downloaded_at.desc()).limit(20)
         new_media = [
             {
                 "id": m.id,
@@ -307,3 +303,54 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
         "new_media": new_media,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/api/logs/stream")
+async def log_stream(request: Request):
+    """Fused multi-container log stream via SSE.
+
+    Replays the last 200 buffered entries then subscribes to live pub/sub.
+    Each event is a JSON object: {ts, level, logger, msg, source}.
+    No auth required — log content is already visible to anyone with
+    network access to the API.
+    """
+    from reddarr.config import get_settings
+    import redis.asyncio as aioredis
+    from reddarr.log_stream import CHANNEL, BUFFER_KEY
+
+    settings = get_settings()
+
+    async def generate():
+        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            # Replay recent history (newest-first in list → reverse for chronological)
+            recent = await r.lrange(BUFFER_KEY, 0, 199)
+            for entry in reversed(recent):
+                yield f"data: {entry}\n\n"
+
+            # Subscribe for live entries
+            pubsub = r.pubsub()
+            await pubsub.subscribe(CHANNEL)
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if msg and msg["type"] == "message":
+                        yield f"data: {msg['data']}\n\n"
+                    await asyncio.sleep(0.05)
+            finally:
+                await pubsub.unsubscribe(CHANNEL)
+                await pubsub.aclose()
+        finally:
+            await r.aclose()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -63,6 +63,7 @@ services:
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       REDIS_HOST: redis
+      CONTAINER_ROLE: api
     secrets:
       - postgres_password
       - reddit_client_id
@@ -100,6 +101,7 @@ services:
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
       REDIS_HOST: redis
+      CONTAINER_ROLE: worker
     secrets:
       - postgres_password
       - reddit_client_id
@@ -125,6 +127,7 @@ services:
       - .env
     environment:
       DB_URL: postgresql://reddit:${POSTGRES_PASSWORD}@db:5432/reddit
+      CONTAINER_ROLE: beat
       REDIS_HOST: redis
     secrets:
       - postgres_password

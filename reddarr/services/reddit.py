@@ -40,6 +40,8 @@ def create_reddit_client() -> praw.Reddit:
         client_id=settings.reddit_client_id,
         client_secret=settings.reddit_client_secret,
         user_agent=settings.reddit_user_agent,
+        timeout=30,
+        ratelimit_seconds=10,
     )
     logger.info("Reddit client initialized (read-only, thread-local)")
     return _thread_local.reddit_client

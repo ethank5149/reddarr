@@ -198,6 +198,11 @@ export default function App(){
   const [newPostsAvailable, setNewPostsAvailable] = useState(0)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [liveConnected, setLiveConnected] = useState(false)
+  const [logEntries, setLogEntries] = useState([])
+  const [logFilter, setLogFilter] = useState({level: "all", source: "all"})
+  const logEsRef = useRef(null)
+  const logBottomRef = useRef(null)
+  const logPausedRef = useRef(false)
   const [resetModal, setResetModal] = useState(false)
   const [resetInput, setResetInput] = useState("")
   const [resetLoading, setResetLoading] = useState(false)
@@ -564,6 +569,39 @@ export default function App(){
     }
     connect()
     return () => { if(esRef.current) esRef.current.close() }
+  },[])
+
+  // Auto-scroll log view to bottom when new entries arrive
+  useEffect(() => {
+    if(!logPausedRef.current && logBottomRef.current && activeTab === "logs") {
+      logBottomRef.current.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [logEntries, activeTab])
+
+  // Log stream SSE — connects once, keeps the ring buffer populated
+  useEffect(() => {
+    function connectLogStream() {
+      const es = new EventSource("/api/logs/stream")
+      logEsRef.current = es
+      es.onmessage = (e) => {
+        try {
+          const entry = JSON.parse(e.data)
+          if (!logPausedRef.current) {
+            setLogEntries(prev => {
+              const next = [...prev, entry]
+              return next.length > 500 ? next.slice(next.length - 500) : next
+            })
+          }
+        } catch {}
+      }
+      es.onerror = () => {
+        es.close()
+        logEsRef.current = null
+        setTimeout(connectLogStream, 5000)
+      }
+    }
+    connectLogStream()
+    return () => { if(logEsRef.current) logEsRef.current.close() }
   },[])
 
   useEffect(()=>{
@@ -1742,10 +1780,12 @@ export default function App(){
     const detailPath = t.type==="subreddit"?`/subreddits/${encodeURIComponent(t.name)}`:`/users/${encodeURIComponent(t.name)}`
     const pastelBg = t.icon_url ? "linear-gradient(135deg,#0b1728,#131b2e)" : getPastelGradient(t.name)
     const textColor = t.icon_url ? "#1c2a3f" : getTextColor(pastelBg)
+    const cardKey = `${t.type}:${t.name}`
+    const isScraping = !!cardScraping[cardKey]
     return (
       <div
         onClick={()=>navigate(detailPath)}
-        style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff0044":"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",opacity:t.enabled?1:0.6,transition:"all 0.2s",display:"flex",flexDirection:"column"}}
+        style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:t.status==="taken_down"?"1px solid #ff000044":t.status==="deleted"?"1px solid #ffff0044":isScraping?"1px solid #35c5f444":"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",opacity:t.enabled?1:0.6,transition:"all 0.2s",display:"flex",flexDirection:"column"}}
       >
         {/* Poster area */}
         <div style={{aspectRatio:"2/3",background:pastelBg,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
@@ -1760,6 +1800,19 @@ export default function App(){
             </div>
           )}
           {!t.enabled && <div style={{position:"absolute",top:"8px",left:"8px",padding:"2px 8px",borderRadius:"3px",fontSize:"9px",fontWeight:"700",background:"#333",color:"#888"}}>DISABLED</div>}
+          {/* Scraping spinner overlay */}
+          {isScraping && (
+            <div style={{position:"absolute",top:"8px",left:"8px",padding:"3px 8px",borderRadius:"3px",fontSize:"9px",fontWeight:"700",background:"rgba(53,197,244,0.15)",border:"1px solid #35c5f444",color:"#35c5f4",display:"flex",alignItems:"center",gap:"5px"}}>
+              <span style={{width:"6px",height:"6px",borderRadius:"50%",border:"1.5px solid #35c5f4",borderTopColor:"transparent",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>
+              QUEUED
+            </div>
+          )}
+          {/* Pending media indicator */}
+          {(t.pending_media||0) > 0 && !isScraping && (
+            <div style={{position:"absolute",top:"8px",left:"8px",padding:"2px 8px",borderRadius:"3px",fontSize:"9px",fontWeight:"700",background:"rgba(249,195,0,0.15)",border:"1px solid #f9c30044",color:"#f9c300"}}>
+              ↓ {t.pending_media}
+            </div>
+          )}
           {/* Media progress bar at bottom of poster */}
           <div style={{position:"absolute",bottom:0,left:0,right:0,height:"4px",background:"#0b1728"}}>
             <div style={{width:`${Math.min(100,mediaPct)}%`,height:"100%",background:mediaPct>=100?"#46d160":"linear-gradient(90deg,#35c5f4,#5fd4f8)",transition:"width 0.3s"}}/>
@@ -1784,13 +1837,19 @@ export default function App(){
     const mediaPct = t.total_media > 0 ? Math.round((t.downloaded_media / t.total_media) * 100) : 0
     const prefix = t.type==="subreddit"?"r/":"u/"
     const detailPath = t.type==="subreddit"?`/subreddits/${encodeURIComponent(t.name)}`:`/users/${encodeURIComponent(t.name)}`
+    const cardKey = `${t.type}:${t.name}`
+    const isScraping = !!cardScraping[cardKey]
     return (
       <tr onClick={()=>navigate(detailPath)} style={{cursor:"pointer",borderBottom:"1px solid #222",transition:"background 0.15s"}} onMouseEnter={e=>e.currentTarget.style.background="#161d2f"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
         <td style={{padding:"12px 16px"}}>
-          {t.enabled
-            ? <span style={{background:"#0d2818",color:"#46d160",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>● Active</span>
-            : <span style={{background:"#333",color:"#888",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>○ Off</span>}
-          {t.status !== "active" && <span style={{marginLeft:"6px",fontSize:"10px",color:t.status==="taken_down"?"#ff4444":"#ffff44"}}>{t.status}</span>}
+          <div style={{display:"flex",alignItems:"center",gap:"6px",flexWrap:"wrap"}}>
+            {t.enabled
+              ? <span style={{background:"#0d2818",color:"#46d160",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>● Active</span>
+              : <span style={{background:"#333",color:"#888",padding:"3px 8px",borderRadius:"3px",fontSize:"11px"}}>○ Off</span>}
+            {t.status !== "active" && <span style={{fontSize:"10px",color:t.status==="taken_down"?"#ff4444":"#ffff44"}}>{t.status}</span>}
+            {isScraping && <span style={{background:"rgba(53,197,244,0.15)",color:"#35c5f4",padding:"2px 7px",borderRadius:"3px",fontSize:"10px",display:"flex",alignItems:"center",gap:"4px"}}><span style={{width:"5px",height:"5px",borderRadius:"50%",border:"1.5px solid #35c5f4",borderTopColor:"transparent",display:"inline-block",animation:"spin 0.8s linear infinite"}}/>scraping</span>}
+            {(t.pending_media||0) > 0 && !isScraping && <span style={{color:"#f9c300",fontSize:"10px"}}>↓{t.pending_media}</span>}
+          </div>
         </td>
         <td style={{padding:"12px 16px",fontWeight:"600",color:"#f5f7fa"}}>{prefix}{t.name}</td>
         <td style={{padding:"12px 16px",fontVariantNumeric:"tabular-nums"}}>{t.post_count?.toLocaleString()}</td>
@@ -1920,10 +1979,11 @@ export default function App(){
               <button onClick={()=>navigate(targetDetailType==="subreddit"?"/subreddits":"/users")} style={{padding:"4px 8px",background:"transparent",border:"1px solid #333",borderRadius:"3px",color:"#5a7b9a",cursor:"pointer",fontSize:"16px",lineHeight:1}}>←</button>
             )}
             <h1 style={{margin:0,fontSize:"18px",fontWeight:"700",color:"#f5f7fa",letterSpacing:"-0.5px"}}>{pageTitle()}</h1>
-            {queueInfo && (
-              <div style={{fontSize:"12px",color:"#5a7b9a",display:"flex",alignItems:"center",gap:"6px"}}>
-                <span>Queue:</span>
-                <span style={{color:queueInfo.queue_length>0?"#f9c300":"#46d160",fontWeight:"600",fontVariantNumeric:"tabular-nums"}}>{(queueInfo.queue_length||0).toLocaleString()}</span>
+            {queueInfo && (queueInfo.queue_length||0) > 0 && (
+              <div style={{fontSize:"12px",display:"flex",alignItems:"center",gap:"6px"}}>
+                <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#f9c300",boxShadow:"0 0 6px #f9c300",animation:"pulse 1.5s ease-in-out infinite",display:"inline-block"}}/>
+                <span style={{color:"#f9c300",fontWeight:"600",fontVariantNumeric:"tabular-nums"}}>{(queueInfo.queue_length||0).toLocaleString()}</span>
+                <span style={{color:"#5a7b9a"}}>queued</span>
               </div>
             )}
           </div>
@@ -1937,6 +1997,17 @@ export default function App(){
             </div>
           </div>
         </header>
+        {/* Thin global progress bar — shows download completion beneath header */}
+        {adminData?.total_media > 0 && adminData?.downloaded_media < adminData?.total_media && (
+          <div style={{height:"2px",background:"#0b1728",position:"sticky",top:"50px",zIndex:89,overflow:"hidden"}}>
+            <div style={{
+              width:`${Math.min(100,Math.round((adminData.downloaded_media||0)/(adminData.total_media||1)*100))}%`,
+              height:"100%",
+              background:"linear-gradient(90deg,#35c5f4,#5fd4f8)",
+              transition:"width 1s"
+            }}/>
+          </div>
+        )}
 
         {/* ── SUBREDDITS / USERS INDEX PAGE ── */}
         {(activeTab === "subreddits" || activeTab === "users") && !targetDetailType && (()=>{
@@ -2352,6 +2423,40 @@ export default function App(){
               ))}
             </div>
 
+            {/* Global download progress bar */}
+            {(adminData.total_media||0) > 0 && (()=>{
+              const pct = Math.min(100,Math.round((adminData.downloaded_media||0)/(adminData.total_media||1)*100))
+              const done = adminData.downloaded_media||0
+              const total = adminData.total_media||0
+              const pending = adminData.pending_media||0
+              const isComplete = done >= total
+              return (
+                <div style={{background:"linear-gradient(145deg,#1e1e1e,#171717)",borderRadius:"3px",border:"1px solid #2a2a2a",padding:"16px",marginBottom:"24px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                      <span style={{fontSize:"12px",fontWeight:"600",color:"#c8d6e0"}}>Media Download Progress</span>
+                      {pending > 0 && (
+                        <span style={{display:"flex",alignItems:"center",gap:"5px",fontSize:"11px",color:"#f9c300"}}>
+                          <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#f9c300",boxShadow:"0 0 6px #f9c300",animation:"pulse 1.5s ease-in-out infinite",display:"inline-block"}}/>
+                          {pending.toLocaleString()} downloading
+                        </span>
+                      )}
+                    </div>
+                    <span style={{fontSize:"13px",fontWeight:"700",color:isComplete?"#46d160":"#35c5f4",fontVariantNumeric:"tabular-nums"}}>
+                      {done.toLocaleString()} / {total.toLocaleString()} <span style={{fontSize:"11px",color:"#5a7b9a"}}>({pct}%)</span>
+                    </span>
+                  </div>
+                  <div style={{background:"#0b1728",height:"10px",borderRadius:"5px",overflow:"hidden",position:"relative"}}>
+                    <div style={{width:`${pct}%`,height:"100%",background:isComplete?"#46d160":"linear-gradient(90deg,#35c5f4,#5fd4f8)",transition:"width 0.5s",borderRadius:"5px"}}/>
+                    {pending > 0 && pct < 100 && (
+                      <div style={{position:"absolute",right:0,top:0,height:"100%",width:"30px",background:"linear-gradient(90deg,transparent,rgba(249,195,0,0.15))",animation:"shimmer 1.5s ease-in-out infinite"}}/>
+                    )}
+                  </div>
+                  <style>{`@keyframes shimmer{0%,100%{opacity:0.3}50%{opacity:1}}`}</style>
+                </div>
+              )
+            })()}
+
             <PostsChart data={adminData.posts_per_day}/>
 
             {/* Health + Queue */}
@@ -2389,6 +2494,45 @@ export default function App(){
                   {archiveJob ? "⏳ Hiding…" : "📦 Hide All Posts"}
                 </button>
               </div>
+              {/* Archive job progress */}
+              {archiveJob && (()=>{
+                const pct = archiveJob.total>0?Math.round(archiveJob.done/archiveJob.total*100):0
+                return (
+                  <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #1a3a1a",padding:"14px",marginTop:"12px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:"8px"}}>
+                      <span style={{fontSize:"12px",color:"#46d160",display:"flex",alignItems:"center",gap:"6px"}}>
+                        <span style={{width:"8px",height:"8px",borderRadius:"50%",border:"2px solid #46d160",borderTopColor:"transparent",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+                        Archiving posts…
+                      </span>
+                      <span style={{fontSize:"12px",color:"#5a7b9a",fontVariantNumeric:"tabular-nums"}}>{archiveJob.done}/{archiveJob.total}</span>
+                    </div>
+                    <div style={{background:"#0b1728",height:"6px",borderRadius:"3px",overflow:"hidden"}}>
+                      <div style={{width:`${pct}%`,background:"linear-gradient(90deg,#46d160,#2ea84e)",height:"100%",transition:"width 0.4s"}}/>
+                    </div>
+                    {archiveJob.files_moved > 0 && <div style={{marginTop:"6px",fontSize:"11px",color:"#5a7b9a"}}>{archiveJob.files_moved} files moved</div>}
+                  </div>
+                )
+              })()}
+              {/* Backfill status */}
+              {backfillStatus && backfillStatus.status === "running" && (
+                <div style={{background:"#161d2f",borderRadius:"3px",border:"1px solid #1c2a3f",padding:"14px",marginTop:"12px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:"8px"}}>
+                    <span style={{fontSize:"12px",color:"#35c5f4",display:"flex",alignItems:"center",gap:"6px"}}>
+                      <span style={{width:"8px",height:"8px",borderRadius:"50%",border:"2px solid #35c5f4",borderTopColor:"transparent",display:"inline-block",animation:"spin 1s linear infinite"}}/>
+                      Backfill in progress
+                    </span>
+                    {backfillStatus.total > 0 && (
+                      <span style={{fontSize:"12px",color:"#5a7b9a",fontVariantNumeric:"tabular-nums"}}>{backfillStatus.processed||0}/{backfillStatus.total}</span>
+                    )}
+                  </div>
+                  {backfillStatus.total > 0 && (
+                    <div style={{background:"#0b1728",height:"6px",borderRadius:"3px",overflow:"hidden"}}>
+                      <div style={{width:`${Math.min(100,Math.round(((backfillStatus.processed||0)/backfillStatus.total)*100))}%`,background:"linear-gradient(90deg,#35c5f4,#5fd4f8)",height:"100%",transition:"width 0.4s"}}/>
+                    </div>
+                  )}
+                  {backfillStatus.current_target && <div style={{marginTop:"6px",fontSize:"11px",color:"#5a7b9a"}}>Current: {backfillStatus.current_target}</div>}
+                </div>
+              )}
             </div>
 
             {/* Thumbnail section */}
@@ -2666,6 +2810,65 @@ export default function App(){
           </div>
         </div>
       )}
+
+      {/* ── LOGS TAB ── */}
+      {activeTab === "logs" && !isReadOnly && (() => {
+        const LEVEL_COLOR = { DEBUG:"#5a7b9a", INFO:"#46d160", WARNING:"#f9c300", ERROR:"#ff6666", CRITICAL:"#ff2222" }
+        const SOURCE_COLOR = { api:"#35c5f4", worker:"#a855f7", beat:"#f97316" }
+        const sources = ["all","api","worker","beat"]
+        const levels = ["all","DEBUG","INFO","WARNING","ERROR","CRITICAL"]
+        const filtered = logEntries.filter(e =>
+          (logFilter.source === "all" || e.source === logFilter.source) &&
+          (logFilter.level === "all" || e.level === logFilter.level)
+        )
+        return (
+          <div style={{padding:"24px",maxWidth:"1600px",margin:"0 auto"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"16px",flexWrap:"wrap",gap:"12px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:"12px"}}>
+                <div style={{width:"4px",height:"24px",background:"linear-gradient(180deg,#f97316,#ea580c)",borderRadius:"2px"}}/>
+                <h2 style={{margin:0,fontSize:"20px",fontWeight:"600"}}>Live Logs</h2>
+                <div style={{width:"6px",height:"6px",borderRadius:"50%",background:logEsRef.current?"#46d160":"#3a5068",boxShadow:logEsRef.current?"0 0 6px #46d160":"none"}}/>
+              </div>
+              <div style={{display:"flex",gap:"8px",flexWrap:"wrap",alignItems:"center"}}>
+                <select value={logFilter.source} onChange={e=>setLogFilter(f=>({...f,source:e.target.value}))}
+                  style={{padding:"6px 10px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#c8d6e0",fontSize:"12px"}}>
+                  {sources.map(s=><option key={s} value={s}>{s === "all" ? "All containers" : s}</option>)}
+                </select>
+                <select value={logFilter.level} onChange={e=>setLogFilter(f=>({...f,level:e.target.value}))}
+                  style={{padding:"6px 10px",background:"#131b2e",border:"1px solid #2a2a2a",borderRadius:"3px",color:"#c8d6e0",fontSize:"12px"}}>
+                  {levels.map(l=><option key={l} value={l}>{l === "all" ? "All levels" : l}</option>)}
+                </select>
+                <button onClick={()=>setLogEntries([])} style={{padding:"6px 12px",background:"#2a0000",border:"1px solid #440000",borderRadius:"3px",color:"#ff6666",fontSize:"12px",cursor:"pointer"}}>Clear</button>
+                <button onMouseEnter={()=>{logPausedRef.current=true}} onMouseLeave={()=>{logPausedRef.current=false}}
+                  style={{padding:"6px 12px",background:"#1c2a3f",border:"1px solid #2a4060",borderRadius:"3px",color:"#5a7b9a",fontSize:"12px",cursor:"pointer"}}>
+                  Hold to Pause
+                </button>
+              </div>
+            </div>
+
+            <div style={{background:"#0a0e1a",borderRadius:"3px",border:"1px solid #1c2a3f",height:"calc(100vh - 200px)",overflowY:"auto",fontFamily:"'JetBrains Mono','Fira Code','Cascadia Code',monospace",fontSize:"12px",lineHeight:"1.6",padding:"12px"}}
+              onScroll={e=>{
+                const el = e.currentTarget
+                const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+                logPausedRef.current = !atBottom
+              }}>
+              {filtered.length === 0 && (
+                <div style={{color:"#3a5068",textAlign:"center",padding:"40px"}}>No log entries yet — logs appear here as tasks run.</div>
+              )}
+              {filtered.map((e,i) => (
+                <div key={i} style={{display:"flex",gap:"10px",padding:"2px 0",borderBottom:"1px solid #0d1220"}}>
+                  <span style={{color:"#3a5068",flexShrink:0,userSelect:"none"}}>{new Date(e.ts*1000).toLocaleTimeString()}</span>
+                  <span style={{background:SOURCE_COLOR[e.source]||"#5a7b9a",color:"#000",padding:"0 5px",borderRadius:"2px",fontSize:"10px",fontWeight:"700",flexShrink:0,alignSelf:"center",minWidth:"44px",textAlign:"center"}}>{e.source}</span>
+                  <span style={{color:LEVEL_COLOR[e.level]||"#c8d6e0",flexShrink:0,minWidth:"58px"}}>{e.level}</span>
+                  <span style={{color:"#5a7b9a",flexShrink:0,maxWidth:"180px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.logger}</span>
+                  <span style={{color:e.level==="ERROR"||e.level==="CRITICAL"?"#ff9999":e.level==="WARNING"?"#ffd066":"#c8d6e0",wordBreak:"break-all"}}>{e.msg}</span>
+                </div>
+              ))}
+              <div ref={logBottomRef}/>
+            </div>
+          </div>
+        )
+      })()}
 
        {/* ── BACKUP TAB (Admin Only) ── */}
       {activeTab === "backup" && !isReadOnly && (

@@ -112,6 +112,14 @@ def _run_startup():
     # Initialize database
     init_engine()
 
+    # Install Redis log handler so all API logs appear in the live log stream
+    try:
+        from reddarr.log_stream import install as install_log_stream
+        install_log_stream(settings.redis_url)
+        logger.info("Redis log stream handler installed (role: api)")
+    except Exception as e:
+        logger.warning(f"Could not install Redis log handler: {e}")
+
     # Note: Migrations are run by docker-compose before starting the app
     # to avoid race conditions with multiple replicas
 

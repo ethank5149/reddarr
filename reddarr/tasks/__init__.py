@@ -41,6 +41,9 @@ app.config_from_object(
         "worker_prefetch_multiplier": 1,
         # Result expiry (24h)
         "result_expires": 86400,
+        # Task time limits — prevents PRAW/network hangs from blocking workers forever
+        "task_soft_time_limit": 600,   # 10 min: raises SoftTimeLimitExceeded
+        "task_time_limit": 660,        # 11 min: hard kill
         # Beat schedule - replaces the old poll loop in ingester
         "beat_schedule": {
             "ingest-cycle": {
@@ -58,6 +61,18 @@ app.config_from_object(
         },
     }
 )
+
+# Install Redis log handler when a worker process starts
+from celery.signals import worker_process_init
+
+@worker_process_init.connect
+def _install_log_stream(sender=None, **kwargs):
+    try:
+        from reddarr.log_stream import install as install_log_stream
+        install_log_stream(settings.celery_broker_url)
+    except Exception:
+        pass
+
 
 # Auto-discover tasks in all reddarr.tasks.* modules
 app.autodiscover_tasks(["reddarr.tasks"])
