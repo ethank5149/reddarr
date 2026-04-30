@@ -113,6 +113,62 @@ def _get_redgifs_token() -> Optional[str]:
     return None
 
 
+def extract_media_urls(post) -> list:
+    """Extract all downloadable media URLs from a PRAW submission.
+
+    Handles direct images, Reddit galleries, Reddit-hosted videos,
+    and third-party hosts (imgur, redgifs, etc.).
+
+    Args:
+        post: A PRAW Submission object.
+
+    Returns:
+        List of URL strings. May be empty for text/link posts with no media.
+    """
+    urls = []
+
+    # Reddit galleries (multiple images in one post)
+    if getattr(post, "is_gallery", False) and hasattr(post, "gallery_data"):
+        try:
+            media_metadata = getattr(post, "media_metadata", {}) or {}
+            for item in post.gallery_data.get("items", []):
+                media_id = item.get("media_id")
+                if not media_id:
+                    continue
+                meta = media_metadata.get(media_id, {})
+                # Prefer the source image; fall back to largest preview
+                source = meta.get("s", {})
+                url = source.get("u") or source.get("gif")
+                if url:
+                    urls.append(url.replace("&amp;", "&"))
+        except Exception as e:
+            logger.warning(f"Gallery extraction failed for {post.id}: {e}")
+        return urls
+
+    # Reddit-hosted video (v.redd.it)
+    if getattr(post, "is_video", False):
+        try:
+            media = getattr(post, "media", None) or {}
+            reddit_video = media.get("reddit_video", {})
+            video_url = reddit_video.get("fallback_url") or reddit_video.get("hls_url")
+            if video_url:
+                urls.append(video_url)
+                return urls
+        except Exception as e:
+            logger.warning(f"Reddit video extraction failed for {post.id}: {e}")
+
+    # Direct URL or supported third-party host
+    url = getattr(post, "url", None)
+    if url and is_direct_media_url(url):
+        urls.append(url)
+    elif url:
+        domain = urlparse(url).netloc.lower()
+        if domain in PROVIDER_DOMAINS:
+            urls.append(url)
+
+    return urls
+
+
 def classify_url(url: str) -> str:
     """Classify a URL into a provider type.
 

@@ -173,29 +173,29 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
             if t.type == "subreddit":
                 post_stats = db.query(
                     func.count(Post.id),
-                    func.sum(case([(Post.created_utc >= seven_days_ago, 1)], else_=0))
+                    func.sum(case((Post.created_utc >= seven_days_ago, 1), else_=0))
                 ).filter(func.lower(Post.subreddit) == name_lower).first()
                 post_count, posts_7d = post_stats or (0, 0)
 
                 # Media stats with join
                 media_stats = db.query(
                     func.count(Media.id),
-                    func.sum(case([(Media.status == "done", 1)], else_=0)),
-                    func.sum(case([(Media.status == "pending", 1)], else_=0))
+                    func.sum(case((Media.status == "done", 1), else_=0)),
+                    func.sum(case((Media.status == "pending", 1), else_=0))
                 ).join(Post).filter(
                     func.lower(Post.subreddit) == name_lower
                 ).first()
             else:  # user
                 post_stats = db.query(
                     func.count(Post.id),
-                    func.sum(case([(Post.created_utc >= seven_days_ago, 1)], else_=0))
+                    func.sum(case((Post.created_utc >= seven_days_ago, 1), else_=0))
                 ).filter(func.lower(Post.author) == name_lower).first()
                 post_count, posts_7d = post_stats or (0, 0)
 
                 media_stats = db.query(
                     func.count(Media.id),
-                    func.sum(case([(Media.status == "done", 1)], else_=0)),
-                    func.sum(case([(Media.status == "pending", 1)], else_=0))
+                    func.sum(case((Media.status == "done", 1), else_=0)),
+                    func.sum(case((Media.status == "pending", 1), else_=0))
                 ).join(Post).filter(
                     func.lower(Post.author) == name_lower
                 ).first()
