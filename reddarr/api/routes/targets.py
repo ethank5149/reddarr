@@ -268,14 +268,86 @@ def audit_target(
     }
 
 
+@router.get("/target/{target_type}/{target_name}/failures")
+def target_failures(
+    target_type: str,
+    target_name: str,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Get failed/errored media downloads for a specific target.
+
+    Returns separate lists for media download failures and (a placeholder
+    for) scrape failures so the frontend panel renders correctly.
+    """
+    if target_type == "subreddit":
+        post_filter = func.lower(Post.subreddit) == target_name.lower()
+    else:
+        post_filter = func.lower(Post.author) == target_name.lower()
+
+    failed_rows = (
+        db.query(Media)
+        .join(Post, Media.post_id == Post.id)
+        .filter(post_filter, Media.status == "failed")
+        .order_by(Media.downloaded_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    failures = [
+        {
+            "id": m.id,
+            "post_id": m.post_id,
+            "url": m.url,
+            "status": m.status,
+            "error_message": m.error_message,
+            "retries": m.retries or 0,
+            "created_at": m.downloaded_at.isoformat() if m.downloaded_at else None,
+        }
+        for m in failed_rows
+    ]
+
+    return {"failures": failures, "scrape_failures": []}
+
+
 @router.post("/target/{target_type}/{target_name}/rescrape")
 def rescrape_target(
     target_type: str,
     target_name: str,
     db: Session = Depends(get_db),
 ):
-    """Rescrape a target - re-download all media for posts."""
-    from reddarr.tasks.ingest import trigger_backfill
+    """Re-queue failed media downloads for a target.
 
-    task = trigger_backfill.delay(target_type, target_name, sort="new", passes=1)
-    return {"status": "queued", "task_id": task.id}
+    Finds all Media records with status='failed' belonging to this target,
+    resets them to 'pending', and dispatches a download task for each.
+    Returns the number of items requeued so the frontend toast is correct.
+    """
+    from reddarr.tasks.download import download_media_item
+
+    if target_type == "subreddit":
+        post_filter = func.lower(Post.subreddit) == target_name.lower()
+    else:
+        post_filter = func.lower(Post.author) == target_name.lower()
+
+    failed_media = (
+        db.query(Media)
+        .join(Post, Media.post_id == Post.id)
+        .filter(post_filter, Media.status == "failed")
+        .all()
+    )
+
+    # Reset all statuses first, then commit, then enqueue.
+    # This ensures workers see the 'pending' state before tasks arrive and
+    # prevents orphaned tasks if the commit fails.
+    count = len(failed_media)
+    for m in failed_media:
+        m.status = "pending"
+        m.error_message = None
+
+    db.commit()
+
+    for m in failed_media:
+        download_media_item.delay(m.post_id, m.url)
+
+    logger.info(f"Requeued {count} failed downloads for {target_type}:{target_name}")
+    return {"requeued": count, "status": "queued"}

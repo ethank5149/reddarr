@@ -390,6 +390,21 @@ export default function App(){
   function toastSuccess(msg) { showToast(msg, 'success') }
   function toastError(msg) { showToast(msg, 'error') }
 
+  // Broken-image placeholder: replace a failed img with an inline SVG so the
+  // card layout is preserved instead of collapsing into an empty gap.
+  const handleMediaError = (e) => {
+    e.target.onerror = null  // prevent infinite retry loop
+    e.target.style.display = "none"
+    const wrapper = e.target.parentElement
+    if(wrapper && !wrapper.querySelector(".broken-img-placeholder")){
+      const ph = document.createElement("div")
+      ph.className = "broken-img-placeholder"
+      ph.style.cssText = "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0d1117,#161d2f)"
+      ph.innerHTML = '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#3a5068" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/><line x1="1" y1="1" x2="23" y2="23" stroke="#2a3a4a" stroke-width="1"/></svg><span style="font-size:10px;color:#3a5068;letter-spacing:0.5px">MISSING</span>'
+      wrapper.appendChild(ph)
+    }
+  }
+
   // Thumbnail utility state
   const [thumbStats, setThumbStats] = useState(null)
   const [thumbJob, setThumbJob] = useState(null)
@@ -537,18 +552,9 @@ export default function App(){
     if(activeTab === "backup" && !isReadOnly){
       loadBackupStats()
       loadBackupList()
-      // Poll for integrity result
-      const integrityPoll = setInterval(()=>{
-        axios.get("/api/admin/backup/integrity-result")
-          .then(r=>{
-            if(r.data && r.data.status !== "pending"){
-              setIntegrityReport(r.data)
-            }
-          })
-          .catch(()=>{})
-      }, 3000)
+      // Note: integrity result is polled inside runIntegrityCheck() itself;
+      // no always-on interval needed here.
       loadAuditStatsData()
-      return ()=>clearInterval(integrityPoll)
     }
     if(activeTab === "wanted"){
       loadAuditSummary()
@@ -633,14 +639,33 @@ export default function App(){
     return ()=> obs.disconnect()
   },[targetPostsLoader.current, targetDetailType, targetDetailName, targetPostsLoading])
 
-  // Poll for new target posts every 10s
+  // Smart-merge poll for new target posts every 60s.
+  // Does NOT reset the list — only prepends genuinely new items so the
+  // user's scroll position and loaded pages are preserved.
+  function pollTargetPostsIncremental(ttype, name){
+    const filterKey = ttype === "subreddit" ? "subreddit" : "author"
+    const params = new URLSearchParams({limit:"10", offset:"0", _t: Date.now().toString()})
+    params.set(filterKey, name)
+    params.set("sort_by","ingested_at")
+    params.set("sort_order","desc")
+    axios.get(`/api/posts?${params.toString()}`)
+      .then(r=>{
+        const latest = r.data.posts?.map(mapPost) || []
+        setTargetPosts(prev => {
+          if(prev.length === 0) return latest
+          const existingIds = new Set(prev.map(p => p.id))
+          const trulyNew = latest.filter(p => !existingIds.has(p.id))
+          return trulyNew.length > 0 ? [...trulyNew, ...prev] : prev
+        })
+      })
+      .catch(()=>{})
+  }
+
   useEffect(()=>{
     if(!targetDetailType || !targetDetailName) return
-    console.log("Starting target posts poll for", targetDetailType, targetDetailName)
     const poll = setInterval(()=>{
-      console.log("Polling target posts for", targetDetailName)
-      loadTargetPosts(targetDetailType, targetDetailName, 0)
-    }, 10000)
+      pollTargetPostsIncremental(targetDetailType, targetDetailName)
+    }, 60000)
     return ()=> clearInterval(poll)
   },[targetDetailType, targetDetailName])
 
@@ -945,24 +970,22 @@ export default function App(){
     }
   }
 
-  async function addTarget(){
+  function addTarget(){
     if(!apiKey) return
     const name = addTargetName.trim()
     if(!name) return
-    try {
-      const resp = await fetch('/internal/add-target', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({type: addTargetType, name, api_key: apiKey.trim()})
-      })
-      if(resp.ok){
-        setAddTargetName(""); toastSuccess(`Added ${addTargetType}: ${name}`); loadAdmin()
-      } else {
-        toastError("Failed to add target")
-      }
-    } catch {
-      toastError("Failed to add target")
-    }
+    axios.post('/api/admin/targets',
+      {type: addTargetType, name, enabled: true},
+      {headers: {'X-Api-Key': apiKey.trim()}}
+    )
+    .then(()=>{
+      setAddTargetName("")
+      toastSuccess(`Added ${addTargetType}: ${name}`)
+      loadAdmin()
+    })
+    .catch(err=>{
+      toastError(err.response?.data?.detail || "Failed to add target")
+    })
   }
 
   function toggleCardExpand(ttype, name){
@@ -1023,11 +1046,12 @@ export default function App(){
     setCardScraping(prev => ({...prev, [key]: true}))
     axios.post(`/api/admin/target/${ttype}/${encodeURIComponent(name)}/rescrape`, null, {headers:{"X-Api-Key":apiKey.trim()}})
       .then(r => {
-        toastSuccess(`Requeued ${r.data.requeued} missing items for ${name}`)
+        const n = r.data.requeued ?? 0
+        toastSuccess(n > 0 ? `Requeued ${n} failed download${n !== 1 ? "s" : ""} for ${name}` : `No failed downloads to retry for ${name}`)
         setTimeout(() => setCardScraping(prev => ({...prev, [key]: false})), 3000)
       })
       .catch(() => {
-        toastError(`Failed to rescrape missing items for ${name}`)
+        toastError(`Failed to retry downloads for ${name}`)
         setCardScraping(prev => ({...prev, [key]: false}))
       })
   }
@@ -1596,7 +1620,7 @@ export default function App(){
               <video src={p.video_url} autoPlay muted loop playsInline style={{width:"100%",height:"100%",objectFit:"cover"}}/>
             ) : (
               <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#111 0%,#1a1a1a 100%)",position:"relative"}}>
-                {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} alt="" loading="lazy" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}} onError={e=>e.target.style.display="none"}/>}
+                {(p.thumb_url||p.preview_url) && <img src={p.thumb_url||p.preview_url} alt="" loading="lazy" decoding="async" style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",opacity:0.7}} onError={handleMediaError}/>}
                 <div style={{position:"relative",zIndex:1,width:"64px",height:"64px",borderRadius:"50%",background:"rgba(0,0,0,0.55)",border:"2px solid rgba(255,69,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",transition:"transform 0.2s",transform:hoveredCard===p.id?"scale(1.1)":"scale(1)",backdropFilter:"blur(2px)"}}>
                   <div style={{width:0,height:0,borderTop:"12px solid transparent",borderBottom:"12px solid transparent",borderLeft:"20px solid #35c5f4",marginLeft:"4px"}}/>
                 </div>
@@ -1612,7 +1636,7 @@ export default function App(){
           </div>
         ) : (p.url || p.image_urls?.[0]) ? (
           <div style={{aspectRatio:"1",background:"#131b2e",position:"relative",overflow:"hidden"}}>
-            <img src={p.url||p.image_urls?.[0]} alt={p.title} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:isArchive?0.85:1}} onError={e=>e.target.style.display="none"}/>
+            <img src={p.url||p.image_urls?.[0]} alt={p.title} loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",opacity:isArchive?0.85:1}} onError={handleMediaError}/>
             {p.image_urls?.length > 1 && (
               <div style={{position:"absolute",top:"10px",right:"10px",background:"rgba(0,0,0,0.75)",backdropFilter:"blur(4px)",borderRadius:"3px",padding:"4px 10px",fontSize:"11px",fontWeight:"600",color:"#f5f7fa"}}>1/{p.image_urls.length}</div>
             )}
@@ -1679,7 +1703,7 @@ export default function App(){
         {/* Poster area */}
         <div style={{aspectRatio:"2/3",background:pastelBg,display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
           {t.icon_url ? (
-            <img src={t.icon_url} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.style.display="none";e.target.nextSibling.style.display="flex"}}/>
+            <img src={t.icon_url} alt="" loading="lazy" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.onerror=null;e.target.style.display="none";const sib=e.target.nextSibling;if(sib)sib.style.display="flex"}}/>
           ) : null}
           <div style={{fontSize:"48px",fontWeight:"900",color:textColor,letterSpacing:"-2px",display:t.icon_url?"none":"flex",alignItems:"center",justifyContent:"center",position:"absolute",inset:0}}>{prefix}{t.name.slice(0,2).toUpperCase()}</div>
           {/* Status badge */}

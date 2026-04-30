@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -82,6 +83,10 @@ async def event_stream(request: Request):
     polling loop that queries the DB every 5 seconds.
 
     The frontend connects to this and updates dashboard stats in real-time.
+
+    Key design: `since` is tracked per-connection so new_posts / new_media
+    only contain items that arrived *after* the previous SSE cycle.  This
+    prevents the frontend from calling refreshPosts() on every tick.
     """
 
     async def generate():
@@ -89,13 +94,20 @@ async def event_stream(request: Request):
 
         init_engine()
 
+        # Track the watermark so we only surface genuinely new data.
+        # Initialise to "now" so the very first message has empty
+        # new_posts / new_media and doesn't trigger a spurious refresh.
+        last_check = datetime.now(timezone.utc)
+
         while True:
             # Check if client disconnected
             if await request.is_disconnected():
                 break
 
             try:
-                data = _build_sse_payload()
+                now = datetime.now(timezone.utc)
+                data = _build_sse_payload(since=last_check)
+                last_check = now
                 yield f"data: {json.dumps(data)}\n\n"
             except Exception as e:
                 logger.warning(f"SSE error: {e}")
@@ -114,17 +126,22 @@ async def event_stream(request: Request):
     )
 
 
-def _build_sse_payload() -> dict:
+def _build_sse_payload(since: Optional[datetime] = None) -> dict:
     """Build the SSE payload with current stats.
 
-    This is the simplified version of the old _run_sse_polling_loop()
-    that ran in a background thread with a global cache.
+    Args:
+        since: If provided, new_posts and new_media are filtered to only
+               items ingested/downloaded after this timestamp.  Pass the
+               timestamp of the *previous* SSE cycle so the frontend only
+               sees genuinely new activity and doesn't call refreshPosts()
+               on every tick.
 
     Includes:
     - Overall stats (posts, comments, media)
+    - queue_length (pending download count) for the sidebar indicator
+    - health (quick db status)
     - Target summaries with post counts and media counts
-    - Recent posts list (new since last check)
-    - Recent media downloads list
+    - new_posts / new_media — only items newer than `since`
     - Per-target detailed stats (rate, ETA, progress_percent)
     """
     from reddarr.database import init_engine
@@ -231,14 +248,15 @@ def _build_sse_payload() -> dict:
                 }
             )
 
-        # Recent posts (last 20)
-        recent_posts = (
+        # New posts since the last SSE cycle (or last 20 if no watermark)
+        new_posts_q = (
             db.query(Post)
             .filter(Post.hidden.is_(False))
             .order_by(Post.ingested_at.desc())
             .limit(20)
-            .all()
         )
+        if since is not None:
+            new_posts_q = new_posts_q.filter(Post.ingested_at > since)
         new_posts = [
             {
                 "id": p.id,
@@ -247,17 +265,18 @@ def _build_sse_payload() -> dict:
                 "author": p.author,
                 "created_utc": p.created_utc.isoformat() if p.created_utc else None,
             }
-            for p in recent_posts
+            for p in new_posts_q.all()
         ]
 
-        # Recent media downloads (last 20)
-        recent_media = (
+        # New media downloads since the last SSE cycle
+        new_media_q = (
             db.query(Media)
             .filter(Media.status == "done")
             .order_by(Media.downloaded_at.desc())
             .limit(20)
-            .all()
         )
+        if since is not None:
+            new_media_q = new_media_q.filter(Media.downloaded_at > since)
         new_media = [
             {
                 "id": m.id,
@@ -266,8 +285,18 @@ def _build_sse_payload() -> dict:
                 "file_path": m.file_path,
                 "downloaded_at": m.downloaded_at.isoformat() if m.downloaded_at else None,
             }
-            for m in recent_media
+            for m in new_media_q.all()
         ]
+
+    # Quick health check (no extra DB connection needed — engine already init'd)
+    health = {"db": "ok"}
+    try:
+        from reddarr.database import _engine
+        from sqlalchemy import text as _text
+        with _engine.connect() as _conn:
+            _conn.execute(_text("SELECT 1"))
+    except Exception:
+        health["db"] = "error"
 
     return {
         # Flat fields for frontend SSE handler
@@ -277,6 +306,9 @@ def _build_sse_payload() -> dict:
         "downloaded_media": dl_media,
         "pending_media": pending_media,
         "total_media": total_media,
+        # queue_length mirrors pending_media so the sidebar indicator works
+        "queue_length": pending_media,
+        "health": health,
         # Nested stats kept for API consumers
         "stats": {
             "total_posts": total_posts,
