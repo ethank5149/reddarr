@@ -1128,7 +1128,7 @@ export default function App(){
   }
 
   function loadDbBackups(){
-    axios.get("/api/admin/db/backups").then(r=>setDbBackups(r.data||[])).catch(()=>setDbBackups([]))
+    axios.get("/api/admin/db/backups").then(r=>setDbBackups(r.data?.backups||[])).catch(()=>setDbBackups([]))
   }
 
   // Backup tab functions
