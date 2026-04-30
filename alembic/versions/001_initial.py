@@ -54,7 +54,7 @@ def upgrade() -> None:
             url TEXT,
             media_url TEXT,
             raw JSONB,
-            tsv TEXT,
+            tsv TSVECTOR,
             ingested_at TIMESTAMP DEFAULT now(),
             hidden BOOLEAN DEFAULT false,
             hidden_at TIMESTAMP
@@ -71,7 +71,7 @@ def upgrade() -> None:
             body TEXT,
             created_utc TIMESTAMP,
             raw JSONB,
-            tsv TEXT
+            tsv TSVECTOR
         )
         """
     )

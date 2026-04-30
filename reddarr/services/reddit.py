@@ -14,17 +14,19 @@ from reddarr.services.media import extract_media_urls
 
 logger = logging.getLogger(__name__)
 
-_reddit_client: Optional[praw.Reddit] = None
+import threading
+
+_thread_local = threading.local()
 
 
 def create_reddit_client() -> praw.Reddit:
-    """Create or return a cached PRAW Reddit client.
+    """Create or return a thread-local PRAW Reddit client.
 
-    Uses read-only OAuth (no user login required).
+    PRAW is not thread-safe, so we use thread-local storage to ensure
+    each thread/worker gets its own client instance.
     """
-    global _reddit_client
-    if _reddit_client is not None:
-        return _reddit_client
+    if hasattr(_thread_local, 'reddit_client') and _thread_local.reddit_client is not None:
+        return _thread_local.reddit_client
 
     settings = get_settings()
 
@@ -34,13 +36,13 @@ def create_reddit_client() -> praw.Reddit:
             "Set reddit_client_id and reddit_client_secret secrets."
         )
 
-    _reddit_client = praw.Reddit(
+    _thread_local.reddit_client = praw.Reddit(
         client_id=settings.reddit_client_id,
         client_secret=settings.reddit_client_secret,
         user_agent=settings.reddit_user_agent,
     )
-    logger.info("Reddit client initialized (read-only)")
-    return _reddit_client
+    logger.info("Reddit client initialized (read-only, thread-local)")
+    return _thread_local.reddit_client
 
 
 def fetch_posts(

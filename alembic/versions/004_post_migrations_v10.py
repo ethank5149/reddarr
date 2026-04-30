@@ -55,16 +55,12 @@ def upgrade() -> None:
     )
 
     # Additional performance indexes (v9 patterns)
-    op.create_index("idx_media_status", "media", ["status"])
-    op.create_index(
-        "idx_posts_subreddit_created",
-        "posts",
-        [sa.text("subreddit"), sa.text("created_utc DESC")],
+    op.execute("CREATE INDEX IF NOT EXISTS idx_media_status ON media (status)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_subreddit_created ON posts (subreddit, created_utc DESC)"
     )
-    op.create_index(
-        "idx_posts_author_created",
-        "posts",
-        [sa.text("author"), sa.text("created_utc DESC")],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts (author, created_utc DESC)"
     )
 
     # Ensure posts has ingested_at for tracking when posts were downloaded

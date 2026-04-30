@@ -145,6 +145,7 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
     - Per-target detailed stats (rate, ETA, progress_percent)
     """
     from reddarr.database import init_engine
+    from sqlalchemy import text
 
     init_engine()
     SessionLocal = _get_session_local()
@@ -160,73 +161,61 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
         )
         total_media = db.query(func.count(Media.id)).scalar() or 0
 
-        # Target summaries with detailed stats
+        # Target summaries with detailed stats - optimized queries
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
         targets = db.query(Target).order_by(Target.type, Target.name).all()
+
         target_list = []
         for t in targets:
+            name_lower = t.name.lower()
+
+            # Post counts in a single query per target type
             if t.type == "subreddit":
-                post_count = (
-                    db.query(func.count(Post.id))
-                    .filter(func.lower(Post.subreddit) == t.name.lower())
-                    .scalar()
-                    or 0
-                )
-                # Posts in last 7 days for rate calculation
-                from datetime import timedelta
+                post_stats = db.query(
+                    func.count(Post.id),
+                    func.count(func.case((Post.created_utc >= seven_days_ago, Post.id)))
+                ).filter(func.lower(Post.subreddit) == name_lower).first()
+                post_count, posts_7d = post_stats or (0, 0)
 
-                seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-                posts_7d = (
-                    db.query(func.count(Post.id))
-                    .filter(func.lower(Post.subreddit) == t.name.lower())
-                    .filter(Post.created_utc >= seven_days_ago)
-                    .scalar()
-                    or 0
-                )
-            else:
-                post_count = (
-                    db.query(func.count(Post.id))
-                    .filter(func.lower(Post.author) == t.name.lower())
-                    .scalar()
-                    or 0
-                )
-                seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-                posts_7d = (
-                    db.query(func.count(Post.id))
-                    .filter(func.lower(Post.author) == t.name.lower())
-                    .filter(Post.created_utc >= seven_days_ago)
-                    .scalar()
-                    or 0
-                )
+                # Media stats with join
+                media_stats = db.query(
+                    func.count(Media.id),
+                    func.sum(func.case((Media.status == "done", 1), else_=0)),
+                    func.sum(func.case((Media.status == "pending", 1), else_=0))
+                ).join(Post).filter(
+                    func.lower(Post.subreddit) == name_lower
+                ).first()
+            else:  # user
+                post_stats = db.query(
+                    func.count(Post.id),
+                    func.count(func.case((Post.created_utc >= seven_days_ago, Post.id)))
+                ).filter(func.lower(Post.author) == name_lower).first()
+                post_count, posts_7d = post_stats or (0, 0)
 
-            # Media counts per target
-            if t.type == "subreddit":
-                total_media_q = (
-                    db.query(func.count(Media.id))
-                    .join(Post)
-                    .filter(func.lower(Post.subreddit) == t.name.lower())
-                )
-                downloaded_media_q = total_media_q.filter(Media.status == "done")
-                pending_media_q = total_media_q.filter(Media.status == "pending")
-            else:
-                total_media_q = (
-                    db.query(func.count(Media.id))
-                    .join(Post)
-                    .filter(func.lower(Post.author) == t.name.lower())
-                )
-                downloaded_media_q = total_media_q.filter(Media.status == "done")
-                pending_media_q = total_media_q.filter(Media.status == "pending")
+                media_stats = db.query(
+                    func.count(Media.id),
+                    func.sum(func.case((Media.status == "done", 1), else_=0)),
+                    func.sum(func.case((Media.status == "pending", 1), else_=0))
+                ).join(Post).filter(
+                    func.lower(Post.author) == name_lower
+                ).first()
 
-            tot_media = total_media_q.scalar() or 0
-            dl_media_cnt = downloaded_media_q.scalar() or 0
-            pend_media_cnt = pending_media_q.scalar() or 0
+            tot_media, dl_media_cnt, pend_media_cnt = media_stats or (0, 0, 0)
 
             # Calculate rate and ETA
             rate = posts_7d / (7 * 86400) if posts_7d > 0 else 0
             eta_seconds = None
-            if rate > 0:
-                remaining = max(0, 1000 - post_count)
-                if remaining > 0:
-                    eta_seconds = remaining / rate
+            progress_percent = 0
+
+            # Progress calculation: if we have recent activity, assume we're actively archiving
+            # Otherwise, show 100% if we have posts, 0% if none
+            if posts_7d > 0:
+                # Active target - show based on recent rate (not meaningful to calculate "completion")
+                progress_percent = 50  # Indeterminate but active
+            elif post_count > 0:
+                progress_percent = 100  # Has posts but no recent activity
+            else:
+                progress_percent = 0    # No posts yet
 
             target_list.append(
                 {
@@ -242,9 +231,7 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
                     "pending_media": pend_media_cnt,
                     "rate_per_second": round(rate, 4),
                     "eta_seconds": round(eta_seconds, 0) if eta_seconds else None,
-                    "progress_percent": min(100, round(post_count / 10, 1))
-                    if post_count > 0
-                    else 0,
+                    "progress_percent": progress_percent,
                 }
             )
 
@@ -288,13 +275,11 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
             for m in new_media_q.all()
         ]
 
-    # Quick health check (no extra DB connection needed — engine already init'd)
+    # Quick health check using the existing session
     health = {"db": "ok"}
     try:
-        from reddarr.database import _engine
-        from sqlalchemy import text as _text
-        with _engine.connect() as _conn:
-            _conn.execute(_text("SELECT 1"))
+        # Reuse the existing db session from the _build_sse_payload context
+        db.execute(text("SELECT 1"))
     except Exception:
         health["db"] = "error"
 

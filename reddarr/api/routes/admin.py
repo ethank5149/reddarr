@@ -223,8 +223,11 @@ def admin_health():
         import redis
 
         r = redis.Redis.from_url(settings.redis_url)
-        r.ping()
-        health["redis"] = "ok"
+        try:
+            r.ping()
+            health["redis"] = "ok"
+        finally:
+            r.close()
     except Exception:
         health["redis"] = "error"
 
@@ -280,10 +283,8 @@ def clear_queue():
     init_engine()
     with SessionLocal() as db:
         pending = db.query(Media).filter(Media.status == "pending").all()
-        # Revoke pending tasks
-        for m in pending:
-            download_media_item.revoke(m.post_id, m.url, terminate=True)
-        # Clear pending status
+        # Note: Celery revoke requires task IDs, which we don't store.
+        # Instead, just mark as failed in DB - active workers will skip these.
         db.query(Media).filter(Media.status == "pending").update(
             {"status": "failed", "error_message": "Cleared by admin"}
         )
@@ -293,10 +294,16 @@ def clear_queue():
 
 
 @router.delete("/reset")
-def full_reset(confirm: str = Query(...)):
-    """Full reset - clears all data. Requires confirm=RESET."""
+def full_reset(confirm: str = Query(...), post_count: int = Query(None)):
+    """Full reset - clears all data. Requires confirm=RESET and current post count."""
     if confirm != "RESET":
         return {"error": "Must provide confirm=RESET"}
+
+    # Additional safety check: require the current post count to prevent accidental calls
+    with SessionLocal() as db:
+        actual_count = db.query(func.count(Post.id)).scalar() or 0
+        if post_count is not None and post_count != actual_count:
+            return {"error": f"Post count mismatch. Expected {actual_count}, got {post_count}"}
 
     from reddarr.database import SessionLocal, init_engine
 

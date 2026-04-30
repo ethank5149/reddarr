@@ -132,14 +132,18 @@ def list_posts(
     elif sort == "oldest":
         query = query.order_by(Post.created_utc)
     elif sort == "score":
-        query = query.order_by(desc(Post.raw["score"].cast(type_=None).label("score")))
+        from sqlalchemy import Integer
+        query = query.order_by(desc(Post.raw["score"].cast(Integer).label("score")))
     elif sort == "media_count":
         query = query.order_by(desc(Post.created_utc))
     else:
         query = query.order_by(desc(Post.ingested_at))
 
     # Paginate — offset-based (frontend) takes priority over page-based
+    # Note: query.count() executes a separate COUNT query, which is necessary
+    # for pagination. This is the standard SQLAlchemy pattern.
     total = query.count()
+
     if limit is not None:
         posts = query.offset(offset).limit(limit).all()
         effective_limit = limit
@@ -267,7 +271,7 @@ def hide_post(post_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Post not found")
 
     post.hidden = True
-    post.hidden_at = datetime.utcnow()
+    post.hidden_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "hidden", "post_id": post_id}
 
@@ -315,11 +319,18 @@ def delete_post(
                     except OSError:
                         pass
 
-    # Delete DB records (cascade: media, comments, history)
+    # Get comment IDs before deleting comments
+    comment_ids = [c.id for c in db.query(Comment).filter_by(post_id=post_id).all()]
+
+    # Delete DB records (proper order: media, comments, histories, post)
     db.query(Media).filter_by(post_id=post_id).delete()
     db.query(Comment).filter_by(post_id=post_id).delete()
+
+    # Delete history records
     db.query(PostHistory).filter_by(post_id=post_id).delete()
-    db.query(CommentHistory).filter_by(post_id=post_id).delete()
+    if comment_ids:
+        db.query(CommentHistory).filter(CommentHistory.comment_id.in_(comment_ids)).delete()
+
     db.query(Post).filter_by(id=post_id).delete()
     db.commit()
 
@@ -510,11 +521,8 @@ def _serialize_post_enhanced(post: Post, db: Session, settings) -> dict:
                         u = img.get("source", {}).get("url")
                         if u:
                             remote_image_urls.append(u.replace("&amp;", "&"))
-                        if img.get("variants", {}).get("n"):
-                            for v in img["variants"]["n"].values():
-                                vu = v.get("url")
-                                if vu:
-                                    remote_image_urls.append(vu.replace("&amp;", "&"))
+                         # Note: Reddit API variants keys are 'gif', 'mp4', 'nsfw', 'obfuscated'
+                         # The 'n' key doesn't exist in the API
 
                 if remote_image_urls:
                     image_urls = remote_image_urls

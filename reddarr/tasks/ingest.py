@@ -73,11 +73,16 @@ def ingest_target(self, target_type: str, target_name: str):
             was_new = _upsert_post(db, post_data)
             if was_new:
                 new_count += 1
-                # Dispatch download tasks for any media URLs
-                media_urls = post_data.get("media_urls", [])
-                for url in media_urls:
-                    from reddarr.tasks.download import download_media_item
-                    download_media_item.delay(post_data["id"], url)
+
+        # Commit all posts first before dispatching download tasks
+        db.commit()
+
+        # Now dispatch download tasks for the newly ingested posts
+        for post_data in posts:
+            media_urls = post_data.get("media_urls", [])
+            for url in media_urls:
+                from reddarr.tasks.download import download_media_item
+                download_media_item.delay(post_data["id"], url)
 
         # Update target's last_created timestamp
         target = db.query(Target).filter_by(type=target_type, name=target_name).first()
@@ -213,14 +218,25 @@ def trigger_backfill(self, target_type: str, target_name: str, sort: str = "top"
                 sort=sort, time_filter=time_filter,
             )
             with SessionLocal() as db:
-                for post_data in posts:
+                new_posts = []
+                for i, post_data in enumerate(posts):
                     was_new = _upsert_post(db, post_data)
                     if was_new:
-                        media_urls = post_data.get("media_urls", [])
-                        for url in media_urls:
-                            from reddarr.tasks.download import download_media_item
-                            download_media_item.delay(post_data["id"], url)
+                        new_posts.append(post_data)
+
+                    # Commit every 100 posts to avoid holding too many in memory
+                    if i % 100 == 0:
+                        db.commit()
+
+                # Final commit for remaining posts
                 db.commit()
+
+                # Then dispatch download tasks
+                for post_data in new_posts:
+                    media_urls = post_data.get("media_urls", [])
+                    for url in media_urls:
+                        from reddarr.tasks.download import download_media_item
+                        download_media_item.delay(post_data["id"], url)
 
             logger.info(f"Backfill pass {pass_num + 1}/{passes} complete for {target_type}:{target_name}")
         except Exception as e:

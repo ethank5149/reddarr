@@ -25,17 +25,12 @@ from reddarr.models import Media, Post
 
 logger = logging.getLogger(__name__)
 
-# Reusable session with connection pooling
-_session: Optional[requests.Session] = None
-
-
 def _get_session() -> requests.Session:
-    global _session
-    if _session is None:
-        _session = requests.Session()
-        from reddarr.config import get_settings
-        _session.headers["User-Agent"] = get_settings().reddit_user_agent
-    return _session
+    """Create a new session for each task to avoid fork-safety issues."""
+    session = requests.Session()
+    from reddarr.config import get_settings
+    session.headers["User-Agent"] = get_settings().reddit_user_agent
+    return session
 
 
 @app.task(
@@ -86,6 +81,23 @@ def download_media_item(self, post_id: str, url: str):
         provider = get_provider(url)
         logger.info(f"Downloading {url[:60]}... via {provider.__class__.__name__}")
 
+        # Generate expected filename to check for existing downloads
+        filename = make_filename(post_id, url)
+        expected_path = os.path.join(post_dir, filename)
+
+        # If file already exists on disk, check if it's complete
+        if os.path.exists(expected_path):
+            file_hash = sha256_file(expected_path)
+            if file_hash:
+                # Check if this hash is already recorded
+                dup = db.query(Media).filter_by(sha256=file_hash).first()
+                if dup and dup.status == "done":
+                    # File exists and is recorded - mark this post as having it too
+                    _record_media(db, post_id, url, file_path=expected_path, thumb_path=dup.thumb_path, sha256=file_hash, status="done")
+                    db.commit()
+                    logger.info(f"Dedup hit: {file_hash[:12]} already exists at {expected_path}")
+                    return {"status": "done", "path": expected_path}
+
         try:
             result = provider.download(
                 url=url,
@@ -97,6 +109,8 @@ def download_media_item(self, post_id: str, url: str):
             logger.error(f"Download failed for {post_id} {url[:60]}: {e}")
             # Record failure in DB
             _record_media(db, post_id, url, status="failed", error=str(e))
+            # Commit the failure record before retrying, so it's persisted
+            db.commit()
             raise self.retry(exc=e)
 
         if result["status"] == "done" and result.get("path"):
@@ -115,7 +129,7 @@ def download_media_item(self, post_id: str, url: str):
             # Generate thumbnail if not already done
             thumb_path = result.get("thumb")
             if not thumb_path and result["path"]:
-                thumb_path = make_thumb(result["path"], settings.thumb_path)
+                thumb_path = make_thumb(result["path"], settings.thumb_path, settings.archive_path)
 
             _record_media(
                 db, post_id, url,
@@ -213,15 +227,15 @@ def generate_thumbnails(post_id: Optional[str] = None):
         if post_id:
             query = query.filter(Media.post_id == post_id)
 
-        media_items = query.limit(500).all()
+        media_items = query.all()  # Process all missing thumbnails
         generated = 0
         for m in media_items:
             if m.file_path and os.path.exists(m.file_path):
-                thumb = make_thumb(m.file_path, settings.thumb_path)
+                thumb = make_thumb(m.file_path, settings.thumb_path, settings.archive_path)
                 if thumb:
                     m.thumb_path = thumb
                     generated += 1
 
         db.commit()
-        logger.info(f"Generated {generated} thumbnails")
-        return {"generated": generated}
+        logger.info(f"Generated {generated} thumbnails for {len(media_items)} items")
+        return {"generated": generated, "processed": len(media_items)}

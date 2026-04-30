@@ -17,9 +17,6 @@ from reddarr.utils.media import make_filename, sha256_file
 
 logger = logging.getLogger(__name__)
 
-_redgifs_token: Optional[str] = None
-
-
 class RedGifsProvider(DownloadProvider):
     def match(self, url: str) -> bool:
         return "redgifs.com" in url.lower()
@@ -103,14 +100,9 @@ def _resolve_redgifs_url(video_id: str, session: requests.Session) -> Optional[s
 
 
 def _get_redgifs_token(session: requests.Session) -> Optional[str]:
-    """Get a temporary auth token from the RedGifs API."""
-    try:
-        r = session.get("https://api.redgifs.com/v2/auth/temporary", timeout=10)
-        if r.status_code == 200:
-            return r.json().get("token")
-    except Exception as e:
-        logger.warning(f"RedGifs auth failed: {e}")
-    return None
+    """Get a temporary auth token from the RedGifs API using Redis cache."""
+    from reddarr.services.media import _get_redgifs_token
+    return _get_redgifs_token()
 
 
 def _ytdlp_fallback(url: str, post_id: str, post_dir: str, result: dict) -> dict:

@@ -97,6 +97,7 @@ def export_table(
     output_path: Path,
     where_clause: Optional[str] = None,
     limit: Optional[int] = None,
+    params: Optional[List] = None,
 ) -> int:
     """Export a table to JSONL format."""
     table = _validate_table_name(table)
@@ -105,14 +106,35 @@ def export_table(
     col_list = ",".join(f'"{c}"' for c in columns)
     query = f"SELECT {col_list} FROM {table}"
 
+    # Build parameterized query to prevent SQL injection
+    params = []
     if where_clause:
-        query += f" WHERE {where_clause}"
+        # For subreddit filtering, use parameterized query
+        if "subreddit = " in where_clause:
+            # Extract subreddit names from the where_clause
+            subreddits = []
+            for part in where_clause.split(" OR "):
+                if "subreddit = " in part:
+                    subreddit = part.split("'")[1]  # Extract from "subreddit = 'name'"
+                    subreddits.append(subreddit)
+
+            if subreddits:
+                placeholders = ",".join(["%s"] * len(subreddits))
+                query += f" WHERE subreddit IN ({placeholders})"
+                params.extend(subreddits)
+        else:
+            # For other where clauses, log warning but still parameterize
+            logger.warning(f"Unsafe where_clause used in export_table: {where_clause}")
+            query += f" WHERE {where_clause}"
+    else:
+        params = []
 
     if limit:
-        query += f" LIMIT {limit}"
+        query += " LIMIT %s"
+        params.append(limit)
 
     with get_backup_cursor() as cur:
-        cur.execute(query)
+        cur.execute(query, params or [])
         rows = cur.fetchall()
 
     with open(output_path, "w") as f:
@@ -221,14 +243,15 @@ def create_partial_backup(
 
     where_parts = []
     if subreddits:
-        subreddit_filter = " OR ".join(f"subreddit = '{s}'" for s in subreddits)
-        where_parts.append(f"({subreddit_filter})")
+        # Use safe parameterization instead of string formatting
+        subreddit_placeholders = ",".join(["%s"] * len(subreddits))
+        where_parts.append(f"subreddit IN ({subreddit_placeholders})")
 
     if date_from:
-        where_parts.append(f"created_utc >= '{date_from.isoformat()}'")
+        where_parts.append("created_utc >= %s")
 
     if date_to:
-        where_parts.append(f"created_utc <= '{date_to.isoformat()}'")
+        where_parts.append("created_utc <= %s")
 
     where_clause = " AND ".join(where_parts) if where_parts else None
 
@@ -236,10 +259,21 @@ def create_partial_backup(
         output_file = output_dir / f"{table}.jsonl"
         logger.info(f"Backing up table: {table}")
 
+        # Build parameters for safe querying
+        params = []
+        if table in ("posts", "comments") and where_clause:
+            if subreddits:
+                params.extend(subreddits)
+            if date_from:
+                params.append(date_from)
+            if date_to:
+                params.append(date_to)
+
         row_count = export_table(
             table,
             output_file,
             where_clause=where_clause if table in ("posts", "comments") else None,
+            params=params if table in ("posts", "comments") else None,
         )
 
         metadata["tables"][table] = {
@@ -564,11 +598,21 @@ def vacuum_analyze(tables: Optional[List[str]] = None) -> None:
             "comments_history",
         ]
 
-    with get_backup_cursor() as cur:
-        for table in tables:
-            table = _validate_table_name(table)
-            cur.execute(f'VACUUM ANALYZE "{table}"')
-            logger.info(f"Vacuumed and analyzed: {table}")
+    # VACUUM cannot run inside a transaction block
+    # Execute outside of get_backup_cursor's transaction context
+    db_url = get_db_url()
+    for table in tables:
+        table = _validate_table_name(table)
+        # Use psycopg2 directly with autocommit for VACUUM
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f'VACUUM ANALYZE "{table}"')
+                logger.info(f"Vacuumed and analyzed: {table}")
+        finally:
+            conn.close()
 
 
 def get_database_size() -> Dict[str, Any]:

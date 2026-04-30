@@ -405,7 +405,6 @@ def detect_image_corruption(path: str) -> bool:
 
         png_sig = b"\x89PNG\r\n\x1a\n"
         jpeg_sig = b"\xff\xd8\xff"
-        gif_sig = b"GIF87a" or b"GIF89a"
         webp_sig = b"RIFF"
         webp_riff = b"WEBP"
         webm_sig = b"\x1a\x45\xdf\xa3"

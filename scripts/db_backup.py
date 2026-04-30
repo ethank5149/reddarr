@@ -152,17 +152,15 @@ def create_backup(name: str, compression: str = "gz", include_media: bool = Fals
         elapsed = time.time() - start_time
         file_size = os.path.getsize(backup_file)
         
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO backup_runs (name, status, rows_backed_up, started_at, completed_at)
-            VALUES (%s, 'completed', 
-                (SELECT COUNT(*) FROM posts), 
-                now() - interval '%.2f seconds', now())
-            RETURNING id
-        """, (backup_name, elapsed))
-        conn.commit()
-        cur.close()
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO backup_runs (name, status, rows_backed_up, started_at, completed_at)
+                    VALUES (%s, 'completed',
+                        (SELECT COUNT(*) FROM posts),
+                        now() - interval '%.2f seconds', now())
+                    RETURNING id
+                """, (backup_name, elapsed))
         
         meta = {
             "name": backup_name,
@@ -255,7 +253,7 @@ def verify_backup(name: str) -> Dict[str, Any]:
                     parts = line.split()
                     for i, p in enumerate(parts):
                         if p == "TABLE" and i + 1 < len(parts):
-                            tables.append(parts[i + 1].strip("();")
+                            tables.append(parts[i + 1].strip("();"))
             
             results["tables_found"] = tables
             results["valid_format"] = len(tables) > 0

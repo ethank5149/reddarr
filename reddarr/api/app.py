@@ -33,6 +33,8 @@ def create_app() -> FastAPI:
     )
 
     # --- CORS ---
+    # Allow all origins for self-hosted usage
+    # In production, consider restricting to specific domains
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -48,23 +50,33 @@ def create_app() -> FastAPI:
 
     app.include_router(posts.router, prefix="/api")
     app.include_router(admin.router, prefix="/api/admin")
-    app.include_router(targets.router, prefix="/api/admin")
+    app.include_router(targets.router, prefix="/api/targets")
     app.include_router(media.router)
     app.include_router(system.router)
     app.include_router(backups.router, prefix="/api/admin")
 
     # --- Lifecycle events ---
-    @app.on_event("startup")
-    def startup():
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Startup
         _run_startup()
-
-    @app.on_event("shutdown")
-    def shutdown():
+        yield
+        # Shutdown
         from reddarr.database import _engine
-
         if _engine:
             _engine.dispose()
             logger.info("Database engine disposed")
+
+    app = FastAPI(
+        title="Reddarr",
+        description="Self-hosted Reddit media archiver",
+        version="2.0.0",
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        lifespan=lifespan,
+    )
 
     # --- Static files (React build) ---
     dist_dir = os.environ.get("DIST_DIR", "/app/dist")
@@ -109,22 +121,8 @@ def _run_startup():
     # Initialize database
     init_engine()
 
-    # Run Alembic migrations
-    try:
-        import subprocess
-
-        result = subprocess.run(
-            ["alembic", "upgrade", "head"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            logger.info("Database migrations applied")
-        else:
-            logger.warning(f"Migration warning: {result.stderr[:200]}")
-    except Exception as e:
-        logger.warning(f"Could not run migrations: {e}")
+    # Note: Migrations are run by docker-compose before starting the app
+    # to avoid race conditions with multiple replicas
 
     logger.info(f"Reddarr API started on {settings.host}:{settings.port}")
 

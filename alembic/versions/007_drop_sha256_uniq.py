@@ -40,8 +40,23 @@ def upgrade():
     # This was added in the initial schema (001_initial.py)
     # but we ensure it exists in case of migration ordering issues
     op.execute("""
-        ALTER TABLE media ADD CONSTRAINT media_post_id_url_key 
-        UNIQUE (post_id, url)
+        DO $$
+        BEGIN
+            -- Try to add the constraint if it doesn't exist
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'media_post_id_url_key'
+                AND conrelid = 'media'::regclass
+            ) THEN
+                ALTER TABLE media ADD CONSTRAINT media_post_id_url_key
+                UNIQUE (post_id, url);
+            END IF;
+        EXCEPTION
+            WHEN duplicate_object THEN
+                -- Constraint already exists, nothing to do
+                NULL;
+        END
+        $$;
     """)
 
 

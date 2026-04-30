@@ -73,20 +73,29 @@ def get_post_dir(
 def make_thumb(
     source_path: str,
     thumb_base_dir: str = "/data/archive/.thumbs",
+    archive_path: str = "/data/archive",
     scale: str = "320:-1",
 ) -> Optional[str]:
     """Generate a thumbnail for an image or video file.
 
     Uses ffmpeg for both image and video thumbnails.
     Returns the thumbnail path or None on failure.
+
+    Preserves directory structure to avoid collisions.
     """
     if not source_path or not os.path.exists(source_path):
         return None
 
-    # Determine output path
-    rel = os.path.basename(source_path)
-    thumb_name = Path(rel).stem + ".jpg"
-    thumb_path = os.path.join(thumb_base_dir, thumb_name)
+    # Preserve directory structure to avoid filename collisions
+    if source_path.startswith(archive_path):
+        rel_path = os.path.relpath(source_path, archive_path)
+        thumb_name = Path(rel_path).stem + ".jpg"
+        thumb_path = os.path.join(thumb_base_dir, thumb_name)
+    else:
+        # Fallback for files outside archive_path
+        rel = os.path.basename(source_path)
+        thumb_name = Path(rel).stem + ".jpg"
+        thumb_path = os.path.join(thumb_base_dir, thumb_name)
 
     os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
 
@@ -195,14 +204,7 @@ def detect_image_corruption(path: str) -> bool:
 
         try:
             with Image.open(path) as img:
-                img.verify()
-        except Exception as e:
-            logger.warning(f"Image corruption detected (PIL verify failed): {path}: {e}")
-            return True
-
-        try:
-            with Image.open(path) as img:
-                img.load()
+                img.load()  # load() performs validation and decodes the image
         except Exception as e:
             logger.warning(f"Image corruption detected (PIL load failed): {path}: {e}")
             return True

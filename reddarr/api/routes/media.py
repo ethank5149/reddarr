@@ -26,7 +26,13 @@ def _safe_file_response(base_dir: str, path: str) -> FileResponse:
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(full)
+    # Determine media type based on file extension
+    from mimetypes import guess_type
+    media_type, _ = guess_type(full)
+    if not media_type:
+        media_type = "application/octet-stream"
+
+    return FileResponse(full, media_type=media_type)
 
 
 @router.get("/media/{path:path}")
