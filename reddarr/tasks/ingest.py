@@ -50,22 +50,45 @@ def ingest_target(self, target_type: str, target_name: str):
     """Ingest posts for a single target (subreddit or user).
 
     Fetches posts from Reddit API and upserts into the database.
+    Tries PRAW first; falls back to no-auth scrapers if credentials are
+    missing or the API call fails.
     For each post with media, dispatches a download task.
 
     Args:
         target_type: 'subreddit' or 'user'
         target_name: name of the subreddit or user
     """
-    from reddarr.services.reddit import create_reddit_client, fetch_posts
+    from reddarr.services.reddit import has_credentials, create_reddit_client, fetch_posts
+    from reddarr.services.scrapers import fetch_posts_no_auth
 
     init_engine()
-    reddit = create_reddit_client()
 
-    try:
-        posts = fetch_posts(reddit, target_type, target_name)
-    except Exception as e:
-        logger.error(f"Reddit fetch failed for {target_type}:{target_name}: {e}")
-        raise self.retry(exc=e, countdown=60)
+    posts: list[dict] | None = None
+
+    # --- Primary: PRAW (requires API credentials) ---
+    if has_credentials():
+        try:
+            reddit = create_reddit_client()
+            posts = fetch_posts(reddit, target_type, target_name)
+            logger.debug(f"PRAW fetch succeeded for {target_type}:{target_name}")
+        except Exception as e:
+            logger.warning(
+                f"PRAW fetch failed for {target_type}:{target_name}: {e} — "
+                "falling back to no-auth scrapers"
+            )
+    else:
+        logger.info(
+            f"No Reddit API credentials configured; using no-auth scrapers "
+            f"for {target_type}:{target_name}"
+        )
+
+    # --- Fallback: public JSON API → Arctic Shift ---
+    if posts is None:
+        try:
+            posts = fetch_posts_no_auth(target_type, target_name)
+        except Exception as e:
+            logger.error(f"All fetch methods failed for {target_type}:{target_name}: {e}")
+            raise self.retry(exc=e, countdown=60)
 
     with get_session_local()() as db:
         new_count = 0
@@ -202,21 +225,39 @@ def _to_datetime(val) -> Optional[datetime]:
 def trigger_backfill(self, target_type: str, target_name: str, sort: str = "top", time_filter: str = "all", passes: int = 1):
     """Backfill historical posts for a target.
 
+    Uses PRAW when credentials are available; falls back to no-auth scrapers
+    (Reddit JSON API → Arctic Shift) otherwise.
+
     Replaces the old backfill PubSub trigger pattern.
     """
-    from reddarr.services.reddit import create_reddit_client, fetch_posts
+    from reddarr.services.reddit import has_credentials, create_reddit_client, fetch_posts
+    from reddarr.services.scrapers import fetch_posts_no_auth
 
     init_engine()
-    reddit = create_reddit_client()
+
+    # Resolve the fetch callable once before the loop
+    if has_credentials():
+        try:
+            reddit = create_reddit_client()
+            def _fetch(s, tf):
+                return fetch_posts(reddit, target_type, target_name, sort=s, time_filter=tf)
+        except Exception as e:
+            logger.warning(f"PRAW client init failed: {e} — will use no-auth scrapers")
+            def _fetch(s, tf):
+                return fetch_posts_no_auth(target_type, target_name, sort=s, time_filter=tf)
+    else:
+        logger.info(
+            f"No Reddit API credentials; backfill will use no-auth scrapers "
+            f"for {target_type}:{target_name}"
+        )
+        def _fetch(s, tf):
+            return fetch_posts_no_auth(target_type, target_name, sort=s, time_filter=tf)
 
     logger.info(f"Backfill starting: {target_type}:{target_name} sort={sort} time={time_filter}")
 
     for pass_num in range(passes):
         try:
-            posts = fetch_posts(
-                reddit, target_type, target_name,
-                sort=sort, time_filter=time_filter,
-            )
+            posts = _fetch(sort, time_filter)
             with get_session_local()() as db:
                 new_posts = []
                 for i, post_data in enumerate(posts):

@@ -19,6 +19,12 @@ import threading
 _thread_local = threading.local()
 
 
+def has_credentials() -> bool:
+    """Return True if Reddit API credentials are configured."""
+    settings = get_settings()
+    return bool(settings.reddit_client_id and settings.reddit_client_secret)
+
+
 def create_reddit_client() -> praw.Reddit:
     """Create or return a thread-local PRAW Reddit client.
 
