@@ -270,6 +270,14 @@ def _build_sse_payload() -> dict:
         ]
 
     return {
+        # Flat fields for frontend SSE handler
+        "total_posts": total_posts,
+        "hidden_posts": hidden_posts,
+        "total_comments": total_comments,
+        "downloaded_media": dl_media,
+        "pending_media": pending_media,
+        "total_media": total_media,
+        # Nested stats kept for API consumers
         "stats": {
             "total_posts": total_posts,
             "hidden_posts": hidden_posts,

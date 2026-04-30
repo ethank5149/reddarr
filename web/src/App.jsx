@@ -503,7 +503,7 @@ export default function App(){
           }
           if(data.new_media && data.new_media.length > 0){
             if(filtersRef.current.sort === "last_added"){
-            console.log("SSE: calling refreshPosts for", data.new_posts.length, "new posts")
+            console.log("SSE: calling refreshPosts for", data.new_media.length, "new media items")
             refreshPosts()
             }
           }
@@ -780,7 +780,7 @@ export default function App(){
     axios.get(buildPostsQuery(currentOffset, archiveFiltersRef.current, true))
     .then(r=>{
       if(archiveFilteringRef.current) return
-      const newPosts = r.data.map(mapPost)
+      const newPosts = r.data.posts?.map(mapPost) || []
       setArchivePosts(prev=>[...prev,...newPosts])
       archiveOffsetRef.current = currentOffset + 50
     }).catch(err=>console.error("Failed to load archive posts:", err))
@@ -794,7 +794,7 @@ export default function App(){
     setArchivePosts([])
     axios.get(buildPostsQuery(0, newFilters, true))
     .then(r=>{
-      setArchivePosts(r.data.map(mapPost))
+      setArchivePosts(r.data.posts?.map(mapPost) || [])
       archiveOffsetRef.current = 50
     }).catch(err=>console.error("Failed to load archive posts:", err))
     .finally(()=>{ archiveFilteringRef.current=false; setArchiveIsLoading(false) })
@@ -854,7 +854,7 @@ export default function App(){
     if(!e.target.value.trim()){ setArchiveSearchResults(null); return }
     archiveSearchTimeout.current=setTimeout(()=>{
       axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}&excluded=true`)
-        .then(r=>setArchiveSearchResults(r.data.map(p=>({id:p.id,title:p.title,subreddit:p.subreddit,author:p.author,created_utc:p.created_utc}))))
+        .then(r=>setArchiveSearchResults((r.data.posts ?? []).map(p=>({id:p.id,title:p.title,subreddit:p.subreddit,author:p.author,created_utc:p.created_utc}))))
     },300)
   }
 
@@ -1494,7 +1494,7 @@ export default function App(){
     searchTimeout.current = setTimeout(()=>{
       axios.get(`/api/search?q=${encodeURIComponent(e.target.value)}`)
         .then(r=>{
-          setSearchResults(r.data.map(p=>({
+          setSearchResults((r.data.posts ?? []).map(p=>({
             id:p.id, title:p.title, subreddit:p.subreddit, author:p.author,
             created_utc:p.created_utc, image_url:p.image_url, video_url:p.video_url,
             thumb_url:p.thumb_url, is_video:p.is_video,

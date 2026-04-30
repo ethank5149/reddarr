@@ -12,7 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from reddarr.database import get_db
-from reddarr.models import Post, Comment, Media, Target
+from reddarr.models import Post, Comment, Media, Target, PostHistory, CommentHistory
 from reddarr.api.auth import require_api_key
 
 logger = logging.getLogger(__name__)
@@ -184,8 +184,9 @@ def admin_health():
     health = {"api": "ok", "db": "unknown", "redis": "unknown"}
 
     try:
+        from sqlalchemy import text
         with _engine.connect() as conn:
-            conn.execute("SELECT 1")
+            conn.execute(text("SELECT 1"))
         health["db"] = "ok"
     except Exception:
         health["db"] = "error"

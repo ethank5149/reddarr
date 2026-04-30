@@ -31,10 +31,17 @@ router = APIRouter(tags=["posts"])
 def list_posts(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
+    # Offset-based pagination (used by frontend)
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     subreddit: Optional[str] = None,
     author: Optional[str] = None,
     sort: str = Query("newest", regex="^(newest|oldest|score|comments|media_count)$"),
+    # sort_by/sort_order used by frontend
+    sort_by: Optional[str] = None,
+    sort_order: str = Query("desc", regex="^(asc|desc)$"),
     show_hidden: bool = False,
+    excluded: bool = False,  # frontend alias for show_hidden=True (archive view)
     has_media: Optional[bool] = None,
     media_type: Optional[str] = Query(None, regex="^(video|image|text)$"),
     nsfw: str = Query("include", regex="^(include|exclude)$"),
@@ -56,7 +63,10 @@ def list_posts(
 
     query = db.query(Post)
 
-    if not show_hidden:
+    # `excluded=True` means show only hidden posts (archive view)
+    if excluded:
+        query = query.filter(Post.hidden.is_(True))
+    elif not show_hidden:
         query = query.filter(Post.hidden.is_(False))
 
     if subreddit:
@@ -108,21 +118,36 @@ def list_posts(
     elif has_media is False:
         query = query.filter(Post.url.is_(None))
 
-    # Sort
-    if sort == "newest":
+    # Sort — support both sort_by/sort_order (frontend) and sort (direct API)
+    if sort_by:
+        col_map = {
+            "created_utc": Post.created_utc,
+            "ingested_at": Post.ingested_at,
+            "title": Post.title,
+        }
+        col = col_map.get(sort_by, Post.created_utc)
+        query = query.order_by(col if sort_order == "asc" else desc(col))
+    elif sort == "newest":
         query = query.order_by(desc(Post.created_utc))
     elif sort == "oldest":
         query = query.order_by(Post.created_utc)
     elif sort == "score":
-        # Score is in raw JSON
         query = query.order_by(desc(Post.raw["score"].cast(type_=None).label("score")))
     elif sort == "media_count":
-        # Would need a subquery - simplify to newest for now
         query = query.order_by(desc(Post.created_utc))
+    else:
+        query = query.order_by(desc(Post.ingested_at))
 
-    # Paginate
+    # Paginate — offset-based (frontend) takes priority over page-based
     total = query.count()
-    posts = query.offset((page - 1) * per_page).limit(per_page).all()
+    if limit is not None:
+        posts = query.offset(offset).limit(limit).all()
+        effective_limit = limit
+        effective_offset = offset
+    else:
+        effective_limit = per_page
+        effective_offset = (page - 1) * per_page
+        posts = query.offset(effective_offset).limit(effective_limit).all()
 
     results = []
     settings = get_settings()
@@ -547,8 +572,4 @@ def _extract_video_url(url: str, raw: dict) -> Optional[str]:
         return url
     if "youtube.com" in url or "youtu.be" in url:
         return url
-    return None
-    if thumb_path.startswith(thumb_base):
-        relative = thumb_path[len(thumb_base) :].lstrip("/")
-        return f"/thumb/{relative}"
     return None
