@@ -2588,9 +2588,9 @@ export default function App(){
               </div>
               {adminSections.media && (
                 <div style={{display:"flex",gap:"10px",flexWrap:"wrap"}}>
-                  <button onClick={()=>{if(!window.confirm("Scan ALL posts for missing media?"))return;axios.post("/api/admin/media/rescan").then(r=>toastSuccess(`Scanned ${r.data.posts_scanned} posts, queued ${r.data.newly_queued} new`)).catch(err=>toastError("Scan failed"))}}
+                   <button onClick={()=>{if(!window.confirm("Scan ALL posts for missing media?"))return;axios.post("/api/admin/integrity-check").then(r=>toastSuccess(`Integrity check queued`)).catch(err=>toastError("Scan failed"))}}
                     style={{padding:"10px 20px",background:"linear-gradient(135deg,#35c5f4,#5fd4f8)",border:"none",borderRadius:"3px",color:"#f5f7fa",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔍 Scan for Missing</button>
-                  <button onClick={()=>{if(!window.confirm("Retry ALL failed downloads?"))return;axios.post("/api/admin/media/rescrape").then(r=>toastSuccess(`Requeued ${r.data.requeued} items`)).catch(err=>toastError("Retry failed"))}}
+                   <button onClick={()=>{if(!window.confirm("Retry ALL failed downloads?"))return;axios.post("/api/admin/requeue-failed").then(r=>toastSuccess(`Requeued failed items`)).catch(err=>toastError("Retry failed"))}}
                     style={{padding:"10px 20px",background:"linear-gradient(135deg,#f9c300,#e6b200)",border:"none",borderRadius:"3px",color:"#000",cursor:"pointer",fontSize:"13px",fontWeight:"600"}}>🔄 Retry Downloads</button>
                 </div>
               )}
