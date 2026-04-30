@@ -24,12 +24,26 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Startup
+        _run_startup()
+        yield
+        # Shutdown
+        from reddarr.database import _engine
+        if _engine:
+            _engine.dispose()
+            logger.info("Database engine disposed")
+
     app = FastAPI(
         title="Reddarr",
         description="Self-hosted Reddit media archiver",
         version="2.0.0",
         docs_url="/api/docs",
         redoc_url="/api/redoc",
+        lifespan=lifespan,
     )
 
     # --- CORS ---
@@ -54,29 +68,6 @@ def create_app() -> FastAPI:
     app.include_router(media.router)
     app.include_router(system.router)
     app.include_router(backups.router, prefix="/api/admin")
-
-    # --- Lifecycle events ---
-    from contextlib import asynccontextmanager
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        # Startup
-        _run_startup()
-        yield
-        # Shutdown
-        from reddarr.database import _engine
-        if _engine:
-            _engine.dispose()
-            logger.info("Database engine disposed")
-
-    app = FastAPI(
-        title="Reddarr",
-        description="Self-hosted Reddit media archiver",
-        version="2.0.0",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        lifespan=lifespan,
-    )
 
     # --- Static files (React build) ---
     dist_dir = os.environ.get("DIST_DIR", "/app/dist")

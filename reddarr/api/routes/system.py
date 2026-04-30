@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
@@ -168,38 +168,37 @@ def _build_sse_payload(since: Optional[datetime] = None) -> dict:
         target_list = []
         for t in targets:
             name_lower = t.name.lower()
-
+            
             # Post counts in a single query per target type
             if t.type == "subreddit":
                 post_stats = db.query(
                     func.count(Post.id),
-                    func.count(func.case((Post.created_utc >= seven_days_ago, Post.id)))
+                    func.sum(case([(Post.created_utc >= seven_days_ago, 1)], else_=0))
                 ).filter(func.lower(Post.subreddit) == name_lower).first()
                 post_count, posts_7d = post_stats or (0, 0)
 
                 # Media stats with join
                 media_stats = db.query(
                     func.count(Media.id),
-                    func.sum(func.case((Media.status == "done", 1), else_=0)),
-                    func.sum(func.case((Media.status == "pending", 1), else_=0))
+                    func.sum(case([(Media.status == "done", 1)], else_=0)),
+                    func.sum(case([(Media.status == "pending", 1)], else_=0))
                 ).join(Post).filter(
                     func.lower(Post.subreddit) == name_lower
                 ).first()
             else:  # user
                 post_stats = db.query(
                     func.count(Post.id),
-                    func.count(func.case((Post.created_utc >= seven_days_ago, Post.id)))
+                    func.sum(case([(Post.created_utc >= seven_days_ago, 1)], else_=0))
                 ).filter(func.lower(Post.author) == name_lower).first()
                 post_count, posts_7d = post_stats or (0, 0)
 
                 media_stats = db.query(
                     func.count(Media.id),
-                    func.sum(func.case((Media.status == "done", 1), else_=0)),
-                    func.sum(func.case((Media.status == "pending", 1), else_=0))
+                    func.sum(case([(Media.status == "done", 1)], else_=0)),
+                    func.sum(case([(Media.status == "pending", 1)], else_=0))
                 ).join(Post).filter(
                     func.lower(Post.author) == name_lower
                 ).first()
-
             tot_media, dl_media_cnt, pend_media_cnt = media_stats or (0, 0, 0)
 
             # Calculate rate and ETA
