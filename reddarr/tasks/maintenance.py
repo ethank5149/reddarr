@@ -7,7 +7,7 @@ import logging
 import os
 
 from reddarr.tasks import app
-from reddarr.database import SessionLocal, init_engine
+from reddarr.database import get_session_local, init_engine
 from reddarr.models import Target, Media, Post
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def refresh_target_icons():
     session = requests.Session()
     session.headers["User-Agent"] = settings.reddit_user_agent
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         targets = db.query(Target).filter(Target.enabled.is_(True)).all()
         updated = 0
 
@@ -62,7 +62,7 @@ def cleanup_failed_downloads(max_retries: int = 10):
     """Mark permanently-failed downloads so they stop being retried."""
     init_engine()
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         count = (
             db.query(Media)
             .filter(Media.status == "failed", Media.retries >= max_retries)
@@ -81,7 +81,7 @@ def integrity_check():
     """
     init_engine()
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         media_items = (
             db.query(Media)
             .filter(Media.status == "done", Media.file_path.isnot(None))
@@ -109,7 +109,7 @@ def purge_orphan_thumbnails():
     init_engine()
     settings = get_settings()
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         known_thumbs = set(
             row[0]
             for row in db.query(Media.thumb_path)

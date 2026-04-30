@@ -64,6 +64,17 @@ def get_engine():
     return _engine
 
 
+def get_session_local() -> sessionmaker:
+    """Return the SessionLocal factory, initializing the engine if needed.
+
+    Use this in Celery tasks instead of importing SessionLocal directly.
+    Direct imports capture None at module load time before init_engine() runs.
+    """
+    if SessionLocal is None:
+        init_engine()
+    return SessionLocal
+
+
 def get_db() -> Generator[Session, None, None]:
     """FastAPI dependency that yields a DB session.
 

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from reddarr.tasks import app
-from reddarr.database import SessionLocal, init_engine
+from reddarr.database import get_session_local, init_engine
 from reddarr.models import Post, Comment, Media, Target, PostHistory, CommentHistory
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def run_ingest_cycle(self):
     """
     init_engine()
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         targets = db.query(Target).filter(Target.enabled.is_(True)).all()
         logger.info(f"Ingest cycle starting: {len(targets)} enabled targets")
 
@@ -67,7 +67,7 @@ def ingest_target(self, target_type: str, target_name: str):
         logger.error(f"Reddit fetch failed for {target_type}:{target_name}: {e}")
         raise self.retry(exc=e, countdown=60)
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         new_count = 0
         for post_data in posts:
             was_new = _upsert_post(db, post_data)
@@ -217,7 +217,7 @@ def trigger_backfill(self, target_type: str, target_name: str, sort: str = "top"
                 reddit, target_type, target_name,
                 sort=sort, time_filter=time_filter,
             )
-            with SessionLocal() as db:
+            with get_session_local()() as db:
                 new_posts = []
                 for i, post_data in enumerate(posts):
                     was_new = _upsert_post(db, post_data)

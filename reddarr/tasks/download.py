@@ -20,7 +20,7 @@ from typing import Optional
 import requests
 
 from reddarr.tasks import app
-from reddarr.database import SessionLocal, init_engine
+from reddarr.database import get_session_local, init_engine
 from reddarr.models import Media, Post
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def download_media_item(self, post_id: str, url: str):
     init_engine()
     session = _get_session()
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         # Check if already downloaded (dedup by post_id + url)
         existing = db.query(Media).filter_by(post_id=post_id, url=url).first()
         if existing and existing.status == "done":
@@ -192,7 +192,7 @@ def requeue_failed(max_retries: int = 5):
     Replaces the old requeue_gifs.py script.
     """
     init_engine()
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         failed = (
             db.query(Media)
             .filter(Media.status == "failed", Media.retries < max_retries)
@@ -218,7 +218,7 @@ def generate_thumbnails(post_id: Optional[str] = None):
     init_engine()
     settings = get_settings()
 
-    with SessionLocal() as db:
+    with get_session_local()() as db:
         query = db.query(Media).filter(
             Media.status == "done",
             Media.file_path.isnot(None),
