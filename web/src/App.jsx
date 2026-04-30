@@ -661,10 +661,10 @@ export default function App(){
     if(activeTab !== "system" && activeTab !== "activity") return
     const apiKey = localStorage.getItem("apiKey")
     const poll = setInterval(()=>{
-      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setAdminData(r.data) }).catch(()=>{})
+      axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setAdminData(prev=>({...(prev||{}), ...r.data})) }).catch(()=>{})
       axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setQueueInfo(r.data) }).catch(()=>{})
       axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setHealthStatus(r.data) }).catch(()=>{})
-      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(r.data) setLogs(r.data) }).catch(()=>{})
+      axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).then(r=>{ if(Array.isArray(r.data)) setLogs(r.data) }).catch(()=>{})
       setLastUpdated(new Date())
     }, 10000)
     return ()=> clearInterval(poll)
@@ -865,10 +865,12 @@ export default function App(){
       axios.get("/api/admin/stats", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null})),
       axios.get("/api/admin/activity?limit=50&include_failures=true", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:[]})),
       axios.get("/api/admin/queue", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null})),
-      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null}))
-    ]).then(([statsRes,logsRes,queueRes,healthRes])=>{
-      if(statsRes.data) setAdminData(statsRes.data)
-      if(logsRes.data) setLogs(logsRes.data)
+      axios.get("/api/admin/health", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null})),
+      axios.get("/api/admin/targets", apiKey ? {headers:{"X-Api-Key":apiKey.trim()}} : {}).catch(()=>({data:null})),
+    ]).then(([statsRes,logsRes,queueRes,healthRes,targetsRes])=>{
+      const targets = targetsRes.data?.targets || undefined
+      setAdminData(prev=>({...(prev||{}), ...(statsRes.data||{}), ...(targets !== undefined ? {targets} : {})}))
+      if(Array.isArray(logsRes.data)) setLogs(logsRes.data)
       if(queueRes.data) setQueueInfo(queueRes.data)
       if(healthRes.data) setHealthStatus(healthRes.data)
       setAdminLoading(false)

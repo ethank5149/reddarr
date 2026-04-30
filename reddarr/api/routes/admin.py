@@ -8,7 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 
 from reddarr.database import get_db
@@ -22,7 +22,8 @@ router = APIRouter(tags=["admin"], dependencies=[Depends(require_api_key)])
 @router.get("/stats")
 def admin_stats(db: Session = Depends(get_db)):
     """Overall archive statistics."""
-    total_posts = db.query(func.count(Post.id)).scalar() or 0
+    total_posts = db.query(func.count(Post.id)).filter(Post.hidden.is_(False)).scalar() or 0
+    excluded_posts = db.query(func.count(Post.id)).filter(Post.hidden.is_(True)).scalar() or 0
     total_comments = db.query(func.count(Comment.id)).scalar() or 0
     total_media = db.query(func.count(Media.id)).scalar() or 0
     downloaded = db.query(func.count(Media.id)).filter(Media.status == "done").scalar() or 0
@@ -31,50 +32,77 @@ def admin_stats(db: Session = Depends(get_db)):
     targets_count = db.query(func.count(Target.id)).filter(Target.enabled.is_(True)).scalar() or 0
 
     return {
-        "posts": total_posts,
-        "comments": total_comments,
-        "media": {
-            "total": total_media,
-            "downloaded": downloaded,
-            "pending": pending,
-            "failed": failed,
-        },
+        "total_posts": total_posts,
+        "excluded_posts": excluded_posts,
+        "total_comments": total_comments,
+        "total_media": total_media,
+        "downloaded_media": downloaded,
+        "pending_media": pending,
+        "media_failed": failed,
         "targets_enabled": targets_count,
     }
 
 
 @router.get("/activity")
 def admin_activity(
+    limit: int = Query(50, ge=1, le=200),
     hours: int = Query(24, ge=1, le=168),
+    include_failures: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Recent ingestion and download activity."""
+    """Recent ingestion activity as an event list.
+
+    Returns an array of recent posts and optionally failed downloads,
+    suitable for the activity stream UI.
+    """
     from datetime import datetime, timedelta, timezone
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    recent_posts = db.query(func.count(Post.id)).filter(Post.ingested_at >= since).scalar() or 0
-
-    recent_downloads = (
-        db.query(func.count(Media.id))
-        .filter(Media.downloaded_at >= since, Media.status == "done")
-        .scalar()
-        or 0
+    recent_posts = (
+        db.query(Post)
+        .filter(Post.ingested_at >= since)
+        .order_by(desc(Post.ingested_at))
+        .limit(limit)
+        .all()
     )
 
-    recent_failures = (
-        db.query(func.count(Media.id))
-        .filter(Media.downloaded_at >= since, Media.status == "failed")
-        .scalar()
-        or 0
-    )
+    events = [
+        {
+            "id": p.id,
+            "type": "ingest",
+            "subreddit": p.subreddit,
+            "author": p.author,
+            "title": p.title,
+            "created_utc": p.created_utc.isoformat() if p.created_utc else None,
+            "created_at": p.ingested_at.isoformat() if p.ingested_at else None,
+        }
+        for p in recent_posts
+    ]
 
-    return {
-        "period_hours": hours,
-        "posts_ingested": recent_posts,
-        "media_downloaded": recent_downloads,
-        "media_failed": recent_failures,
-    }
+    if include_failures:
+        rows = (
+            db.query(Media, Post)
+            .join(Post, Media.post_id == Post.id, isouter=True)
+            .filter(Media.status == "failed")
+            .order_by(desc(Media.downloaded_at))
+            .limit(limit)
+            .all()
+        )
+        for m, post in rows:
+            events.append({
+                "id": m.id,
+                "type": "failure",
+                "post_id": m.post_id,
+                "subreddit": post.subreddit if post else None,
+                "author": post.author if post else None,
+                "title": post.title if post else None,
+                "url": m.url,
+                "error_message": m.error_message,
+                "created_at": m.downloaded_at.isoformat() if m.downloaded_at else None,
+            })
+
+    return events
 
 
 @router.get("/queue")
